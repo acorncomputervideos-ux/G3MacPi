@@ -1,5 +1,9 @@
 # 04 — Development Roadmap
 
+> **Update 2026-11-16:** after ADR-0010 (build on DingusPPC), milestones
+> M2–M7 below are replaced by steps P1–P8 in
+> [05-dingusppc-port.md](05-dingusppc-port.md). M0/M1 are unchanged.
+
 Each milestone ends with a tagged Git commit and **acceptance tests that were
 actually run**. Effort estimates are relative sizes (S/M/L/XL), not dates —
 this is a long project and dates would be guesses.
