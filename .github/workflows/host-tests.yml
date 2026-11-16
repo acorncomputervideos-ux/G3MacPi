@@ -1,0 +1,31 @@
+# Builds the portable emulator core on Linux and runs all unit tests.
+name: host-tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.compiler }}" = clang ]; then export CXX=clang++; else export CXX=g++; fi
+          cmake -S . -B build/host -DG3_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build/host -j"$(nproc)"
+
+      - name: Unit tests
+        run: ./build/host/g3_unit_tests
+
+      - name: Core portability rules
+        run: tools/check-core.sh

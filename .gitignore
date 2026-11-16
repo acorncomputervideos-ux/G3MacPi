@@ -1,0 +1,25 @@
+# Build output
+/build/
+app/circle/*.o
+app/circle/*.d
+app/circle/*.elf
+app/circle/*.img
+app/circle/*.lst
+app/circle/*.map
+
+# Apple-copyrighted material must never be committed (see README "Legal").
+*.rom
+*.ROM
+Mac OS ROM
+*.dsk
+*.toast
+*.hda
+*.hfv
+/disks/
+/user/
+
+# Editor / OS clutter
+.DS_Store
+*.swp
+.vscode/
+.idea/

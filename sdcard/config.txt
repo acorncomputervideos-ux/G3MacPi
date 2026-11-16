@@ -1,0 +1,15 @@
+# G3MacPi - Raspberry Pi firmware configuration (Raspberry Pi 400, AArch64)
+# Based on Circle's boot/config64.txt, reduced to the Pi 4 family.
+
+arm_64bit=1
+kernel_address=0x80000
+initial_turbo=0
+
+[pi4]
+armstub=armstub8-rpi4.bin
+kernel=kernel8-rpi4.img
+max_framebuffers=2
+
+[all]
+# UART on GPIO14 (TX, pin 8) / GPIO15 (RX, pin 10), 115200 8N1, 3.3 V levels.
+enable_uart=1

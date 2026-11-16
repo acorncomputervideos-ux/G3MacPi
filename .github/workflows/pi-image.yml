@@ -1,0 +1,51 @@
+# Cross-compiles the bare-metal Raspberry Pi 400 image and publishes the
+# complete SD card contents as a downloadable artifact ("g3macpi-sdcard").
+name: pi-image
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  TOOLCHAIN_VERSION: 15.2.rel1
+  TOOLCHAIN_NAME: arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-elf
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0   # for "git describe" in the version string
+
+      - name: Cache Arm GNU toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: /opt/toolchains/${{ env.TOOLCHAIN_NAME }}
+          key: ${{ env.TOOLCHAIN_NAME }}
+
+      - name: Install Arm GNU toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/toolchains && sudo chown "$USER" /opt/toolchains
+          curl -sSfL --retry 3 -o /tmp/tc.tar.xz \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/${TOOLCHAIN_VERSION}/binrel/${TOOLCHAIN_NAME}.tar.xz"
+          tar -xf /tmp/tc.tar.xz -C /opt/toolchains
+
+      - name: Add toolchain to PATH
+        run: echo "/opt/toolchains/${TOOLCHAIN_NAME}/bin" >> "$GITHUB_PATH"
+
+      - name: Core portability rules (incl. freestanding AArch64 compile)
+        run: tools/check-core.sh
+
+      - name: Build SD card image
+        run: tools/build-pi.sh
+
+      - name: Upload SD card files
+        uses: actions/upload-artifact@v4
+        with:
+          name: g3macpi-sdcard
+          path: build/sdcard/
+          if-no-files-found: error
