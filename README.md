@@ -9,8 +9,8 @@ infrastructure only).
 
 **Milestone 0 (foundation).** Research and architecture are done; the
 repository, host test build, CI and a first bare-metal kernel (startup screen
-only) exist. **No Macintosh emulation exists yet.** The kernel has been built
-but not yet tested on a real Pi 400 — see [docs/devlog](docs/devlog/).
+only) exist. **No Macintosh emulation exists yet.** The first kernel **boots on a real
+Pi 400** — see [docs/devlog](docs/devlog/).
 
 | Document | Contents |
 |---|---|

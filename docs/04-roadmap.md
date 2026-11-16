@@ -15,7 +15,7 @@ The brief's milestones are kept, with three changes, each for a reason:
 
 | # | Milestone | Size | Exit criteria (all must be demonstrated) |
 |---|---|---|---|
-| **M0** ✅ (CI green; Pi boot check pending) | Repository + host build + CI | S | CMake host build; doctest-style test runner; GitHub Actions runs tests on every push; `aarch64-none-elf` cross-build of an empty Circle app produces `kernel8-rpi4.img` artifact |
+| **M0** ✅ (CI green; boots on Pi 400) | Repository + host build + CI | S | CMake host build; doctest-style test runner; GitHub Actions runs tests on every push; `aarch64-none-elf` cross-build of an empty Circle app produces `kernel8-rpi4.img` artifact |
 | **M1** | Bare-metal foundation | S–M | On the Pi 400: boots from SD, HDMI startup screen, UART log, on-screen log, USB keyboard echo, log file written to SD, HDMI test tone; HTTP bootloader evaluated; `docs/devlog` entry with photos |
 | **M2** | CPU: integer + branch + exceptions | L | All UISA integer/logical/rotate/compare/load/store/string/branch/CR/XER instructions; SPR access; `sc`, `rfi`, program/alignment exceptions; disassembler; ≥1 test per instruction form incl. edge cases (overflow, carry, record forms) |
 | **M2b** | CPU: floating point | M–L | All 750 FP instructions, FPSCR semantics, NaN/denormal/rounding vectors pass |

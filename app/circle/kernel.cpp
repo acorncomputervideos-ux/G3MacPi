@@ -20,6 +20,11 @@ static const char FromKernel[] = "g3macpi";
 CKernel::CKernel (void)
 :	m_Screen (m_Options.GetWidth (), m_Options.GetHeight ()),
 	m_Timer (&m_Interrupt),
+	// Circle otherwise leaves the ARM cores at their minimum clock (600 MHz on
+	// the Pi 400, observed on hardware 2026-11-16). Run at full speed; the
+	// emulator loop must later call m_CPUThrottle.Update() every few seconds so
+	// Circle can reduce the clock if the SoC gets hot.
+	m_CPUThrottle (CPUSpeedMaximum),
 	m_LogTee (&m_Screen, &m_Serial),
 	m_Logger (m_Options.GetLogLevel (), &m_Timer)
 {
@@ -68,11 +73,13 @@ boolean CKernel::Initialize (void)
 void CKernel::ShowStartupScreen (void)
 {
 	// ANSI sequences supported by Circle's terminal: see doc/screen.txt.
+	// Note: Circle renders "bold" (ESC[1m) in red, so it is not used.
+	// All banner lines have the same length so the blue bar is a clean rectangle.
 	static const char Banner[] =
 		"\x1b[H\x1b[J"
-		"\x1b[44m\x1b[97m\x1b[1m"
+		"\x1b[44m\x1b[97m"
 		"                                                                \n"
-		"   " G3_PROJECT_NAME "  -  PowerPC Macintosh G3 emulator           \n"
+		"   G3MacPi  -  PowerPC Macintosh G3 emulator                    \n"
 		"   bare metal on Raspberry Pi 400                               \n"
 		"                                                                \n"
 		"\x1b[0m\n";
@@ -103,8 +110,10 @@ void CKernel::LogHostInfo (void)
 	m_Logger.Write (FromKernel, LogNotice, "Host RAM: %u MB, Circle heap: %u MB",
 			pInfo->GetRAMSize (),
 			(unsigned) (CMemorySystem::Get ()->GetMemSize () / (1024 * 1024)));
-	m_Logger.Write (FromKernel, LogNotice, "ARM clock: %u MHz",
-			pInfo->GetClockRate (CLOCK_ID_ARM) / 1000000);
+	m_Logger.Write (FromKernel, LogNotice, "ARM clock: %u MHz (max %u MHz), SoC %u C",
+			m_CPUThrottle.GetClockRate () / 1000000,
+			m_CPUThrottle.GetMaxClockRate () / 1000000,
+			m_CPUThrottle.GetTemperature ());
 	m_Logger.Write (FromKernel, LogNotice, "Screen: %ux%u",
 			m_Screen.GetWidth (), m_Screen.GetHeight ());
 }

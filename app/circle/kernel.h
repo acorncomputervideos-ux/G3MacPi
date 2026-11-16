@@ -7,6 +7,7 @@
 #define G3_APP_CIRCLE_KERNEL_H
 
 #include <circle/actled.h>
+#include <circle/cputhrottle.h>
 #include <circle/devicenameservice.h>
 #include <circle/exceptionhandler.h>
 #include <circle/interrupt.h>
@@ -51,6 +52,7 @@ private:
 	CExceptionHandler	m_ExceptionHandler;
 	CInterruptSystem	m_Interrupt;
 	CTimer			m_Timer;
+	CCPUThrottle		m_CPUThrottle;
 	CTeeDevice		m_LogTee;
 	CLogger			m_Logger;
 };
