@@ -9,6 +9,9 @@
 //    movement is shown using the same portable code (platform/common) that
 //    will later feed the emulated Macintosh ADB keyboard and mouse.
 //  * Ctrl+Alt+Delete reboots (the log file is rewritten first).
+//  * Port step P2: if SD:/g3macpi/tests/ppcinttests.csv exists, DingusPPC's
+//    CPU test suite runs first; its full output goes to
+//    SD:/g3macpi/logs/dppc_cpu_tests.log and a summary to the screen.
 
 #include "kernel.h"
 
@@ -21,6 +24,13 @@
 #include "core/common/bitops.h"
 #include "core/common/endian.h"
 #include "core/common/version.h"
+#include "port/baremetal/dppc_cpu_tests_entry.h"
+#include "port/port_log.h"
+
+#include <circle/startup.h>
+#include <circle_glue.h>
+#include <stdio.h>
+#include <unistd.h>
 
 static const char FromKernel[] = "g3macpi";
 
@@ -28,6 +38,8 @@ static const char FromKernel[] = "g3macpi";
 #define LOG_DIR		SD_DRIVE "/g3macpi/logs"
 #define LOG_FILE	LOG_DIR "/boot.log"
 #define LOG_FILE_PREV	LOG_DIR "/boot-prev.log"
+#define DPPC_TEST_DIR	SD_DRIVE "/g3macpi/tests"
+#define DPPC_TEST_LOG	LOG_DIR "/dppc_cpu_tests.log"
 
 CKernel *CKernel::s_pThis = 0;
 
@@ -41,6 +53,7 @@ CKernel::CKernel (void)
 	m_CPUThrottle (CPUSpeedMaximum),
 	m_LogTee (&m_Screen, &m_Serial),
 	m_Logger (m_Options.GetLogLevel (), &m_Timer),
+	m_Console (&m_Serial, &m_LogTee),	// input: UART, output: screen + UART
 	m_USBHCI (&m_Interrupt, &m_Timer, TRUE),	// TRUE: USB plug-and-play
 	m_EMMC (&m_Interrupt, &m_Timer, &m_ActLED),
 	m_bSDMounted (FALSE),
@@ -107,6 +120,17 @@ boolean CKernel::Initialize (void)
 	if (bOK)
 	{
 		bOK = m_USBHCI.Initialize ();
+	}
+
+	if (bOK)
+	{
+		bOK = m_Console.Initialize ();
+	}
+
+	if (bOK)
+	{
+		// newlib stdio (printf, std::cout) -> m_Console. Must be called once.
+		CGlueStdioInit (m_Console);
 	}
 
 	return bOK;
@@ -432,15 +456,84 @@ void CKernel::ProcessInputEvents (void)
 	}
 }
 
+void CKernel::DppcLogSink (int nVerbosity, const char *pFile, unsigned nLine,
+			   const char *pMessage)
+{
+	// loguru scale: -3 FATAL, -2 ERROR, -1 WARNING, 0 INFO, 1..9 debug.
+	// (LogPanic is not used for FATAL: Circle halts on LogPanic, and
+	// DppcAbortHandler handles aborts itself.)
+	TLogSeverity Severity =   nVerbosity <= -2 ? LogError
+				: nVerbosity == -1 ? LogWarning
+				: nVerbosity == 0  ? LogNotice
+				:                    LogDebug;
+	CLogger::Get ()->Write ("dppc", Severity, "%s (%s:%u)", pMessage, pFile, nLine);
+}
+
+void CKernel::DppcAbortHandler (const char *pMessage)
+{
+	CLogger::Get ()->Write ("dppc", LogError, "DingusPPC aborted: %s", pMessage);
+	if (s_pThis != 0)
+	{
+		s_pThis->WriteLogFile ();
+	}
+	halt ();
+}
+
+void CKernel::RunDppcCpuTests (void)
+{
+	FILINFO Info;
+	if (!m_bSDMounted || f_stat (DPPC_TEST_DIR "/ppcinttests.csv", &Info) != FR_OK)
+	{
+		m_Logger.Write (FromKernel, LogNotice,
+				"DingusPPC CPU tests: skipped (no %s/ppcinttests.csv)", DPPC_TEST_DIR);
+		return;
+	}
+
+	m_Logger.Write (FromKernel, LogNotice,
+			"DingusPPC CPU tests: running (output -> %s) ...", DPPC_TEST_LOG);
+
+	// The test program reads its CSV files from the current directory and
+	// writes its report to std::cout.
+	if (chdir (DPPC_TEST_DIR) != 0)
+	{
+		m_Logger.Write (FromKernel, LogError, "chdir %s failed", DPPC_TEST_DIR);
+		return;
+	}
+	if (freopen (DPPC_TEST_LOG, "w", stdout) == 0)
+	{
+		m_Logger.Write (FromKernel, LogError, "Cannot redirect stdout to %s", DPPC_TEST_LOG);
+		return;
+	}
+
+	u64 nStart = CTimer::GetClockTicks64 ();
+	int nDisasmFailed = dppc_ppctests_main ();
+	u64 nMicroseconds = CTimer::GetClockTicks64 () - nStart;
+
+	fflush (stdout);
+	fclose (stdout);	// closes the log file; stdout is not used afterwards
+
+	m_Logger.Write (FromKernel, (nfailed <= 472 && nDisasmFailed == 0) ? LogNotice : LogError,
+			"DingusPPC CPU tests: %d tested, %d failed; disassembler: %d failed "
+			"(Linux x86-64 baseline: 7702 tested, 472 failed, 0) in %u ms",
+			ntested, nfailed, nDisasmFailed, (unsigned) (nMicroseconds / 1000));
+}
+
 TShutdownMode CKernel::Run (void)
 {
 	LogHostInfo ();
 	RunCoreSelfTest ();
 
+	// DingusPPC messages go to Circle's logger; aborts halt with a message.
+	g3port::set_log_sink (DppcLogSink);
+	g3port::set_abort_handler (DppcAbortHandler);
+
 	if (MountSDCard ())
 	{
 		WriteLogFile ();
 	}
+
+	RunDppcCpuTests ();
+	WriteLogFile ();
 
 	m_Logger.Write (FromKernel, LogNotice,
 			"Milestone 1 input test: press keys, move the mouse.");

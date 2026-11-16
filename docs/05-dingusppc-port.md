@@ -1,7 +1,9 @@
 # 05 — Option B: porting DingusPPC to bare-metal Raspberry Pi 400
 
-Status: **feasibility test done (compile-level). No DingusPPC code is in this
-repository yet.** Decision: ADR-0010.
+Status (2026-11-16): **P1 done; P2 built, waiting for the Pi 400 run.**
+DingusPPC is vendored in `third_party/dingusppc`, the Pi build uses
+circle-stdlib, and the Pi kernel contains DingusPPC's CPU core and test suite.
+Decision: ADR-0010.
 
 ## What DingusPPC is
 - https://github.com/dingusdev/dingusppc — C++ low-level emulator of PowerPC
@@ -47,13 +49,31 @@ The two remaining failures are host-terminal code that will be replaced
 Blue & White needs compiles: PPC CPU/MMU/FPU, `machineyosemite.cpp`, MPC106
 (Grackle), mac-io, CMD646, ATA/ATAPI, VIA-Cuda/ADB, DBDMA, Burgundy, ATI Rage.
 
-### Not yet done (and why)
-- **Running DingusPPC's own test suite and benchmarks on Linux**: built
-  successfully, but executing third-party downloaded code in the Claude
-  session was blocked by the session's safety policy pending the owner's
-  permission. Options: owner grants permission, or run them in GitHub
-  Actions.
-- **Linking** against circle-stdlib and **running on the Pi**: next step.
+### Linux baseline (owner permitted running DingusPPC code, 2026-11-16)
+- CPU test suite: **7702 tested, 472 failed**; disassembler 397 tested, 0 failed.
+  Same with gcc 13 and clang 18, with upstream's loguru or our replacement,
+  with or without `-fno-strict-aliasing`.
+  - 24 integer failures, all `divw`/`divwu` (+ `o`/`.` forms) edge cases.
+    Note: the test program runs the CPU in **601 mode** (`is_601 = true`).
+  - 448 FP failures: 312 wrong FPSCR flags only, 108 FPSCR + destination
+    (cases with FP exceptions enabled, where hardware leaves the target
+    register unchanged), 28 destination only. Known DingusPPC FPU gaps;
+    improvement candidates.
+- Benchmarks (x86-64 container): bench1 530 MiB/s; bench2 FPU
+  15.3 million FP instructions/s (65 ns each) — FPU emulation is slow.
+
+### P1 implementation notes
+- `port/loguru/`: loguru replacement (LOG_F, VLOG_F, LOG_IF_F, ABORT_F,
+  CHECK_F, named verbosities) forwarding to a sink: Circle `CLogger` on
+  the Pi, stderr on Linux.
+- One DingusPPC patch so far: `DppcRecursiveMutex` in `core/timermanager.h`
+  (bare metal: `port/baremetal/dppc_mutex.h`, single-core, no locking).
+- DingusPPC is compiled with `-fno-strict-aliasing` (its FPU code type-puns
+  through pointers, which GCC warns about at -O2).
+- Minimal CPU-test file set: `cpu/ppc/*.cpp`, `core/timermanager.cpp`,
+  `devices/memctrl/memctrlbase.cpp`, plus the test sources.
+- CI: `host-tests` runs DingusPPC's CPU suite against
+  `tests/dingusppc/cpu_baseline.env` (fails on regressions).
 
 ## Revised plan (replaces milestones M2–M7 in 04-roadmap.md)
 

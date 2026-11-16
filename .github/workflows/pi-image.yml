@@ -34,6 +34,12 @@ jobs:
             "https://developer.arm.com/-/media/Files/downloads/gnu/${TOOLCHAIN_VERSION}/binrel/${TOOLCHAIN_NAME}.tar.xz"
           tar -xf /tmp/tc.tar.xz -C /opt/toolchains
 
+      - name: Install build tools (texinfo for newlib)
+        run: sudo apt-get update -q && sudo apt-get install -y -q texinfo
+
+      - name: Initialise circle-stdlib submodules (Circle, newlib only)
+        run: git -C third_party/circle-stdlib submodule update --init libs/circle libs/circle-newlib
+
       - name: Add toolchain to PATH
         run: echo "/opt/toolchains/${TOOLCHAIN_NAME}/bin" >> "$GITHUB_PATH"
 
@@ -49,3 +55,10 @@ jobs:
           name: g3macpi-sdcard
           path: build/sdcard/
           if-no-files-found: error
+
+      - name: Upload DingusPPC build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dppc-build-log
+          path: build/dppc-build.log

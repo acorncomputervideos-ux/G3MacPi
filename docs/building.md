@@ -17,8 +17,10 @@ the commit means something broke.
 ## On a Linux machine (or in a Claude Code session)
 
 ```sh
-git clone --recurse-submodules <repo-url>
+git clone <repo-url>
 cd G3MacPi
+git submodule update --init third_party/circle-stdlib
+git -C third_party/circle-stdlib submodule update --init libs/circle libs/circle-newlib
 
 # Unit tests (needs cmake + g++ or clang++)
 cmake -S . -B build/host -DG3_SANITIZE=ON
@@ -26,12 +28,27 @@ cmake --build build/host -j
 ./build/host/g3_unit_tests            # all tests
 ./build/host/g3_unit_tests common/    # tests whose name starts with "common/"
 
-# Bare-metal image (needs the Arm GNU toolchain 15.2.rel1 aarch64-none-elf on PATH)
+# DingusPPC CPU test suite, compared with tests/dingusppc/cpu_baseline.env
+tools/run-dppc-cpu-tests.sh build/host/dppc_cpu_tests
+
+# Bare-metal image (needs the Arm GNU toolchain 15.2.rel1 aarch64-none-elf on
+# PATH and the "texinfo" package; first build compiles newlib, ~1 minute)
 tools/build-pi.sh                     # result in build/sdcard/
 tools/check-core.sh                   # portability rules
 ```
 
-## What you should see (Milestone 1 kernel)
+## What you should see (Milestone 1 kernel + DingusPPC CPU tests)
+
+**New (port step P2):** right after the start-up lines the kernel runs
+DingusPPC's CPU test suite from `g3macpi/tests/` on the SD card. Expect a
+line `DingusPPC CPU tests: running ...` and, some seconds later,
+
+    DingusPPC CPU tests: 7702 tested, N failed; disassembler: 0 failed (Linux x86-64 baseline: 7702 tested, 472 failed, 0) in M ms
+
+The full report is written to `g3macpi/logs/dppc_cpu_tests.log`. Please
+report N, M, and send that log file. Then the keyboard/mouse test starts as
+before.
+
 
 - The green ACT LED blinks 3 times.
 - HDMI: the blue G3MacPi banner, version and git revision, then log lines:

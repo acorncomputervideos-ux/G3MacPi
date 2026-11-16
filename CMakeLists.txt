@@ -56,3 +56,30 @@ endif()
 
 enable_testing()
 add_test(NAME unit_tests COMMAND g3_unit_tests)
+
+# --- DingusPPC CPU core + its own CPU test suite ------------------------------
+# Same file set as the Raspberry Pi CPU-test kernel (see port/dppc_sources.mk):
+# the PowerPC CPU, the timer manager, the memory-controller base class, and
+# our loguru replacement. DingusPPC needs C++20 and exceptions, and is built
+# with its upstream warning level (not -Werror).
+set(DPPC_DIR ${CMAKE_SOURCE_DIR}/third_party/dingusppc)
+file(GLOB DPPC_CPU_SOURCES CONFIGURE_DEPENDS ${DPPC_DIR}/cpu/ppc/*.cpp)
+
+add_executable(dppc_cpu_tests
+  ${DPPC_CPU_SOURCES}
+  ${DPPC_DIR}/core/timermanager.cpp
+  ${DPPC_DIR}/devices/memctrl/memctrlbase.cpp
+  ${DPPC_DIR}/cpu/ppc/test/ppctests.cpp
+  ${DPPC_DIR}/cpu/ppc/test/testdisasm.cpp
+  port/loguru/loguru_shim.cpp)
+set_target_properties(dppc_cpu_tests PROPERTIES CXX_STANDARD 20 CXX_EXTENSIONS ON)
+# port/loguru must come first so <loguru.hpp> resolves to our replacement.
+target_include_directories(dppc_cpu_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/port/loguru
+  ${CMAKE_SOURCE_DIR}
+  ${DPPC_DIR} ${DPPC_DIR}/core ${DPPC_DIR}/cpu/ppc ${DPPC_DIR}/devices
+  ${DPPC_DIR}/debugger ${DPPC_DIR}/utils)
+target_compile_definitions(dppc_cpu_tests PRIVATE
+  SUPPORTS_PPC_LITTLE_ENDIAN_MODE=0 SUPPORTS_MEMORY_CTRL_ENDIAN_MODE=0)
+# -fno-strict-aliasing: DingusPPC type-puns FP values through pointers.
+target_compile_options(dppc_cpu_tests PRIVATE -w -fno-strict-aliasing)

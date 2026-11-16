@@ -3,6 +3,7 @@
 // app/circle/kernel.h — bare-metal entry object for the Raspberry Pi 400.
 // Milestone 1: startup screen, HDMI+UART log, full CPU clock, SD-card log
 // file, and USB keyboard/mouse input test.
+// Port step P2: runs DingusPPC's CPU test suite if its files are on the SD card.
 
 #ifndef G3_APP_CIRCLE_KERNEL_H
 #define G3_APP_CIRCLE_KERNEL_H
@@ -11,6 +12,7 @@
 #include <circle/cputhrottle.h>
 #include <circle/devicenameservice.h>
 #include <circle/exceptionhandler.h>
+#include <circle/input/console.h>
 #include <circle/input/mouse.h>
 #include <circle/interrupt.h>
 #include <circle/koptions.h>
@@ -55,6 +57,12 @@ private:
 	boolean MountSDCard (void);
 	void WriteLogFile (void);
 
+	// DingusPPC CPU test suite (plan step P2)
+	void RunDppcCpuTests (void);
+	static void DppcLogSink (int nVerbosity, const char *pFile, unsigned nLine,
+				 const char *pMessage);
+	static void DppcAbortHandler (const char *pMessage);
+
 	// USB input test
 	void AttachInputDevices (void);
 	void ProcessInputEvents (void);
@@ -82,6 +90,7 @@ private:
 	CCPUThrottle		m_CPUThrottle;
 	CTeeDevice		m_LogTee;
 	CLogger			m_Logger;
+	CConsole		m_Console;	// newlib stdio (std::cout) -> screen + UART
 	CUSBHCIDevice		m_USBHCI;
 	CEMMCDevice		m_EMMC;
 	FATFS			m_FileSystem;
