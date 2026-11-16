@@ -31,6 +31,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <vector>
 #include <mutex>
 
+// G3MacPi: platforms without thread support (bare metal) can supply their own
+// recursive mutex type through a header named by DPPC_RECURSIVE_MUTEX_HEADER.
+#ifdef DPPC_RECURSIVE_MUTEX_HEADER
+#include DPPC_RECURSIVE_MUTEX_HEADER
+#else
+using DppcRecursiveMutex = std::recursive_mutex;
+#endif
+
 constexpr auto NS_PER_SEC     = 1000000000;
 constexpr auto USEC_PER_SEC   = 1000000;
 constexpr auto NS_PER_USEC    = 1000;
@@ -51,7 +59,7 @@ template <typename T, class Container = std::vector<T>, class Compare = std::les
 class my_priority_queue : public std::priority_queue<T, Container, Compare> {
 public:
     bool remove_by_id(T id){
-        std::lock_guard<std::recursive_mutex> lk(mtx);
+        std::lock_guard<DppcRecursiveMutex> lk(mtx);
         if (this->empty())
             return false;
         auto el = this->top();
@@ -71,25 +79,25 @@ public:
 
     void push(T val)
     {
-        std::lock_guard<std::recursive_mutex> lk(mtx);
+        std::lock_guard<DppcRecursiveMutex> lk(mtx);
         std::priority_queue<T, Container, Compare>::push(val);
     }
 
     T pop()
     {
-        std::lock_guard<std::recursive_mutex> lk(mtx);
+        std::lock_guard<DppcRecursiveMutex> lk(mtx);
         T val = std::priority_queue<T, Container, Compare>::top();
         std::priority_queue<T, Container, Compare>::pop();
         return val;
     }
 
-    std::recursive_mutex& get_mtx()
+    DppcRecursiveMutex& get_mtx()
     {
         return mtx;
     }
 
 private:
-    std::recursive_mutex mtx;
+    DppcRecursiveMutex mtx;
 };
 
 typedef struct TimerInfo {

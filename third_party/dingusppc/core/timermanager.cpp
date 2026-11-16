@@ -84,7 +84,7 @@ uint64_t TimerManager::process_timers()
     uint64_t time_now = get_time_now();
 
 { // mtx scope
-    std::lock_guard<std::recursive_mutex> lk(this->timer_queue.get_mtx());
+    std::lock_guard<DppcRecursiveMutex> lk(this->timer_queue.get_mtx());
     if (this->timer_queue.empty()) {
         return 0ULL;
     }
@@ -99,7 +99,7 @@ uint64_t TimerManager::process_timers()
 
         // re-arm cyclic timers
         if (cur_timer->interval_ns) {
-            std::lock_guard<std::recursive_mutex> lk(this->timer_queue.get_mtx());
+            std::lock_guard<DppcRecursiveMutex> lk(this->timer_queue.get_mtx());
             uint64_t timeout_ns_new = timeout_ns + cur_timer->interval_ns;
             if (timeout_ns_new <= time_now) {
                 // Skip missed periods without changing the timer's phase.
@@ -125,7 +125,7 @@ uint64_t TimerManager::process_timers()
 
         // process next timer
 { // [ mtx scope
-        std::lock_guard<std::recursive_mutex> lk(this->timer_queue.get_mtx());
+        std::lock_guard<DppcRecursiveMutex> lk(this->timer_queue.get_mtx());
         if (this->timer_queue.empty()) {
             return 0ULL;
         }
