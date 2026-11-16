@@ -21,14 +21,17 @@ constexpr bool host_is_little_endian()
     return __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
 }
 
-constexpr u16 bswap16(u16 v) { return __builtin_bswap16(v); }
-constexpr u32 bswap32(u32 v) { return __builtin_bswap32(v); }
-constexpr u64 bswap64(u64 v) { return __builtin_bswap64(v); }
+// Named byteswap*, not bswap*: Circle's <circle/util.h> defines bswap16 and
+// bswap32 as macros, which would silently rename these functions (found by
+// -Winfinite-recursion on 2026-11-16).
+constexpr u16 byteswap16(u16 v) { return __builtin_bswap16(v); }
+constexpr u32 byteswap32(u32 v) { return __builtin_bswap32(v); }
+constexpr u64 byteswap64(u64 v) { return __builtin_bswap64(v); }
 
 // Convert between host order and big-endian order (the operation is symmetric).
-constexpr u16 host_to_be16(u16 v) { return host_is_little_endian() ? bswap16(v) : v; }
-constexpr u32 host_to_be32(u32 v) { return host_is_little_endian() ? bswap32(v) : v; }
-constexpr u64 host_to_be64(u64 v) { return host_is_little_endian() ? bswap64(v) : v; }
+constexpr u16 host_to_be16(u16 v) { return host_is_little_endian() ? byteswap16(v) : v; }
+constexpr u32 host_to_be32(u32 v) { return host_is_little_endian() ? byteswap32(v) : v; }
+constexpr u64 host_to_be64(u64 v) { return host_is_little_endian() ? byteswap64(v) : v; }
 constexpr u16 be_to_host16(u16 v) { return host_to_be16(v); }
 constexpr u32 be_to_host32(u32 v) { return host_to_be32(v); }
 constexpr u64 be_to_host64(u64 v) { return host_to_be64(v); }
@@ -46,10 +49,10 @@ inline void store_be64(void* p, u64 v) { v = host_to_be64(v); __builtin_memcpy(p
 
 // Little-endian variants: needed for PowerPC byte-reversed loads/stores
 // (lhbrx/lwbrx/sthbrx/stwbrx) and for little-endian PCI devices.
-inline u16 load_le16(const void* p) { u16 v; __builtin_memcpy(&v, p, 2); return host_is_little_endian() ? v : bswap16(v); }
-inline u32 load_le32(const void* p) { u32 v; __builtin_memcpy(&v, p, 4); return host_is_little_endian() ? v : bswap32(v); }
-inline void store_le16(void* p, u16 v) { if (!host_is_little_endian()) v = bswap16(v); __builtin_memcpy(p, &v, 2); }
-inline void store_le32(void* p, u32 v) { if (!host_is_little_endian()) v = bswap32(v); __builtin_memcpy(p, &v, 4); }
+inline u16 load_le16(const void* p) { u16 v; __builtin_memcpy(&v, p, 2); return host_is_little_endian() ? v : byteswap16(v); }
+inline u32 load_le32(const void* p) { u32 v; __builtin_memcpy(&v, p, 4); return host_is_little_endian() ? v : byteswap32(v); }
+inline void store_le16(void* p, u16 v) { if (!host_is_little_endian()) v = byteswap16(v); __builtin_memcpy(p, &v, 2); }
+inline void store_le32(void* p, u32 v) { if (!host_is_little_endian()) v = byteswap32(v); __builtin_memcpy(p, &v, 4); }
 
 } // namespace g3
 

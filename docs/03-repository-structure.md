@@ -35,7 +35,8 @@ G3MacPi/
 │   ├── machine/yosemite/        B&W G3 wiring and configuration
 │   └── debug/                   monitor, tracer, breakpoints
 ├── platform/
-│   ├── include/platform/        IDisplay, IInput, IAudio, IBlockDevice, IFileSystem, IHostClock, ILog
+│   ├── common/                  portable host-side code (input events, HID keyboard tracker,
+│   │                            later the IDisplay/IInput/IAudio/... interfaces); same rules as core/
 │   ├── circle/                  Circle-backed implementations
 │   └── host/                    Linux implementations (headless; optional SDL2)
 ├── app/
@@ -57,7 +58,7 @@ G3MacPi/
 
 ## Rules enforced by the build
 
-- `core/` and `platform/include/` compile with `-ffreestanding`-safe flags and a
+- `core/` and `platform/common/` compile with `-ffreestanding`-safe flags and a
   CI check that greps for any `#include <circle/...>` outside `platform/circle`
   and `app/circle`.
 - No Apple-copyrighted binaries anywhere in the repository (`.gitignore` covers

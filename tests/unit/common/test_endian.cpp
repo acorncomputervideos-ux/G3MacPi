@@ -8,10 +8,10 @@ using namespace g3;
 
 TEST_CASE("common/endian/bswap")
 {
-    CHECK_EQ(bswap16(0x1234u), 0x3412u);
-    CHECK_EQ(bswap32(0x12345678u), 0x78563412u);
-    CHECK_EQ(bswap64(0x0123456789ABCDEFull), 0xEFCDAB8967452301ull);
-    CHECK_EQ(bswap32(bswap32(0xDEADBEEFu)), 0xDEADBEEFu);
+    CHECK_EQ(byteswap16(0x1234u), 0x3412u);
+    CHECK_EQ(byteswap32(0x12345678u), 0x78563412u);
+    CHECK_EQ(byteswap64(0x0123456789ABCDEFull), 0xEFCDAB8967452301ull);
+    CHECK_EQ(byteswap32(byteswap32(0xDEADBEEFu)), 0xDEADBEEFu);
 }
 
 TEST_CASE("common/endian/load_be")

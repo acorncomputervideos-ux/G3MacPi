@@ -6,12 +6,23 @@
 
 CIRCLEHOME = ../../third_party/circle
 
-OBJS	= main.o kernel.o teedevice.o
+# Portable code shared with the Linux test build.
+PORTABLE_OBJS = ../../platform/common/hid_keyboard.o
 
-LIBS	= $(CIRCLEHOME)/lib/libcircle.a
+OBJS	= main.o kernel.o teedevice.o $(PORTABLE_OBJS)
 
-# The portable emulator core is included as "core/..." from the repo root.
+LIBS	= $(CIRCLEHOME)/addon/fatfs/libfatfs.a \
+	  $(CIRCLEHOME)/addon/SDCard/libsdcard.a \
+	  $(CIRCLEHOME)/lib/usb/libusb.a \
+	  $(CIRCLEHOME)/lib/input/libinput.a \
+	  $(CIRCLEHOME)/lib/fs/libfs.a \
+	  $(CIRCLEHOME)/lib/libcircle.a
+
+# The portable core is included as "core/..." / "platform/..." from the repo root.
 EXTRAINCLUDE = -I ../..
+
+# Warnings are errors for our code (a Circle macro clash was once only a warning).
+WARNINGS = -Wall -Werror
 
 G3_GIT_REV := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 DEFINE	+= -DG3_GIT_REV=\"$(G3_GIT_REV)\"

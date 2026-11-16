@@ -23,3 +23,9 @@ Mac OS ROM
 *.swp
 .vscode/
 .idea/
+
+# Objects built by the Circle make system next to portable sources
+platform/**/*.o
+platform/**/*.d
+core/**/*.o
+core/**/*.d

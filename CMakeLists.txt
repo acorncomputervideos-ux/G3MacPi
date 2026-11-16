@@ -30,6 +30,13 @@ endif()
 add_library(g3core INTERFACE)
 target_include_directories(g3core INTERFACE ${CMAKE_SOURCE_DIR})
 
+# --- Portable host-side platform code (also compiled into the Circle kernel).
+file(GLOB G3_PLATFORM_COMMON_SOURCES CONFIGURE_DEPENDS
+     ${CMAKE_SOURCE_DIR}/platform/common/*.cpp)
+add_library(g3platform_common STATIC ${G3_PLATFORM_COMMON_SOURCES})
+target_link_libraries(g3platform_common PUBLIC g3core)
+target_compile_options(g3platform_common PRIVATE ${G3_COMMON_FLAGS})
+
 # --- Unit tests ---------------------------------------------------------------
 file(GLOB_RECURSE G3_TEST_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/tests/unit/*.cpp)
@@ -37,10 +44,12 @@ file(GLOB_RECURSE G3_TEST_SOURCES CONFIGURE_DEPENDS
 add_executable(g3_unit_tests
   tests/framework/g3test_main.cpp
   ${G3_TEST_SOURCES})
-target_link_libraries(g3_unit_tests PRIVATE g3core)
+find_package(Threads REQUIRED)
+target_link_libraries(g3_unit_tests PRIVATE g3core g3platform_common Threads::Threads)
 target_compile_options(g3_unit_tests PRIVATE ${G3_COMMON_FLAGS})
 
 if(G3_SANITIZE)
+  target_compile_options(g3platform_common PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_compile_options(g3_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(g3_unit_tests PRIVATE -fsanitize=address,undefined)
 endif()

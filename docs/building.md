@@ -31,13 +31,22 @@ tools/build-pi.sh                     # result in build/sdcard/
 tools/check-core.sh                   # portability rules
 ```
 
-## What you should see (Milestone 0/1 kernel)
+## What you should see (Milestone 1 kernel)
 
 - The green ACT LED blinks 3 times.
-- HDMI: a blue banner "G3MacPi - PowerPC Macintosh G3 emulator", the version
-  and git revision, then log lines with host information (machine name, RAM,
-  ARM clock, screen size) and **"Core self-test: PASSED"**, then
-  "Milestone 0: no emulation yet. System halted."
+- HDMI: the blue G3MacPi banner, version and git revision, then log lines:
+  host information including **`ARM clock: 1800 MHz (max 1800 MHz), SoC .. C`**,
+  **`Core self-test: PASSED`**, `Log written to SD:/g3macpi/logs/boot.log`,
+  and `USB keyboard attached` (the Pi 400's own keyboard).
+- **Keyboard test:** every key shows two lines, e.g.
+  `Key down usage 0x04  A` and `Key up   usage 0x04  A`.
+  Modifiers appear as `LCtrl`, `LShift`, `LAlt`, `LGUI` etc.
+- **Mouse test** (plug in a USB mouse): `USB mouse attached (...)`, then
+  lines like `Mouse: dx 12 dy -3 wheel 0  buttons L- R- M-  (8 reports)`.
+  Moving right gives positive dx, moving down positive dy; held buttons show `*`.
+- **Ctrl+Alt+Delete** writes the log file again and reboots.
+- On the SD card afterwards (readable on the iPad): `g3macpi/logs/boot.log`
+  (this run) and `g3macpi/logs/boot-prev.log` (the run before).
 - UART (optional, GPIO14 = pin 8 TX, GPIO15 = pin 10 RX, GND = pin 6;
   115200 8N1, **3.3 V adapter only**): the same log lines.
 

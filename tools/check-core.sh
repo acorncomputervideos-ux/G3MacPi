@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # tools/check-core.sh — enforce the portable-core rules (docs/02-architecture.md):
-#  1. core/ and platform/include/ must not include Circle headers.
+#  1. core/ and platform/common/ must not include Circle headers.
 #  2. core/ must not include C++ standard library headers (Circle builds with
 #     -nostdinc++); only <stdint.h> and <stddef.h> are allowed.
 #  3. Every core header must compile on its own with the bare-metal
@@ -13,14 +13,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 fail=0
 
-if grep -rnE '#\s*include\s*[<"]circle/' core platform/include 2>/dev/null; then
+if grep -rnE '#\s*include\s*[<"]circle/' core platform/common 2>/dev/null; then
     echo "error: Circle headers used in portable code (above)" >&2
     fail=1
 fi
 
 # Allowed system headers in core/: stdint.h and stddef.h only.
-if grep -rnE '#\s*include\s*<' core | grep -vE '<(stdint|stddef)\.h>'; then
-    echo "error: core/ may only include <stdint.h> and <stddef.h> (above)" >&2
+if grep -rnE '#\s*include\s*<' core platform/common | grep -vE '<(stdint|stddef)\.h>'; then
+    echo "error: core/ and platform/common/ may only include <stdint.h> and <stddef.h> (above)" >&2
     fail=1
 fi
 
@@ -35,7 +35,15 @@ if command -v "$CXX_CROSS" >/dev/null; then
             echo "error: $hdr does not compile freestanding for AArch64" >&2
             fail=1
         fi
-    done < <(find core -name '*.h' -print0)
+    done < <(find core platform/common -name '*.h' -print0)
+    # Portable .cpp files are compiled into the kernel too: check them as well.
+    while IFS= read -r -d '' src; do
+        if ! "$CXX_CROSS" -std=c++17 -ffreestanding -nostdinc++ -fno-exceptions -fno-rtti \
+                -mcpu=cortex-a72 -Wall -Wextra -Werror -I "$ROOT" -c "$src" -o "$tmp/s.o"; then
+            echo "error: $src does not compile freestanding for AArch64" >&2
+            fail=1
+        fi
+    done < <(find core platform/common -name '*.cpp' -print0)
     echo "freestanding AArch64 header check: done"
 else
     echo "note: $CXX_CROSS not found; skipping freestanding compile check"

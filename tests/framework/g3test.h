@@ -5,7 +5,7 @@
 // Host-only (uses the C standard library). Usage:
 //
 //   #include "tests/framework/g3test.h"
-//   TEST_CASE("endian/bswap32") { CHECK_EQ(g3::bswap32(0x12345678u), 0x78563412u); }
+//   TEST_CASE("endian/byteswap32") { CHECK_EQ(g3::byteswap32(0x12345678u), 0x78563412u); }
 //
 // Run all tests:          ./g3_unit_tests
 // Run a subset by prefix: ./g3_unit_tests endian/

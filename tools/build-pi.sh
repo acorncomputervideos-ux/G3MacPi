@@ -22,6 +22,9 @@ JOBS="${JOBS:-$(nproc)}"
 if [[ "${1:-}" == "clean" ]]; then
     (cd "$CIRCLE" && ./makeall clean) || true
     make -C "$APP" clean || true
+    rm -f "$ROOT"/platform/common/*.o "$ROOT"/platform/common/*.d
+    make -C "$CIRCLE/addon/SDCard" clean || true
+    make -C "$CIRCLE/addon/fatfs" clean || true
     make -C "$CIRCLE/boot/armstub" clean || true
     rm -rf "$OUT"
     exit 0
@@ -44,6 +47,10 @@ echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400)"
 
 echo "==> Building Circle libraries"
 (cd "$CIRCLE" && MAKE="make -j$JOBS" ./makeall --nosample >/dev/null)
+
+echo "==> Building Circle add-ons (SD card driver, FatFs)"
+make -s -C "$CIRCLE/addon/SDCard" -j"$JOBS"
+make -s -C "$CIRCLE/addon/fatfs" -j"$JOBS"
 
 echo "==> Building armstub8-rpi4.bin"
 make -s -C "$CIRCLE/boot/armstub" armstub8-rpi4.bin
