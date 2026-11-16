@@ -1,0 +1,50 @@
+# Ignore binary files
+out/
+vcpkg/
+*.bin
+
+# Ignore compiled object files
+.vs/
+.vscode/
+*.o
+*.out
+*.obj
+*.d
+
+# Ignore CMake system files
+CMakeFiles
+cmake_install.cmake
+
+# Ignore Visual Studio configuration files
+CMakeSettings.json
+*.vcxproj
+*.vcxproj.filters
+
+# Ignore Visual Studio auto-save recovery folder
+enc_temp_folder/
+
+# Ignore CodeLite configuration files
+*.workspace
+*.workspace.*
+compile_commands.json
+*.session
+*.tags
+
+# Ignore generated executables
+dingusppc
+dingusppc.exe
+
+# Ignore system files
+.DS_Store
+Thumb.db
+ehthumbs.db
+
+# IDE ignores
+build
+build*/
+build-*
+*.dir
+*.user
+DerivedData
+*.xcodeproj/project.xcworkspace
+*.xcodeproj/xcuserdata

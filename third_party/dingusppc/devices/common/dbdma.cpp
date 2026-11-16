@@ -1,0 +1,639 @@
+/*
+DingusPPC - The Experimental PowerPC Macintosh emulator
+Copyright (C) 2018-26 The DingusPPC Development Team
+          (See CREDITS.MD for more details)
+
+(You may also contact divingkxt or powermax2286 on Discord)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/** @file Descriptor-based direct memory access emulation. */
+
+#include <core/endianswap.h>
+#include <core/memaccess.h>
+#include <core/timermanager.h>
+#include <cpu/ppc/ppcmmu.h>
+#include <devices/common/dbdma.h>
+#include <devices/common/dmacore.h>
+#include <devices/common/hwinterrupt.h>
+#include <devices/common/mmiodevice.h>
+#include <devices/memctrl/memctrlbase.h>
+
+#include <cinttypes>
+#include <cstring>
+#include <loguru.hpp>
+
+void DMAChannel::set_callbacks(DbdmaCallback start_cb, DbdmaCallback stop_cb) {
+    this->start_cb = start_cb;
+    this->stop_cb  = stop_cb;
+}
+
+/* Load DMACmd from physical memory. */
+DMACmd* DMAChannel::fetch_cmd(uint32_t cmd_addr, DMACmd* p_cmd, bool *is_writable) {
+    MapDmaResult res = mmu_map_dma_mem(cmd_addr, 16, false);
+    if (is_writable) *is_writable = res.is_writable;
+    DMACmd* cmd_host = (DMACmd*)res.host_va;
+    p_cmd->req_count = READ_WORD_LE_A(&cmd_host->req_count);
+    p_cmd->cmd_bits  = cmd_host->cmd_bits;
+    p_cmd->cmd_key   = cmd_host->cmd_key;
+    p_cmd->address   = READ_DWORD_LE_A(&cmd_host->address);
+    p_cmd->cmd_arg   = READ_DWORD_LE_A(&cmd_host->cmd_arg);
+    p_cmd->res_count = READ_WORD_LE_A(&cmd_host->res_count);
+    p_cmd->xfer_stat = READ_WORD_LE_A(&cmd_host->xfer_stat);
+    return cmd_host;
+}
+
+void DMAChannel::interpret_cmd() {
+    DMACmd cmd_struct;
+    MapDmaResult res;
+
+    if (this->cmd_in_progress) {
+        // if there is data remaining to transfer then the command is not finished
+        if (this->queue_len)
+            return;
+
+        // if there is no data remaining to transfer then the command is finished
+        // and the program should procede to the next command
+        this->finish_cmd();
+    }
+
+    this->cur_host = fetch_cmd(this->cmd_ptr, &cmd_struct, &this->cur_is_writable);
+
+    this->ch_stat &= ~CH_STAT_WAKE; // clear wake bit (DMA spec, 5.5.3.4)
+
+    this->cur_cmd = cmd_struct.cmd_key >> 4;
+
+    switch (this->cur_cmd) {
+    case DBDMA_Cmd::OUTPUT_MORE:
+    case DBDMA_Cmd::OUTPUT_LAST:
+    case DBDMA_Cmd::INPUT_MORE:
+    case DBDMA_Cmd::INPUT_LAST:
+        if (cmd_struct.cmd_key & 7) {
+            LOG_F(ERROR, "%s: Key > 0 not implemented", this->get_name().c_str());
+            break;
+        }
+        if (cmd_struct.req_count) {
+            res = mmu_map_dma_mem(cmd_struct.address, cmd_struct.req_count, false);
+            this->queue_data = res.host_va;
+            this->res_count  = cmd_struct.req_count;
+            this->queue_len  = cmd_struct.req_count; // don't set queue_len until all the other fields are set
+            this->cmd_in_progress = true;
+            switch (this->cur_cmd) {
+            case DBDMA_Cmd::OUTPUT_MORE:
+            case DBDMA_Cmd::OUTPUT_LAST:
+                this->xfer_to_device();
+                break;
+            case DBDMA_Cmd::INPUT_MORE:
+            case DBDMA_Cmd::INPUT_LAST:
+                this->xfer_from_device();
+                break;
+            }
+        } else {
+            this->queue_len = 0;
+            this->res_count = 0;
+            this->finish_cmd();
+        }
+        break;
+    case DBDMA_Cmd::STORE_QUAD:
+        if ((cmd_struct.cmd_key & 7) != 6)
+            LOG_F(ERROR, "%s: Invalid key %d in STORE_QUAD", this->get_name().c_str(),
+                cmd_struct.cmd_key & 7);
+        this->xfer_quad(true);
+        break;
+    case DBDMA_Cmd::LOAD_QUAD:
+        if ((cmd_struct.cmd_key & 7) != 6) {
+            LOG_F(ERROR, "%s: Invalid key %d in LOAD_QUAD", this->get_name().c_str(),
+                cmd_struct.cmd_key & 7);
+        }
+        this->xfer_quad(false);
+        break;
+    case DBDMA_Cmd::NOP:
+        this->finish_cmd();
+        break;
+    case DBDMA_Cmd::STOP:
+        this->ch_stat &= ~CH_STAT_ACTIVE;
+        this->cmd_in_progress = false;
+        this->finish_cmd();
+        break;
+    default:
+        LOG_F(ERROR, "%s: Unsupported DMA command 0x%X", this->get_name().c_str(),
+            this->cur_cmd);
+        this->ch_stat |= CH_STAT_DEAD;
+        this->ch_stat &= ~CH_STAT_ACTIVE;
+    }
+}
+
+void DMAChannel::interpret_until_blocked() {
+    // Execute ready commands until a transfer is queued or the channel becomes idle/dead.
+    while (this->is_active()) {
+        this->interpret_cmd();
+        if (this->cmd_in_progress)
+            break;
+    }
+}
+
+void DMAChannel::update_cmd() {
+    if (this->cur_is_writable) {
+        if (this->cur_cmd < DBDMA_Cmd::STOP)
+            WRITE_WORD_LE_A(&this->cur_host->xfer_stat, this->ch_stat | CH_STAT_ACTIVE);
+
+        // all INPUT and OUTPUT commands including LOAD_QUAD and STORE_QUAD update cmd.resCount
+        if (this->cur_cmd < DBDMA_Cmd::NOP)
+            WRITE_WORD_LE_A(&this->cur_host->res_count, this->res_count);
+    }
+    this->ch_stat &= ~(CH_STAT_FLUSH | CH_STAT_BT);
+}
+
+void DMAChannel::finish_cmd() {
+    bool   branch_taken = false;
+
+    // save interrupt bits from the completing command before cmd_ptr may change
+    uint8_t saved_cmd_bits = this->cur_host->cmd_bits;
+
+    // all commands except STOP update cmd.xferStatus and
+    // perform actions under control of "i" interrupt, "b" branch, and "w" wait bits
+    if (this->cur_cmd < DBDMA_Cmd::STOP) {
+        // react to cmd.w (wait) bits
+        if (saved_cmd_bits & 3) {
+            bool cond = true;
+            if ((saved_cmd_bits & 3) != 3) {
+                uint16_t wt_mask = this->wait_select >> 16;
+                cond = (this->ch_stat & wt_mask) == (this->wait_select & wt_mask);
+                if ((saved_cmd_bits & 3) == 2) {
+                    cond = !cond; // wait if cond = false
+                }
+            }
+
+            if (cond)
+                return;
+        }
+
+        this->ch_stat &= ~CH_STAT_BT;
+
+        // react to cmd.b (branch) bits
+        if (saved_cmd_bits & 0xC) {
+            bool cond = true;
+            if ((saved_cmd_bits & 0xC) != 0xC) {
+                uint16_t br_mask = this->branch_select >> 16;
+                cond = (this->ch_stat & br_mask) == (this->branch_select & br_mask);
+                if ((saved_cmd_bits & 0xC) == 0x8) {
+                    cond = !cond; // branch if cond = false
+                }
+            }
+            if (cond) {
+                this->cmd_ptr = READ_DWORD_LE_A(&this->cur_host->cmd_arg);
+                branch_taken = true;
+                this->ch_stat |= CH_STAT_BT;
+            }
+        }
+    }
+
+    this->update_cmd();
+
+    if (this->cur_cmd < DBDMA_Cmd::STOP && !branch_taken)
+        this->cmd_ptr += 16;
+
+    // use the interrupt bits saved before cmd_ptr was advanced or branched
+    if (this->cur_cmd < DBDMA_Cmd::STOP) {
+        this->update_irq(saved_cmd_bits);
+    }
+
+    this->cmd_in_progress = false;
+}
+
+void DMAChannel::xfer_quad(bool is_store) {
+    MapDmaResult res;
+    uint32_t addr      = READ_DWORD_LE_A(&this->cur_host->address);
+    uint16_t req_count = READ_WORD_LE_A (&this->cur_host->req_count);
+    uint32_t cmd_arg   = READ_DWORD_LE_A(&this->cur_host->cmd_arg);
+
+    // parse and fix reqCount
+    uint32_t xfer_size = req_count & 7;
+    if (xfer_size & 4) {
+        xfer_size = 4;
+    } else if (xfer_size & 2) {
+        xfer_size = 2;
+    } else {
+        xfer_size = 1;
+    }
+    this->res_count = req_count; // this is the value that gets written to cmd.resCount
+
+    if (addr & (xfer_size - 1)) {
+        LOG_F(ERROR, "%s: QUAD address 0x%08x is not aligned!", this->get_name().c_str(), addr);
+        addr &= ~(xfer_size - 1);
+    }
+
+    res = mmu_map_dma_mem(addr, xfer_size, true);
+
+    // prepare data pointers and perform data transfer
+    if (is_store) {
+        if (res.type & RT_MMIO) {
+            res.dev_obj->write(res.dev_base, addr - res.dev_base,
+                BYTESWAP_SIZED(cmd_arg, xfer_size), xfer_size);
+        } else if (res.is_writable) {
+            switch (xfer_size) {
+                case 1: *res.host_va = cmd_arg; break;
+                case 2: WRITE_WORD_LE_A(res.host_va, cmd_arg); break;
+                case 4: WRITE_DWORD_LE_A(res.host_va, cmd_arg); break;
+            }
+        } else {
+            LOG_F(ERROR, "SOS: DMA access is not to RAM %08X!\n", addr);
+        }
+    } else {
+        uint32_t value;
+        if (res.type & RT_MMIO) {
+            value = res.dev_obj->read(res.dev_base, addr - res.dev_base, xfer_size);
+        } else {
+            switch (xfer_size) {
+                case 1: value = *res.host_va; break;
+                case 2: value = READ_WORD_LE_A(res.host_va); break;
+                case 4: value = READ_DWORD_LE_A(res.host_va); break;
+                default: value = 0; break;
+            }
+        }
+        if (!this->cur_is_writable)
+            LOG_F(ERROR, "%s: DMACmd is not writeable!", this->get_name().c_str());
+        else
+            WRITE_DWORD_LE_A(&this->cur_host->cmd_arg, value);
+    }
+
+    if (this->cur_host->cmd_bits & 0xC)
+        ABORT_F("%s: cmd_bits.b should be zero for LOAD/STORE_QUAD!",
+            this->get_name().c_str());
+
+    this->finish_cmd();
+}
+
+void DMAChannel::update_irq(uint8_t cmd_bits) {
+    // STOP doesn't generate interrupts
+    if (this->cur_cmd < DBDMA_Cmd::STOP) {
+        // react to cmd.i (interrupt) bits
+        if (cmd_bits & 0x30) {
+            bool cond = true;
+            if ((cmd_bits & 0x30) != 0x30) {
+                uint16_t int_mask = this->int_select >> 16;
+                cond = (this->ch_stat & int_mask) == (this->int_select & int_mask);
+                if ((cmd_bits & 0x30) == 0x20) {
+                    cond = !cond; // generate interrupt if cond = false
+                }
+            }
+            if (cond) {
+                if (this->int_ctrl) {
+                    if (!this->interrupt_timer.active) {
+                        TimerManager::get_instance()->add_immediate_timer(this->interrupt_timer, [this](uint64_t, uint64_t) {
+                            this->int_ctrl->ack_dma_int(this->irq_id, 1);
+                        });
+                    }
+                } else
+                    LOG_F(ERROR, "%s Interrupt ignored", this->get_name().c_str());
+            }
+        }
+    }
+}
+
+uint32_t DMAChannel::reg_read(uint32_t offset, int size) {
+    uint32_t result = 0;
+
+    switch (offset & ~3) {
+    case DMAReg::CH_CTRL:
+        result = 0; // ChannelControl reads as 0 (DBDMA spec 5.5.1, table 74)
+        break;
+    case DMAReg::CH_STAT:
+        result = this->ch_stat;
+        break;
+    case DMAReg::CMD_PTR_LO:
+        result = this->cmd_ptr;
+        break;
+    case DMAReg::INT_SELECT:
+        result = this->int_select;
+        break;
+    case DMAReg::BRANCH_SELECT:
+        result = this->branch_select;
+        break;
+    case DMAReg::WAIT_SELECT:
+        result = this->wait_select;
+        break;
+    default:
+        LOG_F(WARNING, "%s: Unsupported DMA channel register read at 0x%X",
+            this->get_name().c_str(), offset);
+    }
+
+    if ((offset & 3) || size != 4)
+        return BYTESWAP_SIZED(result >> ((offset & 3) * 8), size);
+    else
+        return BYTESWAP_32(result);
+}
+
+void DMAChannel::reg_write(uint32_t offset, uint32_t value, int size) {
+    uint16_t mask, data;
+
+    if (size != 4) {
+        ABORT_F("%s: non-DWORD writes to a DMA channel not supported",
+            this->get_name().c_str());
+    }
+
+    value = BYTESWAP_32(value);
+
+    switch (offset) {
+    case DMAReg::CH_CTRL:
+        mask = value >> 16;
+        data = value & 0xFFFF;
+
+        // update general purpose channel status & control bits s0...s7
+        // if requested (needed for interrupt generation)
+        if (mask & 0xFF)
+            this->ch_stat = (this->ch_stat & ~(mask & 0xFF)) | (data & mask & 0xFF);
+
+        // flush bit can be set at the same time the run bit is cleared.
+        // That means we need to update memory before channel operation
+        // is aborted to prevent data loss.
+        if (mask & CH_STAT_FLUSH) {
+            // FLUSH=1 should update memory for INPUT_MORE & INPUT_LAST commands
+            // when the channel is active and not dead.
+            // Setting FLUSH to 0 has no effect.
+            if (data & CH_STAT_FLUSH) {
+                if (
+                    (this->cur_cmd == DBDMA_Cmd::INPUT_MORE || this->cur_cmd == DBDMA_Cmd::INPUT_LAST) &&
+                    this->is_active()
+                ) {
+                    this->ch_stat |= CH_STAT_FLUSH;
+                    if (this->dev_obj != nullptr)
+                        this->dev_obj->notify(this, DMA_MSG_FLUSH);
+                    this->update_cmd();
+                }
+            }
+            this->ch_stat &= ~CH_STAT_FLUSH;
+        }
+
+        if (mask & CH_STAT_RUN) {
+            if (data & CH_STAT_RUN) {
+                // some drivers clear the PAUSE bit while setting the RUN bit.
+                // Clear the PAUSE bit without resuming the channel operation
+                // in this case.
+                if (mask & CH_STAT_PAUSE) {
+                    if (data & CH_STAT_PAUSE)
+                        ABORT_F("%s: Attempt to set both run and pause bits at the same time",
+                            this->get_name().c_str());
+                    else
+                        this->ch_stat &= ~CH_STAT_PAUSE;
+                }
+                if (!(this->ch_stat & CH_STAT_ACTIVE)) {
+                    this->ch_stat |= CH_STAT_ACTIVE | CH_STAT_RUN;
+                    this->start();
+                }
+            } else {
+                if (this->ch_stat & CH_STAT_ACTIVE) {
+                    this->abort();
+                    this->update_irq(this->cur_host->cmd_bits);
+                    this->cmd_in_progress = false;
+                }
+                this->ch_stat &= ~(CH_STAT_RUN | CH_STAT_ACTIVE | CH_STAT_DEAD);
+            }
+        } else if (mask & CH_STAT_PAUSE) {
+            if (data & CH_STAT_PAUSE) {
+                if (this->ch_stat & CH_STAT_ACTIVE)
+                    this->pause();
+                this->ch_stat |=  CH_STAT_PAUSE;
+                this->ch_stat &= ~CH_STAT_ACTIVE;
+            } else {
+                this->ch_stat &= ~CH_STAT_PAUSE;
+                if (!(this->ch_stat & CH_STAT_ACTIVE) && this->is_paused) {
+                    this->is_paused = false;
+                    this->ch_stat  |= CH_STAT_ACTIVE;
+                    this->resume();
+                }
+            }
+        } else if (mask & CH_STAT_WAKE) {
+            if (data & CH_STAT_WAKE && !(this->ch_stat & CH_STAT_ACTIVE)) {
+                this->ch_stat |= CH_STAT_ACTIVE;
+                this->resume();
+            }
+        }
+        break;
+    case DMAReg::CH_STAT:
+        break; // ingore writes to ChannelStatus
+    case DMAReg::CMD_PTR_HI:
+        if (value != 0) {
+            LOG_F(WARNING, "%s: Unsupported DMA channel register write @%02x.%c = %0*x",
+                  this->get_name().c_str(), offset, SIZE_ARG(size), size * 2, value);
+        }
+        break;
+    case DMAReg::CMD_PTR_LO:
+        if (!(this->ch_stat & CH_STAT_ACTIVE)) { // DBDMA spec 5.5.4 (disagrees with 2.9.1.3)
+            this->cmd_ptr = value;
+            LOG_F(9, "%s: CommandPtrLo set to 0x%X%s", this->get_name().c_str(),
+                this->cmd_ptr, (this->ch_stat & CH_STAT_RUN) ? " while running!" : "");
+        } else
+            LOG_F(WARNING, "%s: CommandPtrLo update skipped", this->get_name().c_str());
+        break;
+    case DMAReg::INT_SELECT:
+        this->int_select = value & 0xFF00FFUL;
+        break;
+    case DMAReg::BRANCH_SELECT:
+        this->branch_select = value & 0xFF00FFUL;
+        break;
+    case DMAReg::WAIT_SELECT:
+        this->wait_select = value & 0xFF00FFUL;
+        break;
+    default:
+        LOG_F(WARNING, "%s: Unsupported DMA channel register write at 0x%X",
+            this->get_name().c_str(), offset);
+    }
+}
+
+void DMAChannel::xfer_from_device() {
+    if (this->dev_obj == nullptr)
+        return;
+
+    this->xfer_dir = DMA_DIR_FROM_DEV;
+
+    int got_bytes = this->dev_obj->xfer_from(this, this->queue_data, this->queue_len);
+    this->queue_data += got_bytes;
+    this->res_count -= got_bytes;
+    this->queue_len -= got_bytes;
+    if (!this->queue_len) {
+        this->finish_cmd();
+    } else if (got_bytes) {
+        LOG_F(WARNING, "%s: got unexpected amount of data in xfer_from_device",
+              this->get_name().c_str());
+    }
+
+    this->interpret_until_blocked();
+}
+
+void DMAChannel::xfer_to_device() {
+    if (this->dev_obj == nullptr)
+        return;
+
+    this->xfer_dir = DMA_DIR_TO_DEV;
+
+    int got_bytes = this->dev_obj->xfer_to(this, this->queue_data, this->queue_len);
+    this->queue_data += got_bytes;
+    this->res_count -= got_bytes;
+    this->queue_len -= got_bytes;
+    if (!this->queue_len) {
+        this->finish_cmd();
+    }
+
+    this->interpret_until_blocked();
+}
+
+void DMAChannel::xfer_retry() {
+    if (this->xfer_dir == DMA_DIR_UNDEF)
+        return;
+
+    if (this->xfer_dir == DMA_DIR_FROM_DEV)
+        this->xfer_from_device();
+    else
+        this->xfer_to_device();
+}
+
+bool DMAChannel::dma_is_ready() {
+    if (!this->is_active() ||
+        this->xfer_dir == DMA_DIR_UNDEF || this->cur_cmd >= DBDMA_Cmd::NOP
+    )
+        return false;
+
+    return true;
+}
+
+DmaPullResult DMAChannel::pull_data(uint32_t req_len, uint32_t *avail_len, uint8_t **p_data)
+{
+    *avail_len = 0;
+
+    if (!this->is_active()) {
+        // dead or idle channel? -> no more data
+        LOG_F(WARNING, "%s: Dead/idle channel -> no more data", this->get_name().c_str());
+        return DmaPullResult::NoMoreData;
+    }
+
+    // interpret DBDMA program until we get data or become idle
+    this->interpret_until_blocked();
+
+    // dequeue data if any
+    if (this->queue_len) {
+        if (this->queue_len >= req_len) {
+            LOG_F(9, "%s: Return req_len = %d data", this->get_name().c_str(), req_len);
+            *p_data    = this->queue_data;
+            *avail_len = req_len;
+            this->queue_len -= req_len;
+            this->res_count -= req_len;
+            this->queue_data += req_len;
+        } else { // return less data than req_len
+            LOG_F(9, "%s: Return queue_len = %d data", this->get_name().c_str(),
+                this->queue_len);
+            *p_data         = this->queue_data;
+            *avail_len      = this->queue_len;
+            this->res_count -= this->queue_len;
+            this->queue_len = 0;
+        }
+        return DmaPullResult::MoreData; // tell the caller there is more data
+    }
+
+    return DmaPullResult::NoMoreData; // tell the caller there is no more data
+}
+
+DmaPushResult DMAChannel::push_data(const char* src_ptr, int len) {
+    if (!this->is_active()) {
+        LOG_F(WARNING, "%s: Attempt to push data to dead/idle channel",
+            this->get_name().c_str());
+        return DmaPushResult::NoData;
+    }
+
+    // interpret DBDMA program until we get buffer to fill in or become idle
+    this->interpret_until_blocked();
+
+    if (this->queue_len) {
+        len = std::min((int)this->queue_len, len);
+        std::memcpy(this->queue_data, src_ptr, len);
+        this->queue_data += len;
+        this->res_count  -= len;
+        this->queue_len  -= len;
+    }
+
+    // proceed with the DBDMA program if the buffer became exhausted
+    if (!this->queue_len) {
+        this->interpret_until_blocked();
+    }
+
+    return DmaPushResult::PushedData;
+}
+
+bool DMAChannel::is_out_active() {
+    return this->is_active();
+}
+
+bool DMAChannel::is_in_active() {
+    return this->is_active();
+}
+
+bool DMAChannel::is_active() {
+    if ((this->ch_stat & CH_STAT_DEAD) || !(this->ch_stat & CH_STAT_ACTIVE)) {
+        return false;
+    }
+    else {
+        return true;
+    }
+}
+
+void DMAChannel::start() {
+    if (this->ch_stat & CH_STAT_PAUSE) {
+        LOG_F(WARNING, "%s: Cannot start DMA channel, PAUSE bit is set",
+            this->get_name().c_str());
+        this->ch_stat &= ~CH_STAT_ACTIVE; // TODO: Test this in Open Firmware.
+        return;
+    }
+
+    this->queue_len = 0;
+
+    this->cmd_in_progress = false;
+
+    if (this->dev_obj != nullptr)
+        this->dev_obj->notify(this, DMA_MSG_START);
+
+    if (this->start_cb)
+        this->start_cb();
+
+    this->interpret_until_blocked();
+}
+
+void DMAChannel::resume() {
+    if (this->ch_stat & CH_STAT_PAUSE) {
+        LOG_F(WARNING, "%s: Cannot resume DMA channel, PAUSE bit is set",
+            this->get_name().c_str());
+        return;
+    }
+
+    LOG_F(INFO, "%s: Resuming DMA channel", this->get_name().c_str());
+
+    this->interpret_until_blocked();
+}
+
+void DMAChannel::abort() {
+    LOG_F(9, "%s: Aborting DMA channel", this->get_name().c_str());
+    if (this->dev_obj != nullptr)
+        this->dev_obj->notify(this, DMA_MSG_STOP);
+    if (this->stop_cb)
+        this->stop_cb();
+}
+
+void DMAChannel::pause() {
+    LOG_F(INFO, "%s: Pausing DMA channel", this->get_name().c_str());
+    if (this->dev_obj != nullptr)
+        this->dev_obj->notify(this, DMA_MSG_STOP);
+    if (this->stop_cb)
+        this->stop_cb();
+    this->is_paused = true;
+}

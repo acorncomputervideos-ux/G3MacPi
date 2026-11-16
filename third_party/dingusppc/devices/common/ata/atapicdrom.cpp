@@ -1,0 +1,346 @@
+/*
+DingusPPC - The Experimental PowerPC Macintosh emulator
+Copyright (C) 2018-26 The DingusPPC Development Team
+          (See CREDITS.MD for more details)
+
+(You may also contact divingkxt or powermax2286 on Discord)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/** @file ATAPI CDROM implementation. */
+
+#include <core/memaccess.h>
+#include <devices/common/ata/atadefs.h>
+#include <devices/common/ata/atapicdrom.h>
+#include <devices/common/ata/idechannel.h>
+#include <devices/deviceregistry.h>
+#include <machines/machinebase.h>
+#include <machines/machineproperties.h>
+
+#include <cstring>
+#include <string>
+#include <core/timermanager.h>
+
+using namespace ata_interface;
+
+static char cdrom_vendor_id[] = "DINGUS  ";
+static char cdrom_product_id[]  = "DINGUS CD-ROM   ";
+static char cdrom_revision_id[] = "1.0 ";
+
+AtapiCdrom::AtapiCdrom(std::string name) : AtapiBaseDevice(name) {
+    this->set_phys_dev(this);
+    this->set_cdb_ptr(this->cmd_pkt);
+    this->set_buf_ptr(this->data_buf);
+
+    // populate device info for INQUIRY
+    this->dev_type      = ScsiDevType::CD_ROM;
+    this->is_removable  = true; // removable medium
+    this->std_versions  = 2;    // ANSI version: SCSI-2
+    this->resp_fmt      = 0x21; // ATAPI Version + response data format
+    this->set_vendor_id(cdrom_vendor_id);
+    this->set_product_id(cdrom_product_id);
+    this->set_revision_id(cdrom_revision_id);
+}
+
+int AtapiCdrom::device_postinit() {
+    std::string cdr_config = GET_STR_PROP("cdr_config");
+    if (cdr_config.empty()) {
+        LOG_F(ERROR, "%s: cdr_config property is empty", this->name.c_str());
+        return -1;
+    }
+
+    std::string bus_id;
+    uint32_t    dev_num;
+
+    parse_device_path(cdr_config, bus_id, dev_num);
+
+    auto bus_obj = dynamic_cast<IdeChannel*>(gMachineObj->get_comp_by_name(bus_id));
+    if (!bus_obj) {
+        LOG_F(ERROR, "%s: cdr_config device path %s does not specify a known IDE bus",
+              this->name.c_str(), cdr_config.c_str());
+        return -1;
+    }
+    bus_obj->register_device(dev_num, this);
+
+    std::string cdr_image_path = GET_STR_PROP("cdr_img");
+    if (!cdr_image_path.empty()) {
+        if (!this->insert_image(cdr_image_path))
+            return -1;
+    }
+
+    return 0;
+}
+
+void AtapiCdrom::perform_packet_command() {
+    uint32_t lba, xfer_len;
+
+    this->r_status |= BSY;
+    this->sector_areas = 0;
+    if (this->doing_sector_areas) {
+        this->doing_sector_areas = false;
+        LOG_F(WARNING, "%s: doing_sector_areas reset", this->name.c_str());
+    }
+
+    // Assume successful command execution
+    if (this->cmd_pkt[0] == ScsiCommand::REQ_SENSE) {
+        // For REQ_SENSE we only set the status, status_good() also resets
+        // sense_key, which we'll need to return.
+        this->set_status(ScsiStatus::GOOD, 0);
+    } else {
+        this->status_good();
+    }
+
+    switch (this->cmd_pkt[0]) {
+    case ScsiCommand::READ_CD:
+    {
+        // READ_CD currently bypasses the shared CD-ROM command dispatcher.
+        if (!this->ready_for_command()) {
+            this->present_status();
+            break;
+        }
+
+        lba = READ_DWORD_BE_U(&this->cmd_pkt[2]);
+        xfer_len = (this->cmd_pkt[6] << 16) | READ_WORD_BE_U(&this->cmd_pkt[7]);
+        if (this->cmd_pkt[9] == 0 && (this->cmd_pkt[10] & 7) == 0) {
+            // Treat as a non-data command.
+            xfer_len = 0;
+        }
+
+        // if transfer length is zero then just complete command
+        if (xfer_len == 0) {
+            this->status_good();
+            this->present_status();
+            break;
+        }
+
+        if (this->cmd_pkt[1] || (this->cmd_pkt[9] & ~0xf8) || ((this->cmd_pkt[9] & 0xf8) == 0) || this->cmd_pkt[10])
+            LOG_F(WARNING, "%s: unsupported READ_CD params: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                this->name.c_str(),
+                this->cmd_pkt[0], this->cmd_pkt[1], this->cmd_pkt[2], this->cmd_pkt[3], this->cmd_pkt[4], this->cmd_pkt[5],
+                this->cmd_pkt[6], this->cmd_pkt[7], this->cmd_pkt[8], this->cmd_pkt[9], this->cmd_pkt[10], this->cmd_pkt[11]
+            );
+        if (this->r_features & ATAPI_Features::DMA) {
+            LOG_F(WARNING, "ATAPI DMA transfer requsted");
+        }
+        this->set_fpos(lba);
+        this->sector_areas = cmd_pkt[9];
+        this->doing_sector_areas = true;
+        this->current_block = lba;
+        this->current_block_byte = 0;
+
+        int bytes_prolog = 0;
+        int bytes_data = 0;
+        int bytes_epilog = 0;
+
+        // For Mode 1 CD-ROMs:
+        if (this->sector_areas & 0x80) bytes_prolog +=   12; // Sync
+        if (this->sector_areas & 0x20) bytes_prolog +=    4; // Header
+        if (this->sector_areas & 0x40) bytes_prolog +=    0; // SubHeader
+        if (this->sector_areas & 0x10) bytes_data   += 2048; // User
+        if (this->sector_areas & 0x08) bytes_epilog +=  288; // Auxiliary
+        if (this->sector_areas & 0x02) bytes_epilog +=  294; // ErrorFlags
+        if (this->sector_areas & 0x01) bytes_epilog +=   96; // SubChannel
+
+        int bytes_per_block = bytes_prolog + bytes_data + bytes_epilog;
+
+        int disk_image_byte_count;
+
+        if (bytes_per_block == 0) {
+            disk_image_byte_count = 0xffff;
+        }
+        else {
+            disk_image_byte_count = (this->r_byte_count / bytes_per_block) * this->block_size; // whole blocks
+            if ((this->r_byte_count % bytes_per_block) > bytes_prolog) { // partial block
+                int disk_image_byte_count_partial_block =
+                    (this->r_byte_count % bytes_per_block) - bytes_prolog; // remove prolog from partial block
+                if (disk_image_byte_count_partial_block > this->block_size) { // partial block includes some epilog?
+                    disk_image_byte_count_partial_block = this->block_size; // // remove epilog from partial block
+                }
+                // add partial block
+                disk_image_byte_count += disk_image_byte_count_partial_block;
+            }
+        }
+
+        int disk_image_bytes_received = this->read_begin(xfer_len, disk_image_byte_count);
+
+        int bytes_received = (disk_image_bytes_received / this->block_size) * bytes_per_block + bytes_prolog +
+            (disk_image_bytes_received % this->block_size); // whole blocks + prolog + partial block
+        if (bytes_received > this->r_byte_count) { // if partial epilog or partial prolog
+            bytes_received = this->r_byte_count; // confine to r_byte_count
+        }
+        this->r_byte_count = bytes_received;
+        this->xfer_cnt = bytes_received;
+
+        this->data_ptr = (uint16_t*)this->data_cache.get();
+        this->status_good();
+        this->data_in_phase();
+        break;
+    }
+    case ScsiCommand::GET_CONFIG: {
+        this->xfer_cnt = this->get_config(this->cmd_pkt, this->data_buf);
+        if (this->xfer_cnt == 0) {
+            this->present_status();
+        } else {
+            this->xfer_cnt = std::min((int)this->r_byte_count, this->xfer_cnt);
+            this->data_ptr = (uint16_t*)this->data_buf;
+            this->status_good();
+            this->data_in_phase();
+        }
+        break;
+    }
+    default:
+        ScsiCdromCmds::process_command();
+    }
+}
+
+int AtapiCdrom::get_config(uint8_t* pkt, uint8_t* buf) {
+    std::memset(buf, 0, 16);
+
+    // Data length (4 bytes header + 8 bytes for one feature descriptor - 4 bytes for length field)
+    uint32_t data_len = 8;
+    buf[0]            = (data_len >> 24) & 0xFF;
+    buf[1]            = (data_len >> 16) & 0xFF;
+    buf[2]            = (data_len >> 8) & 0xFF;
+    buf[3]            = data_len & 0xFF;
+
+    // Feature Descriptor 1 - Set profile to CD-ROM
+    buf[6] = 0;
+    buf[7] = 0x08;
+
+    // Feature Descriptor 2 - Feature Code, Version 0
+    buf[8]  = 0x00;
+    buf[9]  = 0x01;    // Core Feature Code
+    buf[10] = 0x03;    // Persist and Current bits set
+    buf[11] = 0x04;    // Additional Length
+
+    return 12;
+}
+
+int AtapiCdrom::request_data() {
+    // continuation of READ_CD above
+
+    this->data_ptr = (uint16_t*)this->data_cache.get();
+
+    this->xfer_cnt = this->read_more();
+
+    return this->xfer_cnt;
+}
+
+static const uint8_t mode_1_sync[] = { 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00 };
+
+uint16_t AtapiCdrom::get_data() {
+    uint16_t ret_data;
+
+    if (doing_sector_areas) {
+        // For Mode 1 CD-ROMs:
+        int area_start;
+        int area_end = 0;
+
+        ret_data = 0xffff;
+
+        if (this->sector_areas & 0x80) {
+            area_start = area_end;
+            area_end += 12; // Sync
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                ret_data = BYTESWAP_16(*((uint16_t*)(&mode_1_sync[current_block_byte - area_start])));
+            }
+        }
+
+        if (this->sector_areas & 0x20) {
+            area_start = area_end;
+            area_end += 4; // Header
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                AddrMsf msf = lba_to_msf(this->current_block + 150);
+                uint8_t header[4]{
+                    (uint8_t)msf.min,
+                    (uint8_t)msf.sec,
+                    (uint8_t)msf.frm,
+                    0x01 // Mode 1
+                };
+                ret_data = BYTESWAP_16(*((uint16_t*)(&header[current_block_byte - area_start])));
+            }
+        }
+
+        if (this->sector_areas & 0x40) {
+            area_start = area_end;
+            area_end += 0; // SubHeader
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                ret_data = 0;
+            }
+        }
+
+        if (this->sector_areas & 0x10) {
+            area_start = area_end;
+            area_end += 2048; // User
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                ret_data = AtaBaseDevice::get_data();
+            }
+        }
+
+        if (this->sector_areas & 0x08) {
+            area_start = area_end;
+            area_end += 288; // Auxiliary
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                ret_data = 0;
+            }
+        }
+
+        if (this->sector_areas & 0x02) {
+            area_start = area_end;
+            area_end += 294; // ErrorFlags
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                ret_data = 0;
+            }
+        }
+
+        if (this->sector_areas & 0x01) {
+            area_start = area_end;
+            area_end += 96; // SubChannel
+            if (this->current_block_byte >= area_start && this->current_block_byte < area_end) {
+                ret_data = 0;
+            }
+        }
+
+        current_block_byte += 2;
+        if (current_block_byte >= area_end)
+            current_block_byte = 0;
+    }
+    else {
+        ret_data = AtaBaseDevice::get_data();
+    }
+
+    return ret_data;
+}
+
+void AtapiCdrom::status_good() {
+    this->sense_key = 0;
+    this->set_status(ScsiStatus::GOOD, this->sense_key);
+}
+
+void AtapiCdrom::status_error(uint8_t sense_key, uint8_t asc) {
+    this->sense_key = sense_key;
+    this->asc = asc;
+    this->set_status(ScsiStatus::CHECK_CONDITION, this->sense_key);
+}
+
+static const PropMap AtapiCdrom_Properties = {
+    {"cdr_img", new StrProperty("")},
+};
+
+static const DeviceDescription AtapiCdrom_Descriptor = {
+    AtapiCdrom::create, {}, AtapiCdrom_Properties, HWCompType::IDE_DEV
+};
+
+REGISTER_DEVICE(AtapiCdrom, AtapiCdrom_Descriptor);

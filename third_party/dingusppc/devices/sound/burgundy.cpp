@@ -1,0 +1,141 @@
+/*
+DingusPPC - The Experimental PowerPC Macintosh emulator
+Copyright (C) 2018-26 The DingusPPC Development Team
+          (See CREDITS.MD for more details)
+
+(You may also contact divingkxt or powermax2286 on Discord)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/** Burgundy sound codec emulation. */
+
+#include <core/endianswap.h>
+#include <core/timermanager.h>
+#include <devices/common/hwcomponent.h>
+#include <devices/deviceregistry.h>
+#include <devices/sound/burgundy.h>
+#include <loguru.hpp>
+
+BurgundyCodec::BurgundyCodec(std::string name) : MacioSndCodec(name) {
+    supports_types(HWCompType::SND_CODEC);
+
+    static int burgundy_sample_rates[1] = { 44100 };
+
+    // Burgundy seems to supports only one sample rate
+    this->sr_table  = burgundy_sample_rates;
+    this->max_sr_id = 1;
+
+    this->set_sample_rate(0); // set default sample rate
+
+    this->reg_array[0x01] = 0x01010000; // ID 1 (Burgundy), Vendor 1 (Crystal), Version 0, Revision 0
+}
+
+uint32_t BurgundyCodec::snd_ctrl_read(uint32_t offset, int size) {
+    uint32_t value = 0;
+
+    switch (offset) {
+    case AWAC_SOUND_CTRL_REG:
+        value = this->snd_ctrl_reg;
+        break;
+    case AWAC_CODEC_CTRL_REG:
+        value = this->last_ctrl_data;
+        break;
+    case AWAC_CODEC_STATUS_REG:
+        value =
+            (
+                (
+                    9 |
+                    CODEC_STATUS::SENSE_MIC |
+                    CODEC_STATUS::SENSE_HEADPHONES
+                ) << CODEC_STATUS::SENSE_POS
+            ) |
+            (this->data_byte << CODEC_STATUS::DATA_POS) |
+            (this->read_pos << CODEC_STATUS::CURRENTBYTE_POS) |
+            (this->byte_counter << CODEC_STATUS::BYTECOUNTER_POS) |
+            (0 << CODEC_STATUS::INDICATOR_POS) |
+            CODEC_STATUS::READY |
+            (this->first_valid ? CODEC_STATUS::FIRST_VALID_BYTE : 0);
+        break;
+    case AWAC_FRAME_COUNT:
+        value = (uint32_t)(
+            (
+                (TimerManager::get_instance()->current_time_ns() - frame_count_start_time) * this->sr_table[0]
+                + 500000000
+            )  / 1000000000 + this->frame_count
+        );
+        break;
+    default:
+        LOG_F(ERROR, "%s: read from unsupported register 0x%X", this->name.c_str(),
+              offset);
+    }
+
+    return BYTESWAP_32(value);
+}
+
+void BurgundyCodec::snd_ctrl_write(uint32_t offset, uint32_t value, int size) {
+    value = BYTESWAP_32(value);
+
+    switch (offset) {
+    case AWAC_SOUND_CTRL_REG:
+        this->snd_ctrl_reg = value;
+        //this->set_sample_rate((this->snd_ctrl_reg & SOUND_CONTROL::RATE_MASK) >> SOUND_CONTROL::RATE_POS);
+        break;
+    case AWAC_CODEC_CTRL_REG:
+    {
+        this->last_ctrl_data = value & ~CODEC_CONTROL::BUSY;
+        uint8_t write_byte = (value & CODEC_CONTROL::DATA_MASK) >> CODEC_CONTROL::DATA_POS;
+        uint8_t reg_addr = (value & CODEC_CONTROL::ADDR_MASK) >> CODEC_CONTROL::ADDR_POS;
+        uint8_t cur_byte = (value & CODEC_CONTROL::CURRENTBYTE_MASK) >> CODEC_CONTROL::CURRENTBYTE_POS;
+        uint8_t last_byte = (value & CODEC_CONTROL::LASTBYTE_MASK) >> CODEC_CONTROL::LASTBYTE_POS;
+        bool reset = value & CODEC_CONTROL::RESET;
+        bool write = value & CODEC_CONTROL::WRITE;
+        if (write) {
+            if (reg_addr < BURGUNDY_NUM_REGS) {
+                uint32_t mask = 0xFFU << (cur_byte * 8);
+                this->reg_array[reg_addr] = (this->reg_array[reg_addr] & ~mask) |
+                                            (write_byte << (cur_byte * 8));
+            }
+        } else {
+            this->reg_addr = reg_addr;
+            this->read_pos = cur_byte;
+            this->data_byte = ((reg_addr < BURGUNDY_NUM_REGS ? this->reg_array[reg_addr] : 0) >> (cur_byte * 8)) & 0xFFU;
+            this->first_valid = true;
+
+            if (this->first_valid_timer.active)
+                LOG_F(ERROR, "%s: first_valid_timer is already active", this->name.c_str());
+            TimerManager::get_instance()->add_oneshot_timer(this->first_valid_timer,
+                USECS_TO_NSECS(22), // average is approximately 22.6 µs on a real B&W G3
+                [this](uint64_t, uint64_t) {
+                    this->first_valid  = false;
+                    this->byte_counter = (this->byte_counter + 1) & 3;
+            });
+        }
+        break;
+    }
+    case AWAC_FRAME_COUNT:
+        this->frame_count = value;
+        this->frame_count_start_time = TimerManager::get_instance()->current_time_ns();
+        break;
+    default:
+        LOG_F(ERROR, "%s: write to unsupported register 0x%X", this->name.c_str(),
+              offset);
+    }
+}
+
+static const DeviceDescription Burgundy_Descriptor = {
+    BurgundyCodec::create, {}, {}, HWCompType::SND_CODEC
+};
+
+REGISTER_DEVICE(BurgundySnd, Burgundy_Descriptor);

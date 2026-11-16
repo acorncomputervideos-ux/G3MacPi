@@ -1,0 +1,463 @@
+/*
+DingusPPC - The Experimental PowerPC Macintosh emulator
+Copyright (C) 2018-26 The DingusPPC Development Team
+          (See CREDITS.MD for more details)
+
+(You may also contact divingkxt or powermax2286 on Discord)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#include <core/memaccess.h>
+#include <devices/common/scsi/scsicommoncmds.h>
+#include <loguru.hpp>
+
+ScsiCommonCmds::ScsiCommonCmds() {
+    this->enable_cmd(ScsiCommand::TEST_UNIT_READY);
+    this->enable_cmd(ScsiCommand::REQ_SENSE);
+    this->enable_cmd(ScsiCommand::INQUIRY);
+    this->enable_cmd(ScsiCommand::MODE_SENSE_6);
+    this->enable_cmd(ScsiCommand::MODE_SENSE_10);
+}
+
+void ScsiCommonCmds::process_command() {
+    int next_phase;
+
+    switch(this->cdb_ptr[0]) {
+    case ScsiCommand::TEST_UNIT_READY:
+        next_phase = this->test_unit_ready();
+        break;
+    case ScsiCommand::REQ_SENSE:
+        next_phase = this->request_sense();
+        break;
+    case ScsiCommand::INQUIRY:
+        next_phase = this->inquiry();
+        break;
+    case ScsiCommand::MODE_SENSE_6:
+    case ScsiCommand::MODE_SENSE_10:
+        next_phase = this->mode_sense();
+        break;
+    default:
+        this->invalid_command();
+        next_phase = ScsiPhase::STATUS;
+    }
+
+    phy_impl->switch_phase(next_phase);
+}
+
+// maps command group number to CDB length (SCSI-2 standard §7.2.1)
+static const int CmdGroupLen[8] = {6, 10, 10, CMD_GRP_RESERVED, CMD_GRP_RESERVED, 12,
+                                   CMD_GRP_VENDOR_SPECIFIC, CMD_GRP_VENDOR_SPECIFIC};
+
+int ScsiCommonCmds::get_cdb_length(uint8_t op_code) {
+    return CmdGroupLen[op_code >> 5];
+}
+
+int ScsiCommonCmds::verify_cdb() {
+    if (phy_impl->get_phy_id() == PHY_ID_ATAPI)
+        return 0; // don't try to verify ATAPI packets
+
+    int cdb_len = this->get_cdb_length(this->cdb_ptr[0]);
+
+    if (cdb_len < 0)
+        return 0; // don't know how to verify non-standard CDBs
+
+    // check the LUN field except for INQUIRY and REQ_SENSE
+    if ((this->cdb_ptr[0] != ScsiCommand::INQUIRY) &&
+        (this->cdb_ptr[0] != ScsiCommand::REQ_SENSE))
+    {
+        if (phy_impl->last_sel_has_attention() &&
+           (phy_impl->last_sel_msg() & ScsiMessage::IDENTIFY))
+        {
+            uint8_t lun = phy_impl->last_sel_msg() & 7;
+
+            if (!this->lun_supported(lun)) {
+                LOG_F(ERROR, "unsupported LUN 0x%X", lun);
+                this->invalid_lun();
+                phy_impl->set_status(ScsiStatus::CHECK_CONDITION, this->sense_key);
+                return -1;
+            }
+        } else if (this->cdb_ptr[1] >> 5)
+            LOG_F(WARNING, "non-zero LUN 0x%X in CDB", this->cdb_ptr[1] >> 5);
+    }
+
+    // check the control field
+    uint8_t ctrl_byte = this->cdb_ptr[cdb_len - 1];
+
+    if (ctrl_byte & 3) {
+        if (this->linked_cmds_supported())
+            this->link_ctrl = ctrl_byte;
+        else {
+            LOG_F(ERROR, "flag/link bit set in CDB control: 0x%X", ctrl_byte);
+            this->invalid_cdb();
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int ScsiCommonCmds::test_unit_ready() {
+    this->ready_for_command(true);
+    return ScsiPhase::STATUS;
+}
+
+bool ScsiCommonCmds::ready_for_command(bool force_check) {
+    // TUR forces a check from its handler; dispatch lets it and media-independent
+    // commands through to ScsiCommonCmds.
+    if (!force_check) {
+        switch (this->cdb_ptr[0]) {
+        case ScsiCommand::INQUIRY:
+        case ScsiCommand::REQ_SENSE:
+        case ScsiCommand::TEST_UNIT_READY:
+        case ScsiCommand::MODE_SENSE_6:
+        case ScsiCommand::MODE_SENSE_10:
+            return true;
+        }
+    }
+
+    if (!phy_impl->is_device_ready()) {
+        this->sense_key = ScsiSense::NOT_READY;
+        this->asc       = phy_impl->not_ready_reason();
+        this->ascq      = 0;
+        phy_impl->set_status(ScsiStatus::CHECK_CONDITION, this->sense_key);
+        return false;
+    }
+
+    return true;
+}
+
+int ScsiCommonCmds::inquiry() {
+    int alloc_len = this->get_xfer_len();
+    int resp_len  = 36; // standard response length
+
+    // go directly to the STATUS phase if alloc_len = 0
+    if (!alloc_len) {
+        LOG_F(WARNING, "INQUIRY: skip data transfer because alloc_len = 0");
+        return ScsiPhase::STATUS;
+    }
+
+    if (phy_impl->get_phy_id() == PHY_ID_SCSI) {
+        bool is_invalid = false;
+
+        if (this->cdb_ptr[1] & 1) {
+            LOG_F(ERROR, "INQUIRY: EVPD=1 not supported");
+            this->set_field_pointer(1);
+            this->set_bit_pointer(0);
+            is_invalid = true;
+        }
+
+        if (this->cdb_ptr[2]) {
+            LOG_F(ERROR, "INQUIRY: non-zero page code not supported");
+            this->set_field_pointer(2);
+            is_invalid = true;
+        }
+
+        if (is_invalid) {
+            this->invalid_cdb();
+            return ScsiPhase::STATUS;
+        }
+    }
+
+    std::memset(this->buf_ptr, 0, resp_len);
+
+    uint8_t lun = this->get_lun();
+
+    if (lun) {
+        // tell the host there is no device for this LUN
+        this->buf_ptr[0] = (3 << 5) | ScsiDevType::UNKNOWN;
+        LOG_F(WARNING, "INQUIRY: no device for LUN %d", lun);
+    } else {
+        this->buf_ptr[0] = this->dev_type;
+        this->buf_ptr[1] = ((this->is_removable) ? 0x80 : 0) | this->dev_type_mod;
+        this->buf_ptr[2] = this->std_versions;
+        this->buf_ptr[3] = this->resp_fmt;
+        this->buf_ptr[4] = 31; // additional length (n-5)
+        this->buf_ptr[7] = this->cap_flags;
+        std::memcpy(&this->buf_ptr[ 8], vendor_id,   sizeof(this->vendor_id));
+        std::memcpy(&this->buf_ptr[16], product_id,  sizeof(this->product_id));
+        std::memcpy(&this->buf_ptr[32], revision_id, sizeof(this->revision_id));
+    }
+
+    phy_impl->set_xfer_len(std::min(alloc_len, resp_len));
+
+    return ScsiPhase::DATA_IN;
+}
+
+int ScsiCommonCmds::request_sense() {
+    int alloc_len = this->get_xfer_len();
+    int resp_len  = 18; // standard response length
+
+    // go directly to the STATUS phase if alloc_len = 0
+    if (!alloc_len) {
+        LOG_F(WARNING, "REQ_SENSE: skip data transfer because alloc_len = 0");
+        return ScsiPhase::STATUS;
+    }
+
+    std::memset(this->buf_ptr, 0, resp_len);
+
+    this->buf_ptr[0] = 0x80 | 0x70; // valid bit + current errors
+    this->buf_ptr[7] = 10; // additional sense length
+
+    uint8_t lun = this->get_lun();
+
+    if (lun) // unsupported LUN
+        this->invalid_lun();
+
+    this->buf_ptr[ 2] = this->sense_key;
+    this->buf_ptr[12] = this->asc;
+    this->buf_ptr[13] = this->ascq;
+
+    if (this->sense_key == ScsiSense::ILLEGAL_REQ && this->field_ptr_valid) {
+        this->buf_ptr[15] = this->is_cdb_err ? 0xC0 : 0x80;
+
+        WRITE_WORD_BE_A(&this->buf_ptr[16], this->field_ptr);
+
+        if (this->bit_ptr_valid)
+            this->buf_ptr[15] |= (this->bit_ptr & 7) | 8;
+    }
+
+    this->reset_sense(); // clear last sense information
+
+    phy_impl->set_xfer_len(std::min(alloc_len, resp_len));
+
+    return ScsiPhase::DATA_IN;
+}
+
+const char* Page_Control_Modes[4] = {
+    "CURRENT_VALUES",
+    "CHANGEABLE_VALUES",
+    "DEFAULT_VALUES",
+    "SAVED_VALUES"
+};
+
+int ScsiCommonCmds::mode_sense() {
+    uint8_t page_ctrl = this->cdb_ptr[2] >> 6;
+
+    if (page_ctrl == PageControl::SAVED_VALUES && !this->supports_params_saving()) {
+        LOG_F(ERROR, "MODE_SENSE: Page control mode (%s) not supported",
+              Page_Control_Modes[page_ctrl]);
+        this->set_field_pointer(2); // error in the 3rd byte
+        this->set_bit_pointer(7);   // starting with bit 7
+        this->illegal_request(ScsiError::SAVING_NOT_SUPPORTED, 0);
+        return ScsiPhase::STATUS;
+    }
+
+    uint8_t page_code    = this->cdb_ptr[2] & 0x3F;
+    uint8_t subpage_code = this->cdb_ptr[3];
+
+    // MODE_SENSE_10 returns a bigger response
+    bool    is_long_resp = this->cdb_ptr[0] == ScsiCommand::MODE_SENSE_10;
+
+    int alloc_len    = this->get_xfer_len();
+    int resp_len     = 0;
+    int resp_max_len = is_long_resp ? 65536 : 256;
+
+    uint8_t* out_ptr = this->buf_ptr;
+
+    uint8_t medium_type, dev_flags;
+
+    this->get_medium_type(medium_type, dev_flags);
+
+    // format response header
+    if (is_long_resp) { // MODE_SENSE_10
+        WRITE_WORD_BE_A(out_ptr, 0); // zero data_length -> to be adjusted later
+        out_ptr[2] = medium_type;
+        out_ptr[3] = dev_flags;
+        resp_len   = 8; // initial response length
+        out_ptr   += 8; // move data pointer past block descriptor length
+        WRITE_WORD_BE_A(&out_ptr[-2], 0); // zero block descriptor length
+    } else {
+        out_ptr[0]   = 0; // zero data_length -> to be adjusted later
+        out_ptr[1]   = medium_type;
+        out_ptr[2]   = dev_flags;
+        resp_len     = 4; // initial response length
+        out_ptr     += 4; // move data pointer past block descriptor length
+        out_ptr[-1]  = 0; // zero block descriptor length
+    }
+
+    // return block descriptor(s) unless
+    // it's ATAPI that doesn't use block descriptors
+    // block descriptors are disabled by the DBD bit
+    if (phy_impl->get_phy_id() == PHY_ID_SCSI) {
+        if (!(this->cdb_ptr[1] & 8)) { // if DBD=0
+            int desc_len = this->format_block_descriptors(out_ptr);
+            if (is_long_resp)
+                WRITE_WORD_BE_A(&out_ptr[-2], desc_len);
+            else
+                out_ptr[-1] = desc_len;
+            out_ptr  += desc_len;
+            resp_len += desc_len;
+        } else
+            LOG_F(WARNING, "MODE_SENSE: block descriptor(s) disabled");
+    }
+
+    // return all pages if requested
+    if (page_code == ModePage::ALL_PAGES) {
+        for (const auto& [page_num, formatter] : this->getters) {
+            if (!page_num)
+                continue; // skip vendor specific page 0 - shall be returned last
+
+            int page_len = this->get_one_page(page_ctrl, page_num, 0,
+                                              out_ptr, resp_max_len - resp_len);
+            if (page_len < 0)
+                return ScsiPhase::STATUS;
+
+            out_ptr  += page_len;
+            resp_len += page_len;
+        }
+
+        if (this->getters.count(0))
+            page_code = 0; // page 0 exists -> let the following code return it last
+    }
+
+    // return one page
+    if (page_code != ModePage::ALL_PAGES) {
+        if (this->getters.count(page_code)) {
+            int page_len = this->get_one_page(page_ctrl, page_code, subpage_code,
+                                              out_ptr, resp_max_len - resp_len);
+            if (page_len < 0)
+                return ScsiPhase::STATUS;
+
+            resp_len += page_len;
+        } else {
+            LOG_F(ERROR, "MODE_SENSE: page 0x%X not supported", page_code);
+            this->set_field_pointer(2); // error in the 3rd byte
+            this->set_bit_pointer(5);   // starting with bit 5
+            this->invalid_cdb();
+            return ScsiPhase::STATUS;
+        }
+    }
+
+    // stuff final response into response header
+    if (is_long_resp)
+        WRITE_WORD_BE_A(&this->buf_ptr[0], resp_len - 2);
+    else
+        this->buf_ptr[0] = resp_len - 1;
+
+    phy_impl->set_xfer_len(std::min(alloc_len, resp_len));
+
+    return ScsiPhase::DATA_IN;
+}
+
+int ScsiCommonCmds::get_one_page(uint8_t ctrl, uint8_t page, uint8_t subpage,
+                                 uint8_t* out_ptr, int avail_len)
+{
+    int len, err;
+
+try_again:
+    len = this->getters[page](ctrl, subpage, &out_ptr[2], avail_len - 2);
+    if (len < 0) {
+        err = len;
+        if (err == FORMAT_ERR_DATA_TOO_BIG) {
+            ABORT_F("Internal buffer too small!");
+            // increase buffer size
+            // goto try_again;
+        } else if (err == FORMAT_ERR_BAD_CONTROL) {
+            LOG_F(ERROR, "MODE_SENSE: Page control (%s) not supported for page 0x%X",
+                  Page_Control_Modes[ctrl], page);
+            this->set_field_pointer(2); // error in the 3rd byte
+            this->set_bit_pointer(7);   // starting with bit 7
+        } else if (err == FORMAT_ERR_BAD_SUBPAGE) {
+            LOG_F(ERROR, "MODE_SENSE: unsupported subpage 0x%X for page 0x%X",
+                  subpage, page);
+            this->set_field_pointer(3); // error in the 4th byte
+        } else
+            ABORT_F("MODE_SENSE: unknown getter error %d", err);
+
+        this->invalid_cdb();
+        return err;
+    }
+
+    out_ptr[0] = page;
+    out_ptr[1] = len;
+
+    return len + 2;
+}
+
+uint8_t ScsiCommonCmds::get_lun() {
+    if (phy_impl->get_phy_id() == PHY_ID_ATAPI)
+        return 0; // ATAPI doesn't support SCSI LUNs so bail out early
+
+    if (phy_impl->last_sel_has_attention() &&
+        (phy_impl->last_sel_msg() & ScsiMessage::IDENTIFY))
+        return phy_impl->last_sel_msg() & 7;
+    else
+        return this->cdb_ptr[1] >> 5;
+}
+
+uint32_t ScsiCommonCmds::get_xfer_len() {
+    int cmd_len = this->get_cdb_length(this->cdb_ptr[0]);
+
+    switch(cmd_len) {
+    case 6:
+        return this->cdb_ptr[4];
+    case 10:
+        return READ_WORD_BE_U(&this->cdb_ptr[7]);
+    case 12:
+        return READ_DWORD_BE_U(&this->cdb_ptr[6]);
+    default:
+        ABORT_F("unsupported command length %d in get_xfer_len", cmd_len);
+    }
+}
+
+void ScsiCommonCmds::reset_sense() {
+    this->sense_key         = ScsiSense::NO_SENSE;
+    this->asc               = ScsiError::NO_ERROR;
+    this->ascq              = 0;
+    this->field_ptr_valid   = false;
+    this->bit_ptr_valid     = false;
+}
+
+void ScsiCommonCmds::invalid_lun() {
+    this->sense_key         = ScsiSense::ILLEGAL_REQ;
+    this->asc               = ScsiError::INVALID_LUN;
+    this->ascq              = 0;
+    this->is_cdb_err        = true;
+    this->field_ptr_valid   = true;
+    this->field_ptr         = 1; // error in the 2nd byte
+    this->bit_ptr_valid     = true;
+    this->bit_ptr           = 7; // MSB number of the invalid bitfield
+}
+
+void ScsiCommonCmds::invalid_cdb() {
+    this->sense_key     = ScsiSense::ILLEGAL_REQ;
+    this->asc           = ScsiError::INVALID_CDB;
+    this->ascq          = 0;
+    this->is_cdb_err    = true;
+
+    phy_impl->set_status(ScsiStatus::CHECK_CONDITION, this->sense_key);
+}
+
+void ScsiCommonCmds::invalid_command() {
+    LOG_F(ERROR, "unsupported command: 0x%02x", this->cdb_ptr[0]);
+
+    this->sense_key         = ScsiSense::ILLEGAL_REQ;
+    this->asc               = ScsiError::INVALID_CMD;
+    this->ascq              = 0;
+    this->is_cdb_err        = true;
+    this->field_ptr_valid   = true;
+    this->field_ptr         = 0; // error in the 1st byte
+
+    phy_impl->set_status(ScsiStatus::CHECK_CONDITION, this->sense_key);
+}
+
+void ScsiCommonCmds::illegal_request(uint8_t asc, uint8_t ascq, bool is_cdb) {
+    this->sense_key     = ScsiSense::ILLEGAL_REQ;
+    this->asc           = asc;
+    this->ascq          = ascq;
+    this->is_cdb_err    = is_cdb;
+
+    phy_impl->set_status(ScsiStatus::CHECK_CONDITION, this->sense_key);
+}

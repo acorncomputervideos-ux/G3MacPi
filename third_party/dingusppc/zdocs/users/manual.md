@@ -1,0 +1,274 @@
+# DingusPPC User Manual
+
+## Implemented Features
+
+* Interpreter (with 601, FPU, and MMU support)
+* IDE and SCSI
+* Floppy disk image reading (Raw, Disk Copy 4.2, WOZ v1 and v2)
+* ADB mouse, keyboard, and AppleJack (Pippin) controller
+* Some audio support
+* Basic video output support (i.e. ATI Rage, Control, Platinum)
+
+## Known Working OSes
+
+* Disk Tools (7.1.2 - 8.5)
+* Mac OS 7.1.2 - 9.2.2 (from CD or Hard Disk)
+* Mac OS X 10.0 - 10.3
+* BeOS DR9 - 5.0 (Using a Power Mac; BeBox is currently not supported)
+* OpenDarwin 6.6.2
+
+## Disk Initialization
+
+To initialize a disk, you'll first need to boot Disk Tools from a floppy disk image along with a blank hard disk image you want to initialize.
+
+Once booted, start up the Hard Disk Setup application and initialize the drive listed. It may be listed as not mounted.
+
+Once the disk has been initialized, you will need to reboot the machine with the appropriate installation media, such as a CD-ROM image.
+
+Make sure the disk is appropriately sized for the OS you want to install and follow the instructions from the installer carefully.
+
+You may also want to use a third-party program like BlueSCSI to convert a raw HFS image from an emulator like SheepShaver.
+
+## Windows
+
+DingusPPC uses two windows when booted up; a command line window and a monitor window to display the machine.
+
+## Commands
+
+DingusPPC is operated using the command line interface. As such, we will list the commands as required. These commands are separated by spaces.
+
+```
+-r, --run
+```
+
+Run the emulator (using the interpreter).
+
+```
+-d, --debugger
+```
+
+Enter the interactive debugger. The user may also enter the debugger at any point by pressing Control and C, when the command line window is selected.
+
+```
+-b, --bootrom filename
+```
+
+Specifies the Boot ROM path, where `filename` specifies the location of the ROM (optional; looks for bootrom.bin by default)
+
+```
+-m, --machine machineid
+```
+
+Specify machine ID, where `machineid` is a short string identifier for the machine (i.e. pm6100). (optional; will attempt to determine machine ID from the boot rom otherwise)
+
+```
+-w,--workingdir path
+```
+
+Specifies working directory, where `path` is a string for the directory the emulator will grab files from.
+
+```
+--start-date YYYY-MM-DD
+```
+
+Start the guest RTC on the given date, using the current local time of day. The clock continues ticking, including across midnight. This is useful for running software with an expiration date, such as `--start-date=1997-03-01` for BeOS DR 8.2. Without a date override or deterministic mode, the RTC follows the host clock.
+
+```
+--realtime
+```
+
+Advance the CPU timebase, decrementer, and device timers using elapsed host time, instead of instruction counts. This keeps double click delays, keyboard repeat, sleeps, and timeouts tied to wall time, improving usability of user interfaces. Control-Alt-R toggles this mode while running.
+
+```
+--deterministic
+--deterministic-mode strict|interactive
+```
+
+Enables deterministic mode, where the emulator behaves the same way every run. Meant to be a development or debugging aid, to remove variability between runs. Disk, NVRAM, and PRAM changes are not saved. Audio output is also disabled, since we cannot control when the host would try to access it. The default `strict` mode ignores mouse and keyboard input; `interactive` mode allows input for interactive debugging.
+
+The RTC defaults to `--start-date=2001-03-24`, unless a date is explicitly supplied. It starts at noon and advances the RTC with emulated time. Restarting the emulated machine starts the deterministic RTC from that date and noon again. With `--realtime`, it advances at wall-clock rate from that fixed date and noon.
+
+```
+--setenv args
+```
+
+Set Open Firmware variables at startup, where `args` is a string where you enter the variables to change.
+
+```
+list machines
+```
+
+Shows the currently implemented machines within DingusPPC.
+
+```
+list properties
+```
+
+Shows the configurable properties, such as the selected disc image and the ram bank sizes.
+
+### Properties
+
+```
+--rambank1_size X
+--rambank2_size X
+--rambank3_size X
+--rambank4_size X
+```
+
+Set the RAM sizes to use, where X is an integer of a power of 2 up to 512 (depending on the emulated machine).
+
+```
+gfxmem_size
+```
+
+Specifies the amount of available graphics memory.
+
+```
+--fdd_img filename
+```
+
+Set the floppy disk image. `filename` is the name of the floppy disk you want to insert into the emulator.
+
+```
+--fdd_wr_prot=1
+```
+
+Set the floppy to read-only
+
+```
+--hdd_img filename
+```
+
+Set the hard disk image. `filename` is the name of the floppy disk you want to insert into the emulator. On machines that support SCSI hard disk, you can also use the colon (:) to add multiple hard disks.
+
+```
+--cdr_img filename
+```
+
+Set the CD ROM image. `filename` is the name of the CD ROM image you want to insert into the emulator.
+
+```
+hdd_config
+cdr_config
+```
+
+These properties determine where in the bus the hard disk and CD ROM are set up in. For example, these can be `Ide0:0` or `CmdAta0:0`.
+
+```
+--cpu
+```
+
+Change which version of the PowerPC CPU to use
+
+```
+--emmo
+```
+
+Access the factory tests
+
+```
+--serial_backend=stdio
+--serial_backend=socket
+```
+
+Change where the output of Open Firmware is directed to, either to the command line (with stdio) or a Unix socket (unavailable in Windows builds). Open Firmware 1.x outputs here by default.
+
+```
+mon_id
+```
+
+Allows users to specify what monitor they are using. This affects what resolutions and color modes are available. Current valid options include, but are not limited to, `MacRGB12in`, `MacColor21in`, `Multiscan17in`, and `VGA-SVGA`.
+
+```
+pci_A1
+pci_B1
+pci_C1
+```
+
+Specified what devices are connected to a particular PCI slot. Not supported on NuBus machines such as the Power Mac 6100.
+
+```
+--adb_devices device_name
+```
+
+Set the ADB devices to attach where `device_name` is the name of the device to attach, comma-separated.
+
+### Command Line Examples
+
+```
+dingusppc -b bootrom-6100.bin --rambank1_size 64 --rambank2_size 64 --hdd_img "System_712.dsk"
+```
+
+The user has specified their own ROM file, which is for a Power Macintosh 6100 and has also set up two separate RAM banks to use 64 MB each. Note that if a second RAM bank is to be specified for the 6100, it should be the same size as the first RAM bank. With only a hard disk specified, the machine will immediately boot to the OS on the hard disk.
+
+```
+dingusppc -b "Power_Mac_G3_Beige.ROM" -r --rambank1_size 128 --fdd_img "DiskTools_8.5.img"
+```
+
+Here, the user has attached a floppy disk image. They've chosen to boot it from a G3 and the first RAM bank is set to 128 MB.
+
+```
+dingusppc -b "Power_Mac_G3_Beige.ROM" -d --rambank1_size 64 --rambank2_size 64 --cdr_img "OpenDarwin_662.cdr"
+```
+
+The debugger is enabled here, due to the presence of `-d`. The CD ROM image will be loaded in.
+
+## Keyboard Shortcuts
+
+You can use these keyboard commands while the emulator is running:
+
+* Control-G: mouse grab
+* Control-S: scale quality
+* Control-F: fullscreen
+* Control-Shift-F: fullscreen reverse
+* Control-+: bigger
+* Control--: smaller
+* Control-L: log toggle
+* Control-D: debugger
+* Control-Alt-R: toggle realtime guest timing
+
+## Accessing Open Firmware
+
+After booting from a PCI Power Mac ROM without any disk images, enter the debugger and change the NVRAM property `auto-boot?` to false. Exit out of the emulator and boot it back up to access it.
+
+## Supported machines
+
+The machines that currently work the best are the Power Mac 6100, the Power Mac 7500, and the Power Mac G3.
+
+Early implementations of the iMac G3, Power Mac G3 Blue and White, and Apple Pippin are also present.
+
+## Debugger
+
+The debugger can be used to show what code is currently executing, the contents of memory as hex or 68K assembly or PowerPC assembly, NVRAM variables, memory regions, and CPU registers. It can also be used to change memory, registers, and nvram variables. It can step through instructions one at a time or many instructions at once.
+
+## Quirks
+
+### Mouse Grabbing
+
+While the emulator display window is in focus, press Control-G to hide the host mouse cursor to control the guest mouse cursor directly. Press Control-G to show the host mouse cursor again and control the guest mouse cursor only when the host mouse cursor is within the emulator display window.
+
+Press Control-S to toggle the scaling method of the emulator display window. The methods are nearest (best used when the scale factor is an integer value) and linear (or smooth mode which is not as sharp but helps display quality when the scale factor is not an integer value).
+
+### CD ROM Images
+
+Currently, ISO images are supported. However, support is not yet implemented for multi-mode CD images.
+
+### Hard Disks
+
+Because Sheepshaver, Basilisk II, and Mini vMac operate on raw disks, it is required to a program such as BlueSCSI to make their hard disk images work in an emulator like DingusPPC. This is because the Mac OS normally requires certain values in the hard disks that these emulators don't normally insert into the images. You may also need a third-party utility to create an HFS or HFS+ disk image.
+
+### OS Support
+
+Currently, the Power Mac 6100 cannot boot any OS image containing Mac OS 9.0 or newer.
+
+### ATI Mach Support
+
+The GUI engine is currently not fully implemented. As such, UI elements might not render when trying to use this video card. To circumvent this, you may wish to move the ATI Accelerator extension to the Extensions (Disabled) folder.
+
+### Currently Unimplemented Features
+
+* JIT compiler
+* AltiVec
+* 3D acceleration support
+* Additional ADB and USB peripherals
+* Networking
