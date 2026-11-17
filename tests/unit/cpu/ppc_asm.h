@@ -98,7 +98,43 @@ constexpr u32 mtspr(u32 spr, u32 rs) { return (31u << 26) | (rs << 21) | (spr_fi
 constexpr u32 mftb(u32 rd, u32 tbr) { return (31u << 26) | (rd << 21) | (spr_field(tbr) << 11) | (371u << 1); }
 constexpr u32 mtsr(u32 sr, u32 rs) { return (31u << 26) | (rs << 21) | (sr << 16) | (210u << 1); }
 constexpr u32 mfsr(u32 rd, u32 sr) { return (31u << 26) | (rd << 21) | (sr << 16) | (595u << 1); }
+// --- floating point ----------------------------------------------------------
+constexpr u32 A(u32 op, u32 frt, u32 fra, u32 frb, u32 frc, u32 xo, u32 rc = 0)
+{
+    return (op << 26) | (frt << 21) | (fra << 16) | (frb << 11) | (frc << 6) | (xo << 1) | rc;
+}
+constexpr u32 lfs(u32 frd, u32 d, u32 ra) { return D(48, frd, ra, d); }
+constexpr u32 lfsu(u32 frd, u32 d, u32 ra) { return D(49, frd, ra, d); }
 constexpr u32 lfd(u32 frd, u32 d, u32 ra) { return D(50, frd, ra, d); }
+constexpr u32 stfs(u32 frs, u32 d, u32 ra) { return D(52, frs, ra, d); }
+constexpr u32 stfd(u32 frs, u32 d, u32 ra) { return D(54, frs, ra, d); }
+constexpr u32 stfdu(u32 frs, u32 d, u32 ra) { return D(55, frs, ra, d); }
+constexpr u32 lfdx(u32 frd, u32 ra, u32 rb) { return X(31, frd, ra, rb, 599); }
+constexpr u32 stfiwx(u32 frs, u32 ra, u32 rb) { return X(31, frs, ra, rb, 983); }
+constexpr u32 fadd(u32 d, u32 a, u32 b, u32 rc = 0) { return A(63, d, a, b, 0, 21, rc); }
+constexpr u32 fdiv(u32 d, u32 a, u32 b, u32 rc = 0) { return A(63, d, a, b, 0, 18, rc); }
+constexpr u32 fmadd(u32 d, u32 a, u32 c, u32 b) { return A(63, d, a, b, c, 29); }
+constexpr u32 fnmadd(u32 d, u32 a, u32 c, u32 b) { return A(63, d, a, b, c, 31); }
+constexpr u32 fsel(u32 d, u32 a, u32 c, u32 b) { return A(63, d, a, b, c, 23); }
+constexpr u32 fsqrt(u32 d, u32 b) { return A(63, d, 0, b, 0, 22); }
+constexpr u32 fres(u32 d, u32 b) { return A(59, d, 0, b, 0, 24); }
+constexpr u32 frsqrte(u32 d, u32 b) { return A(63, d, 0, b, 0, 26); }
+constexpr u32 fadds(u32 d, u32 a, u32 b) { return A(59, d, a, b, 0, 21); }
+constexpr u32 fcmpu(u32 crf, u32 a, u32 b) { return X(63, crf << 2, a, b, 0); }
+constexpr u32 fcmpo(u32 crf, u32 a, u32 b) { return X(63, crf << 2, a, b, 32); }
+constexpr u32 frsp(u32 d, u32 b) { return X(63, d, 0, b, 12); }
+constexpr u32 fctiw(u32 d, u32 b) { return X(63, d, 0, b, 14); }
+constexpr u32 fctiwz(u32 d, u32 b) { return X(63, d, 0, b, 15); }
+constexpr u32 fmr(u32 d, u32 b) { return X(63, d, 0, b, 72); }
+constexpr u32 fneg(u32 d, u32 b) { return X(63, d, 0, b, 40); }
+constexpr u32 fabs_(u32 d, u32 b) { return X(63, d, 0, b, 264); }
+constexpr u32 fnabs(u32 d, u32 b) { return X(63, d, 0, b, 136); }
+constexpr u32 mffs(u32 d, u32 rc = 0) { return X(63, d, 0, 0, 583, rc); }
+constexpr u32 mtfsf(u32 fm, u32 b) { return (63u << 26) | (fm << 17) | (b << 11) | (711u << 1); }
+constexpr u32 mtfsfi(u32 crf, u32 imm) { return (63u << 26) | (crf << 23) | (imm << 12) | (134u << 1); }
+constexpr u32 mtfsb0(u32 bit) { return X(63, bit, 0, 0, 70); }
+constexpr u32 mtfsb1(u32 bit) { return X(63, bit, 0, 0, 38); }
+constexpr u32 mcrfs(u32 crfd, u32 crfs) { return X(63, crfd << 2, crfs << 2, 0, 64); }
 
 } // namespace asm_ppc
 

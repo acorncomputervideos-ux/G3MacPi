@@ -175,13 +175,16 @@ void Ppc750::execute(u32 insn)
         op_lmw_stmw(insn, true);
         break;
     case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55:  // FP load/store
-    case 59: case 63:                                                          // FP arithmetic
-        // FPU: Milestone 2b. Until then the FP-unavailable check is correct
-        // and everything else is reported as illegal.
-        if (!(s_.msr & msr::FP))
-            raise_exception(Exception::FpUnavailable, s_.pc);
-        else
-            illegal(insn);
+        if (fp_available())
+            fp_load_store_d(insn, op);
+        break;
+    case 59:
+        if (fp_available())
+            execute_op59(insn);
+        break;
+    case 63:
+        if (fp_available())
+            execute_op63(insn);
         break;
     default:
         illegal(insn);
@@ -355,11 +358,8 @@ void Ppc750::execute_op31(u32 insn)
         break;
     }
     case 535: case 567: case 599: case 631: case 663: case 695: case 727: case 759: case 983:
-        // FP indexed loads/stores (Milestone 2b).
-        if (!(s_.msr & msr::FP))
-            raise_exception(Exception::FpUnavailable, s_.pc);
-        else
-            illegal(insn);
+        if (fp_available())
+            fp_load_store_x(insn, xo10);
         break;
     default:
         if (!load_store_x(insn, xo10))

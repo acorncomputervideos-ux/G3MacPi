@@ -2,12 +2,11 @@
 //
 // core/cpu/ppc750/ppc750.h — PowerPC 750 (G3) instruction interpreter.
 //
-// Milestone 2, step 1: integer, compare, logical, rotate/shift, condition
-// register, branch, load/store (integer), trap, system call, rfi, SPR/MSR/SR
-// access, and exception entry. Floating point (Milestone 2b) and address
-// translation (Milestone 3) are not implemented yet: FP instructions raise
-// FP-unavailable if MSR[FP]=0 and are treated as illegal otherwise, and
-// addresses are used as physical addresses.
+// Integer, compare, logical, rotate/shift, condition register, branch,
+// load/store, trap, system call, rfi, SPR/MSR/SR access, exceptions
+// (Milestone 2) and the floating-point unit (Milestone 2b, software IEEE
+// arithmetic in core/fpu). Address translation (Milestone 3) is not
+// implemented yet: addresses are used as physical addresses.
 //
 // Not supported yet (documented in docs/hardware/ppc750-cpu.md):
 //  * little-endian mode (MSR[LE]); eciwx/ecowx; trace exceptions;
@@ -19,6 +18,7 @@
 #include "core/common/types.h"
 #include "core/cpu/ppc750/cpu_state.h"
 #include "core/cpu/ppc750/memory_interface.h"
+#include "core/fpu/ieee754.h"
 
 namespace g3::ppc {
 
@@ -45,6 +45,11 @@ public:
     // Advances the time base and decrementer by 'ticks' time-base ticks.
     // A decrementer exception becomes pending when DEC bit 0 changes 0 -> 1.
     void advance_timebase(u32 ticks);
+
+    // How FP underflow tininess is detected (IEEE 754 allows either). The
+    // vectors in tests/vectors/dingusppc decide the default; see
+    // docs/hardware/ppc750-cpu.md.
+    void set_fp_tininess(fp::Tininess t) { fp_tininess_ = t; }
 
     CpuState& state() { return s_; }
     const CpuState& state() const { return s_; }
@@ -107,6 +112,27 @@ private:
     bool mem_write32(u32 a, u32 v);
     void machine_check();
 
+    // --- floating point (ppc750_fpu.cpp)
+    bool fp_available();                 // raises FP-unavailable if MSR[FP] = 0
+    void execute_op59(u32 insn);
+    void execute_op63(u32 insn);
+    void fp_arith(u32 insn, bool single);
+    void fp_compare(u32 insn, bool ordered);
+    void fp_round_to_single(u32 insn);
+    void fp_convert_to_int(u32 insn, bool toward_zero);
+    void fp_estimate(u32 insn, bool reciprocal_sqrt);
+    void fp_move(u32 insn, u32 xo);
+    void fp_fpscr_op(u32 insn, u32 xo);
+    // Applies an arithmetic result to frD and the FPSCR (PEM 3.3.6).
+    void fp_commit(u32 insn, u64 result, bool is_nan_result, bool vxsnan, u32 other_vx,
+                   const fp::Flags& flags, bool single, bool negate);
+    void fp_update_summary(u32 old_fpscr);   // FX, VX, FEX
+    void fp_finish(u32 insn);                // CR1 (Rc) + enabled-exception check
+    bool fp_load_store_d(u32 insn, u32 opcode);
+    bool fp_load_store_x(u32 insn, u32 xo);
+    bool mem_read64(u32 a, u64& v);
+    bool mem_write64(u32 a, u64 v);
+
     // --- system (ppc750_system.cpp)
     void op_mfspr(u32 insn);
     void op_mtspr(u32 insn);
@@ -122,6 +148,7 @@ private:
     bool external_pending_ = false;
     bool dec_pending_ = false;
     bool checkstop_ = false;
+    fp::Tininess fp_tininess_ = fp::Tininess::BeforeRounding;
     u64 instr_count_ = 0;
 };
 

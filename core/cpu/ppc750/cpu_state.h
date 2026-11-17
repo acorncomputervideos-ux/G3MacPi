@@ -48,6 +48,52 @@ constexpr u32 CA = 0x20000000u;          // bit 2: carry
 constexpr u32 kByteCountMask = 0x7Fu;    // bits 25-31: byte count (lswx/stswx)
 } // namespace xer
 
+// --- FPSCR (PEM 2.1.4, Table 2-4) ---------------------------------------------
+namespace fpscr {
+constexpr u32 FX     = 0x80000000u;  // bit 0: exception summary
+constexpr u32 FEX    = 0x40000000u;  // bit 1: enabled exception summary
+constexpr u32 VX     = 0x20000000u;  // bit 2: invalid operation summary
+constexpr u32 OX     = 0x10000000u;  // bit 3: overflow
+constexpr u32 UX     = 0x08000000u;  // bit 4: underflow
+constexpr u32 ZX     = 0x04000000u;  // bit 5: zero divide
+constexpr u32 XX     = 0x02000000u;  // bit 6: inexact
+constexpr u32 VXSNAN = 0x01000000u;  // bit 7
+constexpr u32 VXISI  = 0x00800000u;  // bit 8: inf - inf
+constexpr u32 VXIDI  = 0x00400000u;  // bit 9: inf / inf
+constexpr u32 VXZDZ  = 0x00200000u;  // bit 10: 0 / 0
+constexpr u32 VXIMZ  = 0x00100000u;  // bit 11: inf * 0
+constexpr u32 VXVC   = 0x00080000u;  // bit 12: invalid compare
+constexpr u32 FR     = 0x00040000u;  // bit 13: fraction rounded
+constexpr u32 FI     = 0x00020000u;  // bit 14: fraction inexact
+constexpr u32 FPRF   = 0x0001F000u;  // bits 15-19: result flags (C + FPCC)
+constexpr u32 FPCC   = 0x0000F000u;  // bits 16-19: FL FG FE FU
+constexpr u32 VXSOFT = 0x00000400u;  // bit 21
+constexpr u32 VXSQRT = 0x00000200u;  // bit 22
+constexpr u32 VXCVI  = 0x00000100u;  // bit 23: invalid integer convert
+constexpr u32 VE     = 0x00000080u;  // bit 24: enables ...
+constexpr u32 OE     = 0x00000040u;
+constexpr u32 UE     = 0x00000020u;
+constexpr u32 ZE     = 0x00000010u;
+constexpr u32 XE     = 0x00000008u;
+constexpr u32 NI     = 0x00000004u;  // bit 29: non-IEEE mode (not emulated)
+constexpr u32 RN     = 0x00000003u;  // bits 30-31: rounding mode
+
+constexpr u32 kAllVx = VXSNAN | VXISI | VXIDI | VXZDZ | VXIMZ | VXVC | VXSOFT | VXSQRT | VXCVI;
+// Sticky exception bits whose 0 -> 1 transition sets FX.
+constexpr u32 kExceptionBits = OX | UX | ZX | XX | kAllVx;
+
+// FPRF result classes (PEM Table 2-5), already shifted into place.
+constexpr u32 kClassQNaN    = 0x11u << 12;
+constexpr u32 kClassNegInf  = 0x09u << 12;
+constexpr u32 kClassNegNorm = 0x08u << 12;
+constexpr u32 kClassNegDen  = 0x18u << 12;
+constexpr u32 kClassNegZero = 0x12u << 12;
+constexpr u32 kClassPosZero = 0x02u << 12;
+constexpr u32 kClassPosDen  = 0x14u << 12;
+constexpr u32 kClassPosNorm = 0x04u << 12;
+constexpr u32 kClassPosInf  = 0x05u << 12;
+} // namespace fpscr
+
 // --- Condition register field bits (within a 4-bit field) --------------------
 namespace crf {
 constexpr u32 LT = 8, GT = 4, EQ = 2, SO = 1;

@@ -20,7 +20,7 @@ manuals leave undefined follow the hardware-derived vectors in
 | SPR access, privilege checks, unimplemented SPR -> illegal | **Done** | unit tests |
 | Time base, decrementer (exception on DEC bit 0: 0 -> 1) | **Done** | unit tests |
 | Exceptions: program (illegal/privileged/trap), sc, FP unavailable, alignment (lwarx/stwcx./lmw/stmw), machine check / checkstop, external, decrementer; rfi | **Done** | unit tests |
-| Floating point | **Not started** (Milestone 2b): FP instructions raise FP-unavailable when MSR[FP]=0, illegal otherwise | — |
+| Floating point (Milestone 2b): all 750 FP arithmetic, fused multiply-add family, compares, frsp, fctiw[z], moves, fsel, fres, frsqrte, FPSCR instructions, FP loads/stores, FP-unavailable and FP-enabled exceptions | **Done** | all 2054 FP vectors pass; 18 unit tests; IEEE core checked against host FPU |
 | MMU (BAT, segments, hashed page table), DSI/ISI | **Not started** (Milestone 3): addresses are physical | — |
 | Disassembler | Not started (452 vectors available) | — |
 
@@ -46,6 +46,31 @@ manuals leave undefined follow the hardware-derived vectors in
   ones; their result is architecturally undefined.
 - Not implemented: eciwx/ecowx, tlbia (not on 750: illegal), trace (SE/BE),
   performance monitor events, IABR/DABR breakpoints, thermal/SMI exceptions.
+
+## Floating point (2026-11-17)
+
+Design: `core/fpu/ieee754.*` is a software IEEE 754 implementation (exact
+or sticky-jammed intermediate, one rounding in `round_pack`). It is checked
+against the host CPU's FPU on ~2.2 million random operand sets (all four
+rounding modes, double and single precision, add/sub/mul/div/fma/sqrt,
+conversions) including all status flags. `ppc750_fpu.cpp` applies the
+PowerPC rules (NaN precedence frA > frB > frC, VX causes, FR/FI, FPRF,
+FX/FEX/VX summaries, CR1, enabled-exception result suppression, FE0/FE1).
+
+Decisions — evidence and confidence:
+
+| Behaviour | Implemented as | Evidence |
+|---|---|---|
+| FR on overflow | set iff rounding the significand to target precision (unbounded exponent) increments it | vectors (fadd/fadds/fsubs overflow cases) — **confirmed by data** |
+| Single-precision ops using frC (fmuls, fmadds, ...) | frC significand first rounded to 25 bits (24 fraction bits), half-up, independent of RN | one vector requires frC shortening; exact rule taken from documented Gekko (750-derivative) behaviour — **INFERRED, verify on a real 750** |
+| Underflow tininess | before rounding (configurable: `set_fp_tininess`) | vectors pass either way — **UNDETERMINED** |
+| NaN result of a single-precision op | quieted, fraction truncated to single (low 29 bits cleared) | PEM; covered by vectors with NaN inputs |
+| fres / frsqrte | correctly rounded values (better than the hardware estimates: fres 1/4096, frsqrte 1/32) | low-order bits will differ from a real 750 — **known deviation** |
+| fctiw[z] high word, mffs high word | 0 | architecturally undefined — **verify on hardware** |
+| FPSCR[NI] (non-IEEE mode) | ignored (IEEE behaviour) | not emulated |
+| Trap-enabled overflow/underflow (OE/UE) | exponent adjusted by 1536/192 (PEM) | not covered by vectors — unit-tested only indirectly |
+| Imprecise FP exception modes | treated as precise | Mac OS 9 runs with FE0 = FE1 = 0 |
+| fsqrt / fsqrts | illegal (the 750 does not implement them) | 750 UM |
 
 ## Interfaces
 - `MemoryInterface`: physical, big-endian guest values; returns false on

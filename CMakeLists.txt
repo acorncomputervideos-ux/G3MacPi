@@ -48,6 +48,9 @@ add_executable(g3_unit_tests
 find_package(Threads REQUIRED)
 target_link_libraries(g3_unit_tests PRIVATE g3core g3platform_common Threads::Threads)
 target_compile_definitions(g3_unit_tests PRIVATE G3_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# The FPU oracle test changes the host rounding mode at run time.
+set_source_files_properties(tests/unit/fpu/test_ieee754_oracle.cpp PROPERTIES
+  COMPILE_OPTIONS "-frounding-math")
 target_compile_options(g3_unit_tests PRIVATE ${G3_COMMON_FLAGS})
 
 if(G3_SANITIZE)
