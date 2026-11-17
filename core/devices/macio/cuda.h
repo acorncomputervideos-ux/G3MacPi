@@ -18,13 +18,19 @@
 // Packets: type 0 ADB, 1 Cuda command, 2 error. Command replies are
 //   CUDA_PACKET, 0, command, data... ; errors ERROR_PACKET, code, CUDA_PACKET,
 //   command (code 2 unknown command, 5 bad parameters).
-// ADB devices are not attached yet: every ADB command gets a "no response"
-// reply (flag bit 0x02, as the Linux driver interprets it).
+// ADB: commands go to the attached AdbBus. Replies: ADB_PACKET, flag, cmd,
+//   data; flag 0x02 = no device answered (as the Linux driver interprets
+//   it). Autopoll (when enabled) polls devices every 'rate' ms and sends
+//   their data unsolicited as ADB_PACKET, 0x40, cmd, data.
+// Collision: if the host starts sending (TIP with SR_OUT) while the Cuda has
+//   data waiting, the host backs off (Linux checks TREQ); the Cuda ignores
+//   that aborted transfer and raises its attention again afterwards.
 
 #ifndef G3_CORE_DEVICES_MACIO_CUDA_H
 #define G3_CORE_DEVICES_MACIO_CUDA_H
 
 #include "core/common/types.h"
+#include "core/devices/adb/adb.h"
 #include "core/devices/macio/via6522.h"
 #include "core/sched/scheduler.h"
 
@@ -60,6 +66,7 @@ public:
     u32 rtc() const;
     u8* pram() { return pram_; }
     void set_power_callbacks(EventCallback power_down, EventCallback reset, void* context);
+    void attach_adb(AdbBus* bus) { adb_ = bus; }
     bool autopoll_enabled() const { return autopoll_; }
 
     // ViaPeripheral
@@ -68,7 +75,7 @@ public:
     void via_sr_read() override {}
 
 private:
-    enum class State { Idle, Receiving, Sending };
+    enum class State { Idle, Receiving, Sending, Collision };
 
     void signal_byte();             // schedule the SR interrupt
     static void sr_event(void* ctx, u64 now);
@@ -78,6 +85,8 @@ private:
     void reply_error(u8 code, u8 command);
     void queue_reply(const u8* bytes, u32 len);
     void load_next_out_byte();
+    void schedule_autopoll();
+    static void autopoll_event(void* ctx, u64 now);
 
     Via6522& via_;
     Scheduler& sched_;
@@ -98,6 +107,8 @@ private:
     bool autopoll_ = false;
     u8 autopoll_rate_ms_ = 11;  // reset value: to verify
     u16 device_list_ = 0;
+    AdbBus* adb_ = nullptr;
+    Scheduler::Handle autopoll_event_ = Scheduler::kInvalidHandle;
     EventCallback power_down_ = nullptr, reset_ = nullptr;
     void* power_ctx_ = nullptr;
 };

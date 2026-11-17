@@ -83,7 +83,10 @@ void Cuda::via_port_b_changed(u8 value, u8 driven)
 
     if (tip_changed && tip_) {
         // Start of a transfer.
-        if (host_sending) {
+        if (host_sending && out_pending_) {
+            // Collision: the host will see TREQ asserted and abort.
+            state_ = State::Collision;
+        } else if (host_sending) {
             in_len_ = 0;
             in_[in_len_++] = via_.shift_register();
             state_ = State::Receiving;
@@ -111,6 +114,11 @@ void Cuda::via_port_b_changed(u8 value, u8 driven)
             signal_byte();  // the host reads SR once more (read_done)
             return;
         }
+        if (state_ == State::Collision) {
+            state_ = State::Idle;
+            signal_byte();  // attention again: our data is still waiting
+            return;
+        }
         state_ = State::Idle;
         return;
     }
@@ -130,6 +138,35 @@ void Cuda::via_port_b_changed(u8 value, u8 driven)
         set_treq(tack_);
         signal_byte();
     }
+}
+
+// --- autopoll ---------------------------------------------------------------------
+
+void Cuda::schedule_autopoll()
+{
+    if (autopoll_event_ != Scheduler::kInvalidHandle) {
+        sched_.cancel(autopoll_event_);
+        autopoll_event_ = Scheduler::kInvalidHandle;
+    }
+    if (autopoll_)
+        autopoll_event_ = sched_.schedule_in(static_cast<u64>(autopoll_rate_ms_) * 1000000000ull,
+                                             autopoll_event, this);
+}
+
+void Cuda::autopoll_event(void* ctx, u64)
+{
+    auto* c = static_cast<Cuda*>(ctx);
+    c->autopoll_event_ = Scheduler::kInvalidHandle;
+    // Only start an unsolicited packet when the link is completely idle.
+    if (c->adb_ && c->state_ == State::Idle && !c->out_pending_ && !c->tip_) {
+        if (AdbDevice* d = c->adb_->device_with_data(c->device_list_)) {
+            u8 buf[kMaxPacket] = {kAdbPacket, 0x40, static_cast<u8>((d->address() << 4) | 0x0C)};
+            const u32 n = d->talk(0, buf + 3);
+            if (n > 0)
+                c->queue_reply(buf, 3 + n);
+        }
+    }
+    c->schedule_autopoll();
 }
 
 // --- commands ----------------------------------------------------------------------
@@ -169,9 +206,15 @@ void Cuda::process_packet()
         return;
     const u8 type = in_[0];
     if (type == kAdbPacket) {
-        // No ADB devices yet: "no response" (flag bit 0x02).
-        const u8 buf[3] = {kAdbPacket, 0x02, in_len_ > 1 ? in_[1] : static_cast<u8>(0)};
-        queue_reply(buf, 3);
+        const u8 cmd = in_len_ > 1 ? in_[1] : static_cast<u8>(0);
+        u8 buf[kMaxPacket] = {kAdbPacket, 0x00, cmd};
+        u32 n = 0;
+        const bool is_talk = (cmd & 0x0C) == 0x0C;
+        if (adb_)
+            n = adb_->command(cmd, in_ + 2, in_len_ > 2 ? in_len_ - 2 : 0, buf + 3);
+        if (!adb_ || (is_talk && n == 0))
+            buf[1] = 0x02;  // no device answered
+        queue_reply(buf, 3 + n);
         return;
     }
     if (type != kCudaPacket || in_len_ < 2) {
@@ -186,6 +229,7 @@ void Cuda::process_packet()
     case kAutopoll:
         if (nargs < 1) { reply_error(5, cmd); return; }
         autopoll_ = args[0] != 0;
+        schedule_autopoll();
         reply_cuda(cmd, nullptr, 0);
         return;
     case kGetTime: {

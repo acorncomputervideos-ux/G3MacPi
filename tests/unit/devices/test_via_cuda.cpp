@@ -124,6 +124,7 @@ struct LinuxCudaHost {
     std::vector<u8> req, reply, unsolicited;
     size_t data_index = 0;
     bool reply_expected = false, done = false, reading_reply = false;
+    bool req_pending = false;  // Linux: current_req queued but not yet sent
 
     bool treq_asserted() { return !(r.in(B) & TREQ); }
     void assert_tip() { r.out(B, r.in(B) & ~TIP); }
@@ -174,6 +175,7 @@ struct LinuxCudaHost {
     // cuda_start()
     void start()
     {
+        req_pending = false;
         r.out(ACR, r.in(ACR) | SR_OUT);
         r.out(SR, req[0]);
         assert_tip();
@@ -193,10 +195,11 @@ struct LinuxCudaHost {
             state = St::reading;
             break;
         case St::sent_first_byte:
-            if (treq_asserted()) {  // collision
+            if (treq_asserted()) {  // collision: request stays queued
                 r.out(ACR, r.in(ACR) & ~SR_OUT);
                 r.in(SR);
                 negate_tip_and_tack();
+                req_pending = true;
                 state = St::idle;
             } else {
                 r.out(SR, req[data_index++]);
@@ -240,6 +243,9 @@ struct LinuxCudaHost {
             if (reading_reply)
                 done = true;
             state = St::idle;
+            // Linux: cuda_start() for a queued request (retry after collision).
+            if (req_pending && !treq_asserted())
+                start();
             break;
         }
     }
@@ -265,6 +271,28 @@ struct CudaRig {
     Rig rig;
     Cuda cuda{rig.via, rig.sched};
     LinuxCudaHost host{rig};
+    AdbBus adb;
+    AdbKeyboard kbd;
+    AdbMouse mouse;
+    CudaRig()
+    {
+        adb.attach(&kbd);
+        adb.attach(&mouse);
+        cuda.attach_adb(&adb);
+    }
+    // Lets guest time pass, servicing interrupts like the Linux driver.
+    void service_until(u64 t)
+    {
+        for (;;) {
+            while (rig.in(IFR) & SR_INT)
+                host.interrupt();
+            const u64 next = rig.sched.next_event_time();
+            if (next == Scheduler::kNever || next > t)
+                break;
+            rig.sched.advance_to(next);
+        }
+        rig.sched.advance_to(t);
+    }
 };
 
 } // namespace
@@ -320,7 +348,8 @@ TEST_CASE("devices/cuda/pram_autopoll_errors_adb")
     CHECK_EQ(c.host.reply[1], 2u);
     CHECK_EQ(c.host.reply[3], 0x77u);
 
-    // ADB talk to device 3 register 0 with nothing attached: flag 0x02.
+    // ADB talk to the mouse (address 3, register 0) with no motion: the
+    // device does not answer -> flag 0x02.
     REQUIRE(c.host.request({Cuda::kAdbPacket, 0x3C}));
     REQUIRE(c.host.reply.size() == 3);
     CHECK_EQ(c.host.reply[0], Cuda::kAdbPacket);
@@ -344,4 +373,59 @@ TEST_CASE("devices/cuda/power_commands_and_many_requests")
         REQUIRE(c.host.reply.size() == 4);
     }
     CHECK(c.host.unsolicited.empty());
+}
+
+TEST_CASE("devices/cuda/adb_talk_through_cuda")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    // Talk register 3 of the keyboard: address 2, handler 1.
+    REQUIRE(c.host.request({Cuda::kAdbPacket, 0x2F}));
+    REQUIRE(c.host.reply.size() == 5);
+    CHECK_EQ(c.host.reply[1], 0u);
+    CHECK_EQ(c.host.reply[3] & 0x0F, 2u);
+    CHECK_EQ(c.host.reply[4], 1u);
+    // A key press, read with Talk R0.
+    c.kbd.key_event(0x24, true);  // Return
+    REQUIRE(c.host.request({Cuda::kAdbPacket, 0x2C}));
+    REQUIRE(c.host.reply.size() == 5);
+    CHECK_EQ(c.host.reply[3], 0x24u);
+    CHECK_EQ(c.host.reply[4], 0xFFu);
+}
+
+TEST_CASE("devices/cuda/autopoll_delivers_unsolicited_packets")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kAutopoll, 1}));
+    c.kbd.key_event(0x00, true);   // 'A' pressed
+    c.mouse.motion(4, 2);
+    c.service_until(c.rig.sched.now() + 50 * 1000000000ull);  // 50 ms
+    // Two unsolicited ADB packets: 0x40 = autopoll flag, then cmd and data.
+    REQUIRE(c.host.unsolicited.size() == 10);
+    CHECK_EQ(c.host.unsolicited[0], Cuda::kAdbPacket);
+    CHECK_EQ(c.host.unsolicited[1], 0x40u);
+    CHECK_EQ(c.host.unsolicited[2], 0x2Cu);            // keyboard Talk R0
+    CHECK_EQ(c.host.unsolicited[3], 0x00u);            // 'A' down
+    CHECK_EQ(c.host.unsolicited[7], 0x3Cu);            // mouse Talk R0
+    CHECK_EQ(c.host.unsolicited[8], 0x82u);            // button up, dy = 2
+    CHECK_EQ(c.host.unsolicited[9], 0x84u);            // button up, dx = 4
+}
+
+TEST_CASE("devices/cuda/collision_host_request_vs_autopoll")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kAutopoll, 1}));
+    c.kbd.key_event(0x31, true);
+    // Run until the autopoll attention is raised (TREQ asserted), but do
+    // not service it yet: the host starts a request right now.
+    for (int i = 0; i < 100 && !c.host.treq_asserted(); ++i)
+        c.rig.sched.advance_to(c.rig.sched.next_event_time());
+    REQUIRE(c.host.treq_asserted());
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGetAutoRate}));  // must still succeed
+    CHECK_EQ(c.host.reply.size(), 4u);
+    c.service_until(c.rig.sched.now() + 20 * 1000000000ull);
+    REQUIRE(c.host.unsolicited.size() >= 5);
+    CHECK_EQ(c.host.unsolicited[3], 0x31u);  // the key press was not lost
 }

@@ -10,6 +10,7 @@
 //              00:0D.0 DEC 21154 PCI-to-PCI bridge *
 //   behind the bridge: device 5 Paddington mac-io *
 //   VIA (Cuda) -> interrupt controller input 18 * -> CPU external interrupt
+//   ADB (via Cuda): keyboard at address 2, mouse at address 3
 //   CPU 350 MHz, bus 100 MHz, time base = bus / 4 (25 MHz)
 //
 // RAM and ROM buffers are supplied by the caller (the core does not
@@ -19,6 +20,7 @@
 #define G3_CORE_MACHINE_YOSEMITE_H
 
 #include "core/cpu/ppc750/ppc750.h"
+#include "core/devices/adb/adb.h"
 #include "core/devices/macio/paddington.h"
 #include "core/devices/pci/grackle.h"
 #include "core/devices/pci/pci_bridge.h"
@@ -57,6 +59,8 @@ public:
     Grackle& grackle() { return grackle_; }
     PciToPciBridge& bridge() { return bridge_; }
     Paddington& macio() { return macio_; }
+    AdbKeyboard& keyboard() { return keyboard_; }
+    AdbMouse& mouse() { return mouse_; }
 
 private:
     // Construction order matters: the bus and scheduler come first.
@@ -67,6 +71,9 @@ private:
     Grackle grackle_;
     PciToPciBridge bridge_;
     Paddington macio_;
+    AdbBus adb_;
+    AdbKeyboard keyboard_;
+    AdbMouse mouse_;
     bool ok_ = false;
 };
 

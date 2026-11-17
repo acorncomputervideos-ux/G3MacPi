@@ -21,6 +21,8 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
         static_cast<ppc::Ppc750*>(cpu)->set_external_interrupt(a);
     }, &cpu_);
     macio_.cuda().set_rtc(c.rtc_seconds_since_1904);
+    ok = ok && adb_.attach(&keyboard_) && adb_.attach(&mouse_);
+    macio_.cuda().attach_adb(&adb_);
     ok_ = ok;
 }
 
