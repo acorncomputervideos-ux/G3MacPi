@@ -1,5 +1,9 @@
 # 05 — Option B: porting DingusPPC to bare-metal Raspberry Pi 400
 
+> **ABANDONED 2026-11-17 (ADR-0011).** The owner chose to return to the
+> original, independently developed design. Kept as a record; the port
+> work is recoverable from commits e8e44bf, c4816fe, 76edf95 and 24eb494.
+
 Status (2026-11-16): **P1 done; P2 built, waiting for the Pi 400 run.**
 DingusPPC is vendored in `third_party/dingusppc`, the Pi build uses
 circle-stdlib, and the Pi kernel contains DingusPPC's CPU core and test suite.
