@@ -116,6 +116,9 @@ void Ppc750::op_mtspr(u32 insn)
         // DEC writes do not raise a decrementer exception here even if bit 0
         // becomes 1 (implementation-specific on real CPUs; to be verified).
         s_.spr[n] = v;
+        // Translation context changed: drop cached translations.
+        if (n == spr::SDR1 || (n >= spr::IBAT0U && n <= spr::DBAT0U + 7))
+            flush_tlb();
         break;
     }
 }

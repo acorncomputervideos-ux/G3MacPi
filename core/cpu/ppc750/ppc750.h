@@ -53,6 +53,15 @@ public:
     // docs/hardware/ppc750-cpu.md.
     void set_fp_tininess(fp::Tininess t) { fp_tininess_ = t; }
 
+    // Soft TLB control (on by default). Disabling it gives the reference
+    // (uncached) translation path used by the differential tests.
+    void set_tlb_enabled(bool enabled)
+    {
+        tlb_enabled_ = enabled;
+        flush_tlb();
+    }
+    void flush_tlb();
+
     CpuState& state() { return s_; }
     const CpuState& state() const { return s_; }
 
@@ -152,9 +161,28 @@ private:
         return translate_enabled(ea, access, pa);
     }
     bool translate_enabled(u32 ea, Access access, u32& pa);
-    bool bat_translate(u32 ea, Access access, u32& pa, bool& protection_fault);
-    bool page_translate(u32 ea, Access access, u32& pa, u32& fault);
+    // Uncached translation. On success also reports whether the page/block
+    // may be written and whether its C bit is already set (BATs: always).
+    bool translate_slow(u32 ea, Access access, u32& pa, bool& writable, bool& changed);
+    bool bat_translate(u32 ea, Access access, u32& pa, bool& protection_fault, bool& writable);
+    bool page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& writable,
+                        bool& changed);
     void raise_translation_fault(u32 ea, Access access, u32 cause);
+
+    // Soft TLB: direct-mapped caches of successful translations, one for
+    // instruction fetches and one for data. Same invalidation rules as the
+    // hardware TLB (tlbie) plus flushes on SR/SDR1/BAT writes.
+    struct TlbEntry {
+        u32 tag = 0;        // kTlbValid | page << 1 | MSR[PR]
+        u32 pa_page = 0;
+        bool writable = false;
+        bool changed = false;
+    };
+    static constexpr u32 kTlbSize = 256;
+    static constexpr u32 kTlbValid = 0x80000000u;
+    TlbEntry itlb_[kTlbSize];
+    TlbEntry dtlb_[kTlbSize];
+    bool tlb_enabled_ = true;
 
     // --- system (ppc750_system.cpp)
     void op_mfspr(u32 insn);

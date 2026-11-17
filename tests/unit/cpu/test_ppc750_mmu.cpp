@@ -91,7 +91,9 @@ TEST_CASE("cpu/mmu/dbat_translation_and_protection")
     CHECK_EQ(m.r32(0x00020014), 0xCAFEBABEu);
 
     // PP=01: read-only -> store gives DSI with PROTECTION | STORE.
+    // (Direct state poke: flush the TLB as the mtspr would.)
     m.s().spr[spr::DBAT0U + 1] = 0x00020000u | 1;
+    m.cpu.flush_tlb();
     m.run_at(0x1008, 0x1008, stw(5, 8, 3));
     CHECK_EQ(m.s().pc, 0x300u);
     CHECK_EQ(m.s().spr[spr::DSISR], dsisr::PROTECTION | dsisr::STORE);
@@ -276,7 +278,9 @@ TEST_CASE("cpu/mmu/page_crossing_access")
     CHECK_EQ(m.s().gpr[6], 0xA1B2C3D4u);
 
     // If the second page is unmapped, nothing is written to the first.
+    // (PTE removed directly in memory: flush as the OS's tlbie would.)
     m.w32(0x000149C0u, 0);
+    m.cpu.flush_tlb();
     m.ram[0x5FFE] = 0;
     m.run_at(0x1008, 0x1008, stw(5, 0, 3));
     CHECK_EQ(m.s().pc, 0x300u);
@@ -316,4 +320,93 @@ TEST_CASE("cpu/mmu/lwarx_stwcx_use_physical_reservation")
     m.run_at(0x1004, 0x1004, stwcx(5, 3, 4));
     CHECK_EQ(m.r32(0x5000), 77u);
     CHECK_EQ(m.s().cr >> 28, crf::EQ);
+}
+
+// --- soft TLB ---------------------------------------------------------------------
+
+TEST_CASE("cpu/mmu/tlb_keeps_stale_entry_until_tlbie")
+{
+    // Hardware semantics: after changing a PTE in memory, software must
+    // execute tlbie; until then the old translation may still be used.
+    MmuMachine m;
+    setup_paged(m);
+    m.w32(kPteg1, kPte0Primary);
+    m.w32(kPteg1 + 4, 0x00005000u | 2);
+    m.w32(0x5000, 0x55555555u);
+    m.w32(0x6000, 0x66666666u);
+    m.s().msr = msr::DR;
+    m.s().gpr[3] = 0x3000;
+    m.run_at(0x1000, 0x1000, lwz(4, 0, 3));
+    CHECK_EQ(m.s().gpr[4], 0x55555555u);
+    m.w32(kPteg1 + 4, 0x00006000u | 2);  // remap to 0x6000 without tlbie
+    m.run_at(0x1004, 0x1004, lwz(4, 0, 3));
+    CHECK_EQ(m.s().gpr[4], 0x55555555u);  // stale, as on hardware
+    m.run_at(0x1008, 0x1008, X(31, 0, 0, 3, 306));  // tlbie r3
+    m.run_at(0x100C, 0x100C, lwz(4, 0, 3));
+    CHECK_EQ(m.s().gpr[4], 0x66666666u);
+}
+
+TEST_CASE("cpu/mmu/tlb_flushed_by_mtsr_mtspr")
+{
+    MmuMachine m;
+    setup_paged(m);
+    m.w32(kPteg1, kPte0Primary);
+    m.w32(kPteg1 + 4, 0x00005000u | 2);
+    m.w32(0x5000, 0x12121212u);
+    m.s().msr = msr::DR;
+    m.s().gpr[3] = 0x3000;
+    m.run_at(0x1000, 0x1000, lwz(4, 0, 3));
+    CHECK_EQ(m.s().gpr[4], 0x12121212u);
+    // mtsr SR0 <- VSID 0x777 (no PTE for it): the cached translation must go.
+    m.s().gpr[6] = 0x777;
+    m.run_at(0x1004, 0x1004, mtsr(0, 6));
+    m.run_at(0x1008, 0x1008, lwz(4, 0, 3));
+    CHECK_EQ(m.s().pc, 0x300u);
+    CHECK_EQ(m.s().spr[spr::DSISR], dsisr::NOT_FOUND);
+
+    // mtspr DBAT0L: changing a BAT through the instruction flushes too.
+    MmuMachine n;
+    n.s().spr[spr::DBAT0U] = 0x80000000u | mmu::BATU_VS;
+    n.s().spr[spr::DBAT0U + 1] = 0x00020000u | 2;
+    n.s().msr = msr::DR;
+    n.s().gpr[3] = 0x80000000u;
+    n.s().gpr[5] = 0x00020001u;  // PP = 01: read-only
+    n.run_at(0x1000, 0x1000, lwz(4, 0, 3));
+    n.run_at(0x1004, 0x1004, mtspr(spr::DBAT0U + 1, 5));
+    n.run_at(0x1008, 0x1008, stw(4, 0, 3));
+    CHECK_EQ(n.s().pc, 0x300u);
+    CHECK_EQ(n.s().spr[spr::DSISR], dsisr::PROTECTION | dsisr::STORE);
+}
+
+TEST_CASE("cpu/mmu/tlb_store_sets_c_bit_after_cached_read")
+{
+    // A read caches the page with C clear; a later store must still set C.
+    MmuMachine m;
+    setup_paged(m);
+    m.w32(kPteg1, kPte0Primary);
+    m.w32(kPteg1 + 4, 0x00005000u | 2);
+    m.s().msr = msr::DR;
+    m.s().gpr[3] = 0x3000;
+    m.s().gpr[5] = 9;
+    m.run_at(0x1000, 0x1000, lwz(4, 0, 3));
+    CHECK_EQ(m.r32(kPteg1 + 4) & mmu::PTE1_C, 0u);
+    m.run_at(0x1004, 0x1004, stw(5, 0, 3));
+    CHECK_EQ(m.r32(kPteg1 + 4) & mmu::PTE1_C, mmu::PTE1_C);
+}
+
+TEST_CASE("cpu/mmu/tlb_user_supervisor_contexts_are_separate")
+{
+    // PP=00 with Ks=0 (supervisor: R/W) and Kp=1 (user: no access).
+    MmuMachine m;
+    setup_paged(m, mmu::SR_KP);
+    m.w32(kPteg1, kPte0Primary);
+    m.w32(kPteg1 + 4, 0x00005000u | 0);
+    m.s().gpr[3] = 0x3000;
+    m.s().msr = msr::DR;
+    m.run_at(0x1000, 0x1000, lwz(4, 0, 3));  // supervisor: cached OK
+    CHECK_EQ(m.s().pc, 0x1004u);
+    m.s().msr = msr::DR | msr::PR;
+    m.run_at(0x1004, 0x1004, lwz(4, 0, 3));  // user: must not hit that entry
+    CHECK_EQ(m.s().pc, 0x300u);
+    CHECK_EQ(m.s().spr[spr::DSISR], dsisr::PROTECTION);
 }

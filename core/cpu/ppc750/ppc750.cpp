@@ -25,6 +25,7 @@ void Ppc750::reset()
     dec_pending_ = false;
     checkstop_ = false;
     instr_count_ = 0;
+    flush_tlb();
 }
 
 void Ppc750::raise_exception(Exception type, u32 srr0, u32 srr1_cause)
@@ -314,13 +315,21 @@ void Ppc750::execute_op31(u32 insn)
         } else {
             const u32 sr = (xo10 == 595 || xo10 == 210) ? ((insn >> 16) & 0xF)
                                                          : (s_.gpr[field::rb(insn)] >> 28);
-            if (xo10 == 595 || xo10 == 659)
+            if (xo10 == 595 || xo10 == 659) {
                 s_.gpr[field::rd(insn)] = s_.sr[sr];
-            else
+            } else {
                 s_.sr[sr] = s_.gpr[field::rd(insn)];
+                flush_tlb();  // cached translations used the old VSID/keys
+            }
         }
         break;
-    case 306:  // tlbie (MMU: Milestone 3)
+    case 306:  // tlbie: invalidate the TLB entries for the page (we flush
+               // everything, a superset of what the 750 invalidates)
+        if (in_user_mode())
+            privileged();
+        else
+            flush_tlb();
+        break;
     case 566:  // tlbsync
     case 470:  // dcbi
         if (in_user_mode())

@@ -21,7 +21,8 @@ manuals leave undefined follow the hardware-derived vectors in
 | Time base, decrementer (exception on DEC bit 0: 0 -> 1) | **Done** | unit tests |
 | Exceptions: program (illegal/privileged/trap), sc, FP unavailable, alignment (lwarx/stwcx./lmw/stmw), machine check / checkstop, external, decrementer; rfi | **Done** | unit tests |
 | Floating point (Milestone 2b): all 750 FP arithmetic, fused multiply-add family, compares, frsp, fctiw[z], moves, fsel, fres, frsqrte, FPSCR instructions, FP loads/stores, FP-unavailable and FP-enabled exceptions | **Done** | all 2054 FP vectors pass; 18 unit tests; IEEE core checked against host FPU |
-| MMU: IBAT/DBAT (Vs/Vp, BL, PP), segment registers (Ks/Kp/N/T), hashed page table (primary/secondary hash, HTABMASK), R/C updates, page-crossing accesses, DSI (DAR/DSISR) and ISI (SRR1 causes) | **Done** (no TLB cache yet) | 14 unit tests with hand-computed page tables |
+| MMU: IBAT/DBAT (Vs/Vp, BL, PP), segment registers (Ks/Kp/N/T), hashed page table (primary/secondary hash, HTABMASK), R/C updates, page-crossing accesses, DSI (DAR/DSISR) and ISI (SRR1 causes) | **Done** | 18 unit tests with hand-computed page tables |
+| Soft TLB (256-entry direct-mapped I and D caches) | **Done** | differential test vs uncached path: 200,000 random steps, 0 mismatches |
 | Disassembler (`disasm.h`): simplified mnemonics, freestanding | **Done** | all 397 reference vectors (52 POWER/601/603-only encodings correctly shown as `dc.l`); 1 M random words cross-checked against the interpreter |
 
 ## Decisions and known deviations (to verify or complete)
@@ -75,9 +76,15 @@ Decisions — evidence and confidence:
 ## MMU (2026-11-17)
 
 Implemented from PEM chapter 7. Decisions and gaps:
-- Every access translates (BATs first, then segment/page table); no TLB
-  cache yet, so `tlbie`/`tlbsync` need no action. **Next step: a soft TLB,
-  verified against this uncached path.**
+- Translation order: BATs first, then segment/page table.
+- **Soft TLB** (2026-11-17): direct-mapped, 256 entries each for fetches and
+  data, tagged with the EA page and MSR[PR]; only successful translations
+  are cached. A store uses a cached entry only if the page is writable and
+  its C bit is known to be set, otherwise the slow path checks protection
+  and sets C. Flushed by `tlbie` (whole TLB — a superset of the 750),
+  `mtsr`/`mtsrin`, `mtspr` SDR1/BATs, and reset. Like the hardware TLB, it
+  can hold a stale translation if software changes a PTE without `tlbie`
+  (tested). `set_tlb_enabled(false)` gives the uncached reference path.
 - R is set on every successful access and also on a protection fault; C on
   stores. Updates are written straight to the page table in memory.
 - Accesses crossing a 4 KB boundary translate both pages before touching
@@ -93,7 +100,7 @@ Implemented from PEM chapter 7. Decisions and gaps:
 
 Throughput (`g3_cpu_bench`, 2.1 GHz Xeon container, 2026-11-17):
 real mode 105-168 M instr/s (noisy host), BAT-mapped ~90 M,
-page-table-mapped ~43 M. Adding the MMU cost ~20 % in real mode
+page-table-mapped ~43 M without the soft TLB, 73-93 M with it. Adding the MMU cost ~20 % in real mode
 (callgrind: 221 M -> 268 M host instructions per 2 M guest instructions;
 forcing `execute` inline made it worse and was reverted).
 

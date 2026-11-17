@@ -46,7 +46,8 @@ bool bat_access_allowed(u32 pp, bool write)
 
 } // namespace
 
-bool Ppc750::bat_translate(u32 ea, Access access, u32& pa, bool& protection_fault)
+bool Ppc750::bat_translate(u32 ea, Access access, u32& pa, bool& protection_fault,
+                           bool& writable)
 {
     const u32 base = access == Access::Fetch ? spr::IBAT0U : spr::DBAT0U;
     const bool user = in_user_mode();
@@ -68,6 +69,7 @@ bool Ppc750::bat_translate(u32 ea, Access access, u32& pa, bool& protection_faul
             protection_fault = true;
             return false;
         }
+        writable = bat_access_allowed(batl & 3, true);
         const u32 brpn = batl >> 17;
         // PA = BRPN[0-3] || (BRPN[4-14] | (EA[4-14] & BL)) || EA[15-31] (PEM 7.4.3).
         pa = ((brpn | (ea_hi & bl)) << 17) | (ea & 0x1FFFF);
@@ -76,7 +78,8 @@ bool Ppc750::bat_translate(u32 ea, Access access, u32& pa, bool& protection_faul
     return false;
 }
 
-bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault)
+bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& writable,
+                            bool& changed)
 {
     const u32 sr = s_.sr[ea >> 28];
     const bool fetch = access == Access::Fetch;
@@ -144,6 +147,8 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault)
                 nw1 |= mmu::PTE1_C;
             if (nw1 != w1)
                 mem_.write32(pte_addr + 4, nw1);
+            writable = page_access_allowed(w1 & 3, key, true);
+            changed = (nw1 & mmu::PTE1_C) != 0;
             pa = (w1 & 0xFFFFF000u) | (ea & 0xFFF);
             return true;
         }
@@ -177,21 +182,59 @@ void Ppc750::raise_translation_fault(u32 ea, Access access, u32 cause)
     raise_exception(Exception::Dsi, s_.pc);
 }
 
-bool Ppc750::translate_enabled(u32 ea, Access access, u32& pa)
+bool Ppc750::translate_slow(u32 ea, Access access, u32& pa, bool& writable, bool& changed)
 {
     bool bat_protection = false;
-    if (bat_translate(ea, access, pa, bat_protection))
+    if (bat_translate(ea, access, pa, bat_protection, writable)) {
+        changed = true;  // BATs have no R/C bits
         return true;
+    }
     if (bat_protection) {
         raise_translation_fault(ea, access, kFaultProtection);
         return false;
     }
     u32 fault = kFaultNone;
-    if (page_translate(ea, access, pa, fault))
+    if (page_translate(ea, access, pa, fault, writable, changed))
         return true;
     if (fault != kFaultNone)  // kFaultNone: a machine check was already raised
         raise_translation_fault(ea, access, fault);
     return false;
+}
+
+void Ppc750::flush_tlb()
+{
+    for (u32 i = 0; i < kTlbSize; ++i) {
+        itlb_[i].tag = 0;
+        dtlb_[i].tag = 0;
+    }
+}
+
+bool Ppc750::translate_enabled(u32 ea, Access access, u32& pa)
+{
+    const u32 page = ea >> 12;
+    const u32 tag = kTlbValid | (page << 1) | ((s_.msr & msr::PR) ? 1u : 0u);
+    TlbEntry& e = (access == Access::Fetch ? itlb_ : dtlb_)[page & (kTlbSize - 1)];
+
+    if (tlb_enabled_ && e.tag == tag) {
+        // A store may use the cached entry only if the page is writable and
+        // its C bit is already set; otherwise the slow path checks the
+        // protection and sets C in the page table (as the 750 does).
+        if (access != Access::Write || (e.writable && e.changed)) {
+            pa = e.pa_page | (ea & 0xFFF);
+            return true;
+        }
+    }
+
+    bool writable = false, changed = false;
+    if (!translate_slow(ea, access, pa, writable, changed))
+        return false;
+    if (tlb_enabled_) {
+        e.tag = tag;
+        e.pa_page = pa & ~0xFFFu;
+        e.writable = writable;
+        e.changed = changed;
+    }
+    return true;
 }
 
 } // namespace g3::ppc
