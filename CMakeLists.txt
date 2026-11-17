@@ -25,10 +25,11 @@ if(G3_WERROR)
   list(APPEND G3_COMMON_FLAGS -Werror)
 endif()
 
-# --- Portable emulator core (header-only for now; becomes a static library
-#     once the first .cpp files arrive in Milestone 2). -----------------------
-add_library(g3core INTERFACE)
-target_include_directories(g3core INTERFACE ${CMAKE_SOURCE_DIR})
+# --- Portable emulator core ----------------------------------------------------
+file(GLOB_RECURSE G3_CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/core/*.cpp)
+add_library(g3core STATIC ${G3_CORE_SOURCES})
+target_include_directories(g3core PUBLIC ${CMAKE_SOURCE_DIR})
+target_compile_options(g3core PRIVATE ${G3_COMMON_FLAGS})
 
 # --- Portable host-side platform code (also compiled into the Circle kernel).
 file(GLOB G3_PLATFORM_COMMON_SOURCES CONFIGURE_DEPENDS
@@ -46,9 +47,11 @@ add_executable(g3_unit_tests
   ${G3_TEST_SOURCES})
 find_package(Threads REQUIRED)
 target_link_libraries(g3_unit_tests PRIVATE g3core g3platform_common Threads::Threads)
+target_compile_definitions(g3_unit_tests PRIVATE G3_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(g3_unit_tests PRIVATE ${G3_COMMON_FLAGS})
 
 if(G3_SANITIZE)
+  target_compile_options(g3core PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_compile_options(g3platform_common PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_compile_options(g3_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(g3_unit_tests PRIVATE -fsanitize=address,undefined)
@@ -56,3 +59,8 @@ endif()
 
 enable_testing()
 add_test(NAME unit_tests COMMAND g3_unit_tests)
+
+# --- Benchmarks (not run by CI's test step) ------------------------------------
+add_executable(g3_cpu_bench tools/bench/cpu_bench.cpp)
+target_link_libraries(g3_cpu_bench PRIVATE g3core)
+target_compile_options(g3_cpu_bench PRIVATE ${G3_COMMON_FLAGS})
