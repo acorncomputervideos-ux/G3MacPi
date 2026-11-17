@@ -21,7 +21,7 @@ manuals leave undefined follow the hardware-derived vectors in
 | Time base, decrementer (exception on DEC bit 0: 0 -> 1) | **Done** | unit tests |
 | Exceptions: program (illegal/privileged/trap), sc, FP unavailable, alignment (lwarx/stwcx./lmw/stmw), machine check / checkstop, external, decrementer; rfi | **Done** | unit tests |
 | Floating point (Milestone 2b): all 750 FP arithmetic, fused multiply-add family, compares, frsp, fctiw[z], moves, fsel, fres, frsqrte, FPSCR instructions, FP loads/stores, FP-unavailable and FP-enabled exceptions | **Done** | all 2054 FP vectors pass; 18 unit tests; IEEE core checked against host FPU |
-| MMU (BAT, segments, hashed page table), DSI/ISI | **Not started** (Milestone 3): addresses are physical | — |
+| MMU: IBAT/DBAT (Vs/Vp, BL, PP), segment registers (Ks/Kp/N/T), hashed page table (primary/secondary hash, HTABMASK), R/C updates, page-crossing accesses, DSI (DAR/DSISR) and ISI (SRR1 causes) | **Done** (no TLB cache yet) | 14 unit tests with hand-computed page tables |
 | Disassembler (`disasm.h`): simplified mnemonics, freestanding | **Done** | all 397 reference vectors (52 POWER/601/603-only encodings correctly shown as `dc.l`); 1 M random words cross-checked against the interpreter |
 
 ## Decisions and known deviations (to verify or complete)
@@ -71,6 +71,31 @@ Decisions — evidence and confidence:
 | Trap-enabled overflow/underflow (OE/UE) | exponent adjusted by 1536/192 (PEM) | not covered by vectors — unit-tested only indirectly |
 | Imprecise FP exception modes | treated as precise | Mac OS 9 runs with FE0 = FE1 = 0 |
 | fsqrt / fsqrts | illegal (the 750 does not implement them) | 750 UM |
+
+## MMU (2026-11-17)
+
+Implemented from PEM chapter 7. Decisions and gaps:
+- Every access translates (BATs first, then segment/page table); no TLB
+  cache yet, so `tlbie`/`tlbsync` need no action. **Next step: a soft TLB,
+  verified against this uncached path.**
+- R is set on every successful access and also on a protection fault; C on
+  stores. Updates are written straight to the page table in memory.
+- Accesses crossing a 4 KB boundary translate both pages before touching
+  memory (no partial stores on a DSI). Exception: FP doubles are two 32-bit
+  accesses, so a DSI on the second word can leave the first word written.
+- lwarx/stwcx. reservations use the physical address (32-byte granule).
+- Direct-store segments (T=1): data access -> DSI with DSISR bit 5,
+  fetch -> ISI no-execute. The 750 does not support direct-store; exact DSISR
+  bits **to verify**. Mac OS does not use T=1 segments.
+- Instruction fetch from a guarded page (PTE G=1) -> ISI bit 3.
+- Not yet: dcbz alignment exception for write-through/cache-inhibited
+  pages; DABR/IABR breakpoints; the 750's TLB/BAT invalidation timing.
+
+Throughput (`g3_cpu_bench`, 2.1 GHz Xeon container, 2026-11-17):
+real mode 105-168 M instr/s (noisy host), BAT-mapped ~90 M,
+page-table-mapped ~43 M. Adding the MMU cost ~20 % in real mode
+(callgrind: 221 M -> 268 M host instructions per 2 M guest instructions;
+forcing `execute` inline made it worse and was reverted).
 
 ## Disassembler / interpreter consistency
 

@@ -98,8 +98,12 @@ void Ppc750::step()
         }
     }
 
-    u32 insn;
-    if (!mem_.fetch32(s_.pc, insn)) {
+    u32 pa, insn;
+    if (!translate(s_.pc, Access::Fetch, pa)) {  // raises ISI
+        s_.pc = next_pc_;
+        return;
+    }
+    if (!mem_.fetch32(pa, insn)) {
         machine_check();
         s_.pc = next_pc_;
         return;

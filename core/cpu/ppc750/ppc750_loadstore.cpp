@@ -71,41 +71,85 @@ bool x_form(u32 xo, LsForm& f)
 } // namespace
 
 // --- memory helpers ----------------------------------------------------------
+//
+// All data accesses go through these. They translate the effective address
+// (ppc750_mmu.cpp) and access physical memory. On a translation fault they
+// raise DSI, on a bus error a machine check, and return false.
+//
+// An access that crosses a 4 KB page boundary with translation enabled is
+// split: both pages are translated first (so a fault on the second page
+// leaves nothing half-written), then the bytes are transferred one by one.
 
-bool Ppc750::mem_read8(u32 a, u32& v)
+namespace {
+constexpr bool crosses_page(u32 ea, u32 size) { return (ea & 0xFFF) + size > 0x1000; }
+} // namespace
+
+bool Ppc750::mem_access(u32 ea, u32 size, bool write, u32& value)
 {
-    u8 b;
-    if (!mem_.read8(a, b)) { machine_check(); return false; }
-    v = b;
+    const Access acc = write ? Access::Write : Access::Read;
+    if ((s_.msr & msr::DR) && crosses_page(ea, size)) {
+        const u32 second = (ea + size - 1) & ~0xFFFu;
+        u32 pa1, pa2;
+        if (!translate(ea, acc, pa1) || !translate(second, acc, pa2))
+            return false;
+        u32 v = 0;
+        for (u32 i = 0; i < size; ++i) {
+            const u32 e = ea + i;
+            const u32 pa = e < second ? pa1 + i : pa2 + (e - second);
+            const u32 shift = 8 * (size - 1 - i);
+            if (write) {
+                if (!mem_.write8(pa, static_cast<u8>(value >> shift))) {
+                    machine_check();
+                    return false;
+                }
+            } else {
+                u8 b;
+                if (!mem_.read8(pa, b)) {
+                    machine_check();
+                    return false;
+                }
+                v |= static_cast<u32>(b) << shift;
+            }
+        }
+        if (!write)
+            value = v;
+        return true;
+    }
+
+    u32 pa;
+    if (!translate(ea, acc, pa))
+        return false;
+    bool ok;
+    if (write) {
+        ok = size == 4 ? mem_.write32(pa, value)
+           : size == 2 ? mem_.write16(pa, static_cast<u16>(value))
+                       : mem_.write8(pa, static_cast<u8>(value));
+    } else {
+        if (size == 4) {
+            ok = mem_.read32(pa, value);
+        } else if (size == 2) {
+            u16 h;
+            ok = mem_.read16(pa, h);
+            value = h;
+        } else {
+            u8 b;
+            ok = mem_.read8(pa, b);
+            value = b;
+        }
+    }
+    if (!ok) {
+        machine_check();
+        return false;
+    }
     return true;
 }
-bool Ppc750::mem_read16(u32 a, u32& v)
-{
-    u16 h;
-    if (!mem_.read16(a, h)) { machine_check(); return false; }
-    v = h;
-    return true;
-}
-bool Ppc750::mem_read32(u32 a, u32& v)
-{
-    if (!mem_.read32(a, v)) { machine_check(); return false; }
-    return true;
-}
-bool Ppc750::mem_write8(u32 a, u32 v)
-{
-    if (!mem_.write8(a, static_cast<u8>(v))) { machine_check(); return false; }
-    return true;
-}
-bool Ppc750::mem_write16(u32 a, u32 v)
-{
-    if (!mem_.write16(a, static_cast<u16>(v))) { machine_check(); return false; }
-    return true;
-}
-bool Ppc750::mem_write32(u32 a, u32 v)
-{
-    if (!mem_.write32(a, v)) { machine_check(); return false; }
-    return true;
-}
+
+bool Ppc750::mem_read8(u32 a, u32& v) { return mem_access(a, 1, false, v); }
+bool Ppc750::mem_read16(u32 a, u32& v) { return mem_access(a, 2, false, v); }
+bool Ppc750::mem_read32(u32 a, u32& v) { return mem_access(a, 4, false, v); }
+bool Ppc750::mem_write8(u32 a, u32 v) { return mem_access(a, 1, true, v); }
+bool Ppc750::mem_write16(u32 a, u32 v) { return mem_access(a, 2, true, v); }
+bool Ppc750::mem_write32(u32 a, u32 v) { return mem_access(a, 4, true, v); }
 
 u32 Ppc750::ea_d(u32 insn) const
 {
@@ -261,13 +305,18 @@ bool Ppc750::op_lwarx(u32 insn)
         raise_exception(Exception::Alignment, s_.pc);
         return true;
     }
-    u32 v;
-    if (!mem_read32(ea, v))
+    u32 pa, v;
+    if (!translate(ea, Access::Read, pa))
         return true;
+    if (!mem_.read32(pa, v)) {
+        machine_check();
+        return true;
+    }
     s_.gpr[field::rd(insn)] = v;
-    // The 750's reservation granule is one 32-byte cache block.
+    // The reservation is on the physical address; the 750's reservation
+    // granule is one 32-byte cache block.
     s_.reservation_valid = true;
-    s_.reservation_addr = ea & ~31u;
+    s_.reservation_addr = pa & ~31u;
     return true;
 }
 
@@ -279,10 +328,15 @@ bool Ppc750::op_stwcx(u32 insn)
         raise_exception(Exception::Alignment, s_.pc);
         return true;
     }
-    const bool success = s_.reservation_valid && s_.reservation_addr == (ea & ~31u);
-    s_.reservation_valid = false;
-    if (success && !mem_write32(ea, s_.gpr[field::rd(insn)]))
+    u32 pa;
+    if (!translate(ea, Access::Write, pa))
         return true;
+    const bool success = s_.reservation_valid && s_.reservation_addr == (pa & ~31u);
+    s_.reservation_valid = false;
+    if (success && !mem_.write32(pa, s_.gpr[field::rd(insn)])) {
+        machine_check();
+        return true;
+    }
     u32 f = success ? crf::EQ : 0;
     if (s_.xer() & xer::SO)
         f |= crf::SO;

@@ -5,8 +5,10 @@
 // Integer, compare, logical, rotate/shift, condition register, branch,
 // load/store, trap, system call, rfi, SPR/MSR/SR access, exceptions
 // (Milestone 2) and the floating-point unit (Milestone 2b, software IEEE
-// arithmetic in core/fpu). Address translation (Milestone 3) is not
-// implemented yet: addresses are used as physical addresses.
+// arithmetic in core/fpu) and the MMU (Milestone 3).
+//
+// Address translation (BAT + segments + hashed page table, R/C updates,
+// DSI/ISI) is done for every access (no TLB cache yet).
 //
 // Not supported yet (documented in docs/hardware/ppc750-cpu.md):
 //  * little-endian mode (MSR[LE]); eciwx/ecowx; trace exceptions;
@@ -103,7 +105,9 @@ private:
     bool op_lwarx(u32 insn);
     bool op_stwcx(u32 insn);
     bool op_dcbz(u32 insn);
-    // Memory helpers: on failure they raise a machine check and return false.
+    // Memory helpers: translate, then access. On failure they raise DSI or a
+    // machine check and return false.
+    bool mem_access(u32 ea, u32 size, bool write, u32& value);
     bool mem_read8(u32 a, u32& v);
     bool mem_read16(u32 a, u32& v);
     bool mem_read32(u32 a, u32& v);
@@ -132,6 +136,25 @@ private:
     bool fp_load_store_x(u32 insn, u32 xo);
     bool mem_read64(u32 a, u64& v);
     bool mem_write64(u32 a, u64 v);
+
+    // --- MMU (ppc750_mmu.cpp)
+    enum class Access { Read, Write, Fetch };
+    // Translates an effective address. On failure raises DSI/ISI and
+    // returns false. Real mode (MSR[IR]/[DR] = 0) returns pa = ea; that
+    // check is inline because it is on every fetch and data access.
+    bool translate(u32 ea, Access access, u32& pa)
+    {
+        const u32 bit = access == Access::Fetch ? msr::IR : msr::DR;
+        if (!(s_.msr & bit)) {
+            pa = ea;
+            return true;
+        }
+        return translate_enabled(ea, access, pa);
+    }
+    bool translate_enabled(u32 ea, Access access, u32& pa);
+    bool bat_translate(u32 ea, Access access, u32& pa, bool& protection_fault);
+    bool page_translate(u32 ea, Access access, u32& pa, u32& fault);
+    void raise_translation_fault(u32 ea, Access access, u32 cause);
 
     // --- system (ppc750_system.cpp)
     void op_mfspr(u32 insn);

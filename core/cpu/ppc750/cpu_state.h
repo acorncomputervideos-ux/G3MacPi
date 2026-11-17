@@ -94,6 +94,40 @@ constexpr u32 kClassPosNorm = 0x04u << 12;
 constexpr u32 kClassPosInf  = 0x05u << 12;
 } // namespace fpscr
 
+// --- MMU (PEM chapter 7) ------------------------------------------------------
+namespace mmu {
+// Segment register fields (T = 0 form).
+constexpr u32 SR_T  = 0x80000000u;   // bit 0: direct-store segment
+constexpr u32 SR_KS = 0x40000000u;   // bit 1: supervisor key
+constexpr u32 SR_KP = 0x20000000u;   // bit 2: user key
+constexpr u32 SR_N  = 0x10000000u;   // bit 3: no-execute
+constexpr u32 SR_VSID_MASK = 0x00FFFFFFu;
+// PTE word 0 / word 1.
+constexpr u32 PTE0_V = 0x80000000u;
+constexpr u32 PTE0_H = 0x00000040u;
+constexpr u32 PTE1_R = 0x00000100u;
+constexpr u32 PTE1_C = 0x00000080u;
+constexpr u32 PTE1_G = 0x00000008u;  // WIMG: guarded
+// BAT upper/lower.
+constexpr u32 BATU_VS = 0x2u;
+constexpr u32 BATU_VP = 0x1u;
+} // namespace mmu
+
+// DSISR bits for DSI exceptions (PEM Table 6-8).
+namespace dsisr {
+constexpr u32 NOT_FOUND    = 0x40000000u;  // bit 1: no PTE / BAT
+constexpr u32 PROTECTION   = 0x08000000u;  // bit 4
+constexpr u32 DIRECT_STORE = 0x04000000u;  // bit 5 (750: T = 1 segment access)
+constexpr u32 STORE        = 0x02000000u;  // bit 6
+} // namespace dsisr
+
+// SRR1 cause bits for ISI exceptions (PEM 6.4.4).
+namespace isi {
+constexpr u32 NOT_FOUND  = 0x40000000u;  // bit 1
+constexpr u32 NO_EXECUTE = 0x10000000u;  // bit 3: N=1 segment, T=1 segment or guarded page
+constexpr u32 PROTECTION = 0x08000000u;  // bit 4
+} // namespace isi
+
 // --- Condition register field bits (within a 4-bit field) --------------------
 namespace crf {
 constexpr u32 LT = 8, GT = 4, EQ = 2, SO = 1;
