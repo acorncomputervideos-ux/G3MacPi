@@ -128,9 +128,10 @@ TEST_CASE("machine/yosemite/macio_dbdma_cell_and_conflict_rollback")
     Paddington& p = m.macio();
     p.config_write(0x10, 0x80800000u, 0xF);
     p.config_write(0x04, 0x2, 0x3);
-    // DBDMA channel 4 cmdptr (little-endian register) through the bus.
-    REQUIRE(m.bus().write32(0x80800000u + Paddington::kDbdmaOffset + 0x40C, 0x00100000u));
-    CHECK_EQ(p.dbdma().channel(4).command_pointer(), 0x00001000u);  // byte-swapped: 0x1000
+    // cmdptr of DBDMA channel 0x16 (IDE0 in QEMU's layout: BAR + 0x8B00),
+    // a little-endian register, through the bus.
+    REQUIRE(m.bus().write32(0x80800000u + 0x8B00u + 0x0C, 0x00100000u));
+    CHECK_EQ(p.dbdma().channel(0x16).command_pointer(), 0x00001000u);  // byte-swapped
 
     // Something else already decodes where the VIA would land: the move
     // fails, mac-io ends up unmapped, and the other region is untouched.

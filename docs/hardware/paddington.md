@@ -11,7 +11,7 @@ Code: `core/devices/macio/paddington.*`. Tests: `tests/unit/machine/test_yosemit
 | Interrupt controller | BAR + 0x00000 | QEMU Old World layout — **to verify for Paddington** |
 | VIA (Cuda) | BAR + 0x16000 | QEMU Old World layout — **to verify** |
 | VIA interrupt | controller input 18 (0x12) | QEMU `OLDWORLD_CUDA_IRQ` — **to verify** |
-| DBDMA controller | BAR + 0x08000 (16 channels × 0x100), see dbdma.md | QEMU Old World layout — **to verify** |
+| DBDMA controller | BAR + 0x08000 (32 channels × 0x80), see dbdma.md | QEMU Old World layout — **to verify** |
 | NVRAM | BAR + 0x60000, 8 KB at stride 16, see nvram.md | QEMU Old World layout — **to verify** |
 | Not modelled yet | SCC (+0x13000), IDE (+0x20000/+0x21000), audio, floppy | QEMU layout for reference |
 

@@ -10,7 +10,7 @@
 //  - Cell offsets inside the BAR (QEMU's Old World mac-io layout, which
 //    matches the Heathrow family; NOT yet verified for Paddington):
 //      0x00000 interrupt controller
-//      0x08000 DBDMA controller (16 channels x 0x100)
+//      0x08000 DBDMA controller (32 channels x 0x80)
 //      0x16000 VIA (Cuda)
 //      0x60000 NVRAM (8 KB, one byte every 16 bytes)
 //    Other cells (SCC 0x13000, IDE 0x20000/0x21000, ...)

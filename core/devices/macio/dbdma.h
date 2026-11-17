@@ -15,7 +15,9 @@
 //    NOP, STOP; key, interrupt (bits 5-4), branch (3-2), wait (1-0) fields.
 //  - Condition = (devstat & sel_mask) == (sel_value & sel_mask), 4-bit
 //    selects (mask in bits 19-16, value in bits 3-0).
-//  - Channels 0x100 apart; the controller window is 0x1000 (16 channels).
+//  - Channels 0x80 apart; the controller window is 0x1000 (32 channels)
+//    (QEMU DBDMA_CHANNEL_SHIFT 7; Linux struct dbdma_regs is 0x40 bytes,
+//    which fits). E.g. IDE0 uses channel 0x16 = window offset 0xB00.
 //
 // Simplification: transfers complete in zero guest time when the device
 // has data/space ready; a device that is not ready leaves the channel
@@ -93,8 +95,8 @@ private:
 
 class DbdmaController final : public MmioDevice {
 public:
-    static constexpr u32 kChannels = 16;
-    static constexpr u32 kChannelStride = 0x100;
+    static constexpr u32 kChannels = 32;
+    static constexpr u32 kChannelStride = 0x80;
     static constexpr u32 kWindowSize = kChannels * kChannelStride;
 
     explicit DbdmaController(PhysicalBus& bus);

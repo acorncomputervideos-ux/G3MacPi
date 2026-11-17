@@ -3,6 +3,10 @@
 Code: `core/devices/macio/dbdma.*`. Tests: `tests/unit/devices/test_dbdma.cpp`,
 `tests/unit/machine/test_yosemite.cpp` (mapping inside Paddington).
 
+> **Correction (2026-11-17):** the first version used a 0x100 channel
+> stride (16 channels). That value had no source and was wrong. It is now
+> 0x80 (32 channels), per QEMU.
+
 DBDMA is Apple's DMA engine in the mac-io chip. Storage (IDE), serial (SCC),
 audio and floppy each own one or more channels. Software builds a program of
 16-byte descriptors in RAM and the channel executes it.
@@ -16,7 +20,8 @@ no code was copied.
 
 | Fact | Value | Confidence |
 |---|---|---|
-| Placement in mac-io | BAR + 0x08000, 16 channels × 0x100 | QEMU Old World layout — **to verify for Paddington** |
+| Placement in mac-io | BAR + 0x08000, 32 channels × 0x80 (window 0x1000) | QEMU (`DBDMA_CHANNEL_SHIFT` 7, Old World layout) — **to verify for Paddington**; consistent with Linux `struct dbdma_regs` (0x40 bytes) |
+| Channels used by IDE | 0x16 (IDE0, BAR + 0x8B00), 0x1A (IDE1, BAR + 0x8D00) | QEMU `macio_realize_ide` — **to verify** |
 | Register byte order | little-endian (Linux uses `out_le32`/`in_le32`) | Linux — confirmed by usage |
 | Registers | 0x00 control, 0x04 status, 0x08 cmdptr_hi, 0x0C cmdptr, 0x10 intr_sel, 0x14 br_sel, 0x18 wait_sel | Linux header |
 | Control write | mask in bits 31-16, value in bits 15-0 | Linux header |
