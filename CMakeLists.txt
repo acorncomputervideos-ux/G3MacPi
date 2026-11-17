@@ -52,6 +52,8 @@ target_compile_options(g3_unit_tests PRIVATE ${G3_COMMON_FLAGS})
 
 if(G3_SANITIZE)
   target_compile_options(g3core PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+  # Anything linking the instrumented core needs the sanitizer runtime.
+  target_link_options(g3core PUBLIC -fsanitize=address,undefined)
   target_compile_options(g3platform_common PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_compile_options(g3_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(g3_unit_tests PRIVATE -fsanitize=address,undefined)
