@@ -20,7 +20,7 @@
 #include "core/firmware/openfirm/device_tree.h"
 #include "core/storage/apple_partition_map.h"
 #include "core/storage/block_device.h"
-#include "core/storage/hfsplus.h"
+#include "core/storage/hfs_volume.h"
 
 namespace g3::of {
 
@@ -98,7 +98,7 @@ private:
     BlockDevice& disk_;
     ApplePartitionMap map_;
     BlockWindow window_{disk_, 0, 0};
-    HfsPlusVolume fs_;
+    HfsVolume fs_;
     u64 fs_base_ = ~0ull;                           // window the volume is mounted on
     bool file_[InstanceTable::kMaxInstances] = {};
     HfsFork fork_[InstanceTable::kMaxInstances];

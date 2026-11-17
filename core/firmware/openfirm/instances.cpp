@@ -141,7 +141,7 @@ bool DiskDriver::open_file(u32 s, const char* spec)
 {
     if (!mount_partition(s))
         return false;
-    u32 folder = HfsPlusVolume::kRootFolder;
+    u32 folder = HfsVolume::kRootFolder;
     const char* p = spec;
     if (p[0] == '\\' && p[1] == '\\') {
         folder = fs_.blessed_folder();

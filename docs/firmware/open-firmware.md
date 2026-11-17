@@ -20,7 +20,8 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | Memory: claim/release | ✅ step 3 |
 | Disk partitions (Apple Partition Map): `hd:N` opens partition N | ✅ step 4 |
 | Files on HFS Plus partitions: `hd:N,\\:tbxi` opens the boot file | ✅ step 5 |
-| Plain HFS volumes; call-method and disk methods (block-size, read-blocks, ...) | to do |
+| Files on classic HFS partitions | ✅ step 6 |
+| call-method and disk methods (block-size, read-blocks, ...) | to do |
 | Virtual-memory services (translations, map) | to do, if Mac OS needs them |
 | B&W device tree contents (needs a real device-tree dump) | to do |
 | Forth subset for the boot script (`interpret`) | to do |
@@ -92,7 +93,7 @@ Choices:
 ## File paths (step 5)
 
 After the partition number and a comma, the arguments name a file on the
-partition's HFS Plus volume (`core/storage/hfsplus`):
+partition's HFS Plus or HFS volume (`core/storage/hfs_volume`):
 
 | Syntax | Meaning |
 |---|---|

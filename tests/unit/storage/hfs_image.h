@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Test helper: builds small HFS Plus volumes from the TN1150 layout.
-// (Same author as the reader: see docs/storage/hfsplus.md.)
+// (Same author as the reader: see docs/storage/hfs.md.)
 
-#ifndef G3_TESTS_UNIT_STORAGE_HFSPLUS_IMAGE_H
-#define G3_TESTS_UNIT_STORAGE_HFSPLUS_IMAGE_H
+#ifndef G3_TESTS_UNIT_STORAGE_HFS_IMAGE_H
+#define G3_TESTS_UNIT_STORAGE_HFS_IMAGE_H
 
 #include "core/common/types.h"
 
@@ -237,6 +237,170 @@ struct Volume {
     }
 };
 
+
+// --- classic HFS (Inside Macintosh: Files layout) ---------------------------------------
+
+struct ClassicVolume {
+    static constexpr u32 kAlBlk = 1536;      // allocation block: a multiple of 512, not a power of 2
+    static constexpr u32 kAlBlSt = 6;        // allocation block 0 at sector 6
+    static constexpr u32 kBlocks = 200;
+    static constexpr u32 kNodeSz = 512;      // HFS B-tree nodes are 512 bytes
+    static constexpr u64 kRomSize = 4000;
+    static constexpr u64 kFragSize = 5 * kAlBlk - 10;
+    Img img;
+    std::vector<u8> rom, frag;
+    size_t block(u32 n) const { return kAlBlSt * 512 + static_cast<size_t>(n) * kAlBlk; }
+
+    static std::vector<u8> key(u32 parent, const std::string& name, bool index_pad)
+    {
+        // {keyLength u8, reserved, parentID u32, name length u8, MacRoman bytes}
+        std::vector<u8> k(7 + name.size());
+        k[0] = static_cast<u8>(6 + name.size());
+        put_be32(k, 2, parent);
+        k[6] = static_cast<u8>(name.size());
+        std::memcpy(&k[7], name.data(), name.size());
+        if (index_pad) {          // index keys occupy maxKeyLength (37) + 1 bytes;
+            k.resize(38);         // the length byte keeps the real length, so the
+                                  // reader must use the fixed size, not this byte
+        } else if (k.size() & 1) {
+            k.push_back(0);       // data starts on an even offset
+        }
+        return k;
+    }
+    static std::vector<u8> folder(u32 parent, const std::string& name, u32 id)
+    {
+        std::vector<u8> r = key(parent, name, false), d(70);
+        d[0] = 1;
+        put_be32(d, 6, id);
+        r.insert(r.end(), d.begin(), d.end());
+        return r;
+    }
+    static std::vector<u8> file(u32 parent, const std::string& name, u32 id, u32 type, u32 creator,
+                                u32 logical, u32 physical, const std::vector<Ext>& ext)
+    {
+        std::vector<u8> r = key(parent, name, false), d(102);
+        d[0] = 2;
+        put_be32(d, 4, type);
+        put_be32(d, 8, creator);
+        put_be32(d, 20, id);
+        put_be32(d, 26, logical);
+        put_be32(d, 30, physical);
+        for (size_t i = 0; i < ext.size() && i < 3; ++i) {
+            put_be16(d, 74 + 4 * i, static_cast<u16>(ext[i].start));
+            put_be16(d, 76 + 4 * i, static_cast<u16>(ext[i].count));
+        }
+        r.insert(r.end(), d.begin(), d.end());
+        return r;
+    }
+    static std::vector<u8> thread(u32 cnid, u32 parent, const std::string& name)
+    {
+        std::vector<u8> r = key(cnid, "", false), d(46);
+        d[0] = 3;
+        put_be32(d, 10, parent);
+        d[14] = static_cast<u8>(name.size());
+        std::memcpy(&d[15], name.data(), name.size());
+        r.insert(r.end(), d.begin(), d.end());
+        return r;
+    }
+    void node(size_t at, u32 flink, s8 kind, u8 height, const std::vector<std::vector<u8>>& recs)
+    {
+        img.u32_(at, flink);
+        img.u8_(at + 8, static_cast<u8>(kind));
+        img.u8_(at + 9, height);
+        img.u16_(at + 10, static_cast<u16>(recs.size()));
+        u32 off = 14;
+        for (size_t i = 0; i < recs.size(); ++i) {
+            img.u16_(at + kNodeSz - 2 * (i + 1), static_cast<u16>(off));
+            std::memcpy(&img.d.at(at + off), recs[i].data(), recs[i].size());
+            off += static_cast<u32>((recs[i].size() + 1) & ~size_t(1));
+        }
+        img.u16_(at + kNodeSz - 2 * (recs.size() + 1), static_cast<u16>(off));
+        REQUIRE_SPACE(off + 2 * (recs.size() + 1) <= kNodeSz);
+    }
+    void header(size_t at, u16 depth, u32 root, u32 first_leaf, u32 nodes, u16 max_key)
+    {
+        std::vector<u8> h(106);
+        put_be16(h, 0, depth);
+        put_be32(h, 2, root);
+        put_be32(h, 10, first_leaf);
+        put_be16(h, 18, kNodeSz);
+        put_be16(h, 20, max_key);
+        put_be32(h, 22, nodes);
+        node(at, 0, 1, 0, {h, std::vector<u8>(128), std::vector<u8>(256 - 128 - 16)});
+    }
+    static void REQUIRE_SPACE(bool ok)
+    {
+        if (!ok)
+            __builtin_trap();  // the fixture itself is wrong
+    }
+    static std::vector<u8> index(const std::vector<u8>& leaf_first_key_rec, u32 child)
+    {
+        // Rebuild the padded key from a leaf record's key.
+        const u32 parent = (static_cast<u32>(leaf_first_key_rec[2]) << 24) |
+                           (static_cast<u32>(leaf_first_key_rec[3]) << 16) |
+                           (static_cast<u32>(leaf_first_key_rec[4]) << 8) | leaf_first_key_rec[5];
+        const std::string name(reinterpret_cast<const char*>(&leaf_first_key_rec[7]), leaf_first_key_rec[6]);
+        std::vector<u8> r = key(parent, name, true);
+        r.resize(r.size() + 4);
+        put_be32(r, r.size() - 4, child);
+        return r;
+    }
+
+    ClassicVolume() : img(kAlBlSt * 512 + static_cast<size_t>(kBlocks) * kAlBlk)
+    {
+        const size_t m = 1024;
+        img.u16_(m + 0, 0x4244);            // 'BD'
+        img.u16_(m + 18, kBlocks);          // drNmAlBlks
+        img.u32_(m + 20, kAlBlk);           // drAlBlkSiz
+        img.u16_(m + 28, kAlBlSt);          // drAlBlSt
+        img.u32_(m + 92, 17);               // drFndrInfo[0]: blessed folder
+        img.u32_(m + 130, 2 * kNodeSz);     // drXTFlSize
+        img.u16_(m + 134, 0); img.u16_(m + 136, 1);   // drXTExtRec: block 0, 1 block
+        img.u32_(m + 146, 5 * kNodeSz);     // drCTFlSize
+        img.u16_(m + 150, 1); img.u16_(m + 152, 2);   // drCTExtRec: blocks 1-2
+
+        rom = fill_pattern(32, kRomSize);
+        std::memcpy(&img.d[block(10)], rom.data(), rom.size());
+        frag = fill_pattern(33, kFragSize);
+        const u32 fb[5] = {50, 48, 46, 44, 42};
+        for (u32 i = 0; i < 5; ++i)
+            std::memcpy(&img.d[block(fb[i])], &frag[i * kAlBlk],
+                        std::min<size_t>(kAlBlk, frag.size() - i * kAlBlk));
+
+        std::vector<std::vector<u8>> a = {
+            folder(1, "Macintosh HD", 2),
+            thread(2, 1, "Macintosh HD"),
+            folder(2, "System Folder", 17),
+        };
+        std::vector<std::vector<u8>> b = {
+            thread(17, 2, "System Folder"),
+            file(17, "Finder", 31, fourcc("FNDR"), fourcc("MACS"), 0, 0, {}),
+        };
+        std::vector<std::vector<u8>> c = {
+            file(17, "Fragmented", 33, fourcc("BINA"), fourcc("????"), kFragSize, 5 * kAlBlk,
+                 {{fb[0], 1}, {fb[1], 1}, {fb[2], 1}}),
+            file(17, "Mac OS ROM", 32, fourcc("tbxi"), fourcc("chrp"), kRomSize, 3 * kAlBlk, {{10, 3}}),
+        };
+        const size_t cat = block(1);
+        header(cat, 2, 1, 2, 5, 37);
+        node(cat + 1 * kNodeSz, 0, 0, 2, {index(a[0], 2), index(b[0], 3), index(c[0], 4)});
+        node(cat + 2 * kNodeSz, 3, -1, 1, a);
+        node(cat + 3 * kNodeSz, 4, -1, 1, b);
+        node(cat + 4 * kNodeSz, 0, -1, 1, c);
+
+        // Extents overflow: {keyLength 7, forkType 0, fileID 33, startBlock 3} + 3 extents.
+        const size_t ext = block(0);
+        header(ext, 1, 1, 1, 2, 7);
+        std::vector<u8> er(8 + 12);
+        er[0] = 7;
+        put_be32(er, 2, 33);
+        put_be16(er, 6, 3);
+        put_be16(er, 8, static_cast<u16>(fb[3])); put_be16(er, 10, 1);
+        put_be16(er, 12, static_cast<u16>(fb[4])); put_be16(er, 14, 1);
+        node(ext + kNodeSz, 0, -1, 1, {er});
+    }
+};
+
 } // namespace hfs_image
 
-#endif // G3_TESTS_UNIT_STORAGE_HFSPLUS_IMAGE_H
+#endif // G3_TESTS_UNIT_STORAGE_HFS_IMAGE_H

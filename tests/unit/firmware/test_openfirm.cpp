@@ -628,14 +628,14 @@ TEST_CASE("firmware/client/open_partition")
 
 // --- files on an HFS Plus partition --------------------------------------------------
 
-#include "tests/unit/storage/hfsplus_image.h"
+#include "tests/unit/storage/hfs_image.h"
 
 namespace {
 
 // Disk: partition map (2 entries) + the test HFS Plus volume as partition 2.
-std::vector<u8> bootable_disk(const hfs_image::Volume& vol)
+std::vector<u8> bootable_disk(const std::vector<u8>& volume)
 {
-    const u32 hfs_start = 64, hfs_blocks = static_cast<u32>(vol.img.d.size() / 512);
+    const u32 hfs_start = 64, hfs_blocks = static_cast<u32>((volume.size() + 511) / 512);
     std::vector<u8> d(static_cast<size_t>(hfs_start + hfs_blocks) * 512);
     be16(d, 0, 0x4552);
     be16(d, 2, 512);
@@ -650,7 +650,7 @@ std::vector<u8> bootable_disk(const hfs_image::Volume& vol)
         be32(d, b + 12, counts[i]);
         std::memcpy(&d[b + 48], types[i], std::strlen(types[i]));
     }
-    std::memcpy(&d[hfs_start * 512], vol.img.d.data(), vol.img.d.size());
+    std::memcpy(&d[hfs_start * 512], volume.data(), volume.size());
     return d;
 }
 
@@ -660,7 +660,7 @@ TEST_CASE("firmware/client/open_boot_file_on_hfsplus")
 {
     InstRig r;
     hfs_image::Volume vol;
-    std::vector<u8> img = bootable_disk(vol);
+    std::vector<u8> img = bootable_disk(vol.img.d);
     RamBlockDevice disk(img.data(), img.size());
     DiskDriver drv(disk);
     r.inst.bind(r.f.disk, &drv);
@@ -704,4 +704,19 @@ TEST_CASE("firmware/client/open_boot_file_on_hfsplus")
     CHECK_EQ(r.call("seek", {raw, 0, 1024}, 1)[0], 0u);
     CHECK_EQ(r.call("read", {raw, buf, 2}, 1)[0], 2u);
     CHECK_EQ(r.ram[buf], 0x48u);                                    // 'H+' volume header
+}
+
+TEST_CASE("firmware/client/open_boot_file_on_classic_hfs")
+{
+    InstRig r;
+    hfs_image::ClassicVolume vol;
+    std::vector<u8> img = bootable_disk(vol.img.d);
+    RamBlockDevice disk(img.data(), img.size());
+    DiskDriver drv(disk);
+    r.inst.bind(r.f.disk, &drv);
+    const u32 ih = r.call("open", {r.put_string("hd:2,\\\\:tbxi")}, 1)[0];
+    REQUIRE(ih != 0);
+    const u32 buf = 0x2000;
+    CHECK_EQ(r.call("read", {ih, buf, 8000}, 1)[0], static_cast<u32>(hfs_image::ClassicVolume::kRomSize));
+    CHECK(std::memcmp(&r.ram[buf], vol.rom.data(), vol.rom.size()) == 0);
 }
