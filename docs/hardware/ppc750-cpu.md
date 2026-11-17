@@ -127,3 +127,12 @@ with non-zero reserved fields, which the CPU executes like the valid form
 `build/release/g3_cpu_bench` (8-instruction integer loop incl. load/store):
 ~160 million guest instructions/s on the 2.1 GHz Xeon CI container
 (2026-11-17). Not a Pi figure. No MMU yet; switch-based dispatch.
+
+## Emulator traps (HLE)
+
+Primary opcode 0 is illegal on the 750. `Ppc750::set_hle_handler` lets
+the high-level firmware claim specific opcode-0 words (currently
+`0x00004F01`, the Open Firmware client-interface entry). Unclaimed words,
+`0x00000000` included, raise the normal program exception (SRR1 bit 12).
+The check costs nothing on the normal path: it sits in the illegal-opcode
+case of the dispatch switch.

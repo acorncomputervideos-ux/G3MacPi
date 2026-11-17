@@ -288,3 +288,77 @@ TEST_CASE("firmware/client/paths_test_clock_and_unknown")
     r.call("getproplen", {r.f.ata, r.put_string("reg")}, 0);
     CHECK_EQ(r.status, F);
 }
+
+// --- reaching the client interface from guest code ---------------------------------
+
+#include "core/firmware/openfirm/firmware.h"
+#include "tests/unit/cpu/ppc_asm.h"
+
+TEST_CASE("firmware/client/called_from_guest_code")
+{
+    using namespace g3::ppc;
+    using namespace asm_ppc;
+    CiRig r;
+    Firmware fw(*r.f.t, r.bus);
+    REQUIRE(fw.install(0x3000));
+    CHECK_EQ(r.rd(0x3000), Firmware::kTrapClientInterface);
+    Ppc750 cpu(r.bus);
+    fw.attach(cpu);
+
+    // Argument array for finddevice("/cpus/PowerPC,750"), 1 return.
+    const u32 args = 0x8000;
+    r.wr(args, r.put_string("finddevice"));
+    r.wr(args + 4, 1);
+    r.wr(args + 8, 1);
+    r.wr(args + 12, r.put_string("/cpus/PowerPC,750"));
+    // A second call naming an unknown service.
+    const u32 args2 = 0x8100;
+    r.wr(args2, r.put_string("no-such-service"));
+    r.wr(args2 + 4, 0);
+    r.wr(args2 + 8, 0);
+
+    // The client: r3 = args; ctr = entry; bctrl; save r3; same again; loop.
+    const u32 prog[] = {
+        lis(3, args >> 16), ori(3, 3, args & 0xFFFF),
+        lis(9, 0), ori(9, 9, 0x3000), mtspr(spr::CTR, 9),
+        bctr() | 1,                      // bctrl
+        stw(3, 0x100, 0),                // status of call 1 -> 0x100
+        lis(3, 0), ori(3, 3, args2 & 0xFFFF),
+        bctr() | 1,
+        stw(3, 0x104, 0),                // status of call 2 -> 0x104
+        b(0),
+    };
+    for (u32 i = 0; i < sizeof prog / 4; ++i)
+        r.wr(0x2000 + 4 * i, prog[i]);
+    r.wr(0x100, 0x11111111u);
+    r.wr(0x104, 0x11111111u);
+    cpu.reset();
+    cpu.state().msr = 0;                 // real mode, vectors at 0
+    cpu.state().pc = 0x2000;
+    cpu.run(40);
+    CHECK_EQ(fw.calls(), 2u);
+    CHECK_EQ(r.rd(0x100), 0u);
+    CHECK_EQ(r.rd(args + 16), r.f.cpu);  // phandle returned in the array
+    CHECK_EQ(r.rd(0x104), ClientInterface::kFail);
+    CHECK_EQ(cpu.state().pc, 0x2000u + 4 * (sizeof prog / 4 - 1));  // at the final loop
+}
+
+TEST_CASE("firmware/client/other_opcode0_words_still_fault")
+{
+    using namespace g3::ppc;
+    CiRig r;
+    Firmware fw(*r.f.t, r.bus);
+    Ppc750 cpu(r.bus);
+    fw.attach(cpu);
+    for (u32 word : {0x00000000u, Firmware::kTrapBase | 0x02, 0x00004F01u | 0x00010000u}) {
+        r.wr(0x2000, word);
+        cpu.reset();
+        cpu.state().msr = 0;
+        cpu.state().pc = 0x2000;
+        cpu.step();
+        CHECK_EQ(cpu.state().pc, 0x700u);                // program exception
+        CHECK_EQ(cpu.state().spr[spr::SRR0], 0x2000u);
+        CHECK(cpu.state().spr[spr::SRR1] & srr1::ILLEGAL);
+    }
+    CHECK_EQ(fw.calls(), 0u);
+}

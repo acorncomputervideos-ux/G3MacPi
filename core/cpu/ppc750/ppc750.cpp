@@ -125,6 +125,10 @@ void Ppc750::execute(u32 insn)
 
     const u32 op = field::opcd(insn);
     switch (op) {
+    case 0:  // illegal on the 750; may be an HLE trap word
+        if (!(hle_handler_ && hle_handler_(hle_ctx_, insn, s_, next_pc_)))
+            illegal(insn);
+        break;
     case 3:  // twi
         op_trap(field::rd(insn), s_.gpr[field::ra(insn)], field::simm(insn));
         break;

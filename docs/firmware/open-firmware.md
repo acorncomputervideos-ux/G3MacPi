@@ -15,7 +15,7 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 |---|---|
 | Device tree storage, walking, properties, paths, aliases | ✅ step 1 |
 | Client interface: tree services, test, milliseconds, exit/enter | ✅ step 1 |
-| Reaching the client interface from guest code (CPU hook) | next |
+| Reaching the client interface from guest code (CPU hook) | ✅ step 2 |
 | Instances: open/close/read/write/seek, call-method | to do |
 | Memory: claim/release, translations | to do |
 | B&W device tree contents (needs a real device-tree dump) | to do |
@@ -37,6 +37,24 @@ expects as a client is noted (facts only, no code).
 | `nextprop`: previous = null or "" → first; returns 1 (name written), 0 (no more), −1 (previous not a property); buffer holds 32 bytes | IEEE 1275 |
 | `finddevice` returns −1 if not found | IEEE 1275 |
 | `package-to-path`/`canon` return the length of the full path, without the NUL | IEEE 1275; Linux appends the NUL itself and handles a length ≥ buflen as truncation |
+
+## How guest code reaches the firmware
+
+The PowerPC binding passes the client-interface entry address to the
+client in r5. The client calls it with the argument array in r3 and gets
+the result back in r3. Our entry point is one emulator-defined trap
+word, `0x00004F01`, written into guest memory by `of::Firmware::install`.
+
+Primary opcode 0 is illegal on the 750, so no real code executes such a
+word. The CPU asks its HLE handler before raising the program exception.
+The handler claims only its own trap words, runs the client interface in
+C++, puts the result in r3 and continues at LR, as a real entry's `blr`
+would. Every other opcode-0 word, `0x00000000` included, still faults as
+on real hardware (tested).
+
+Open question, to be answered by logging Mac OS's calls: whether the
+boot code calls with address translation on. For now the argument
+addresses are physical.
 
 ## Modelling choices
 

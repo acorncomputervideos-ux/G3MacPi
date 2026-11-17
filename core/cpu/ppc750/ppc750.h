@@ -42,6 +42,20 @@ public:
     // Used by tests and (later) by the debugger.
     void execute(u32 insn);
 
+    // Emulator traps for high-level firmware (HLE). Primary opcode 0 is
+    // illegal on the 750; when such a word is executed, the handler is asked
+    // first. It returns true if it claimed the word (it may change state
+    // and set next_pc, which defaults to the following instruction);
+    // otherwise the usual program exception is taken. The handler must
+    // claim only its own trap words: 0x00000000 from zeroed memory, for
+    // example, must still fault.
+    using HleHandler = bool (*)(void* context, u32 insn, CpuState& state, u32& next_pc);
+    void set_hle_handler(HleHandler handler, void* context)
+    {
+        hle_handler_ = handler;
+        hle_ctx_ = context;
+    }
+
     // Interrupt inputs.
     void set_external_interrupt(bool asserted) { external_pending_ = asserted; }
     // Advances the time base and decrementer by 'ticks' time-base ticks.
@@ -201,6 +215,8 @@ private:
     bool checkstop_ = false;
     fp::Tininess fp_tininess_ = fp::Tininess::BeforeRounding;
     u64 instr_count_ = 0;
+    HleHandler hle_handler_ = nullptr;
+    void* hle_ctx_ = nullptr;
 };
 
 // Instruction field helpers (PowerPC bit numbering, PEM Appendix A).
