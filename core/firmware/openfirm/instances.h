@@ -18,6 +18,7 @@
 
 #include "core/common/types.h"
 #include "core/firmware/openfirm/device_tree.h"
+#include "core/storage/apple_partition_map.h"
 #include "core/storage/block_device.h"
 
 namespace g3::of {
@@ -67,8 +68,11 @@ private:
 };
 
 // Byte-addressed access to a disk image (IEEE 1275 "block" devices are
-// read with seek + read). Partition and file arguments are not
-// interpreted yet: every instance sees the whole disk.
+// read with seek + read). Open arguments "N" or "N,file" select
+// partition N of the Apple Partition Map: the instance then sees only
+// that partition (offset 0 = its first byte). Without a leading number
+// the instance sees the whole disk. The file part is kept for the file
+// system layer (not interpreted yet).
 class DiskDriver final : public PackageDriver {
 public:
     explicit DiskDriver(BlockDevice& disk) : disk_(disk) {}
@@ -77,10 +81,16 @@ public:
     s32 write(u32 slot, const u8* buf, u32 len) override;
     bool seek(u32 slot, u64 pos) override;
     u64 position(u32 slot) const { return pos_[slot % InstanceTable::kMaxInstances]; }
+    u64 window_size(u32 slot) const { return size_[slot % InstanceTable::kMaxInstances]; }
+    u32 partition(u32 slot) const { return part_[slot % InstanceTable::kMaxInstances]; }
 
 private:
     BlockDevice& disk_;
+    ApplePartitionMap map_;
     u64 pos_[InstanceTable::kMaxInstances] = {};
+    u64 base_[InstanceTable::kMaxInstances] = {};   // bytes
+    u64 size_[InstanceTable::kMaxInstances] = {};   // bytes
+    u32 part_[InstanceTable::kMaxInstances] = {};   // 0 = whole disk
     u8 sector_[BlockDevice::kSectorSize] = {};
 };
 

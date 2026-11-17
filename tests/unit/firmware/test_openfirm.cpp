@@ -430,14 +430,16 @@ struct InstRig : CiRig {
 TEST_CASE("firmware/client/open_read_seek_write_close")
 {
     InstRig r;
-    const u32 ih = r.call("open", {r.put_string("hd:9,\\\\:tbxi")}, 1)[0];
+    // No partition number: the whole disk (this image has no partition map).
+    CHECK_EQ(r.call("open", {r.put_string("hd:9,\\\\:tbxi")}, 1)[0], 0u);
+    const u32 ih = r.call("open", {r.put_string("hd:,\\\\:tbxi")}, 1)[0];
     REQUIRE(ih != 0);
-    CHECK(std::string(r.inst.args(ih)) == "9,\\\\:tbxi");
+    CHECK(std::string(r.inst.args(ih)) == ",\\\\:tbxi");
     CHECK_EQ(r.call("instance-to-package", {ih}, 1)[0], r.f.disk);
     const u32 buf = 0x4000;
-    CHECK_EQ(r.call("instance-to-path", {ih, buf, 200}, 1)[0], 50u);  // 40 + ":" + 9
+    CHECK_EQ(r.call("instance-to-path", {ih, buf, 200}, 1)[0], 49u);  // 40 + ":" + 8
     CHECK(std::string(reinterpret_cast<const char*>(&r.ram[buf])) ==
-          "/pci@80000000/mac-io@10/ata@20000/disk@0:9,\\\\:tbxi");
+          "/pci@80000000/mac-io@10/ata@20000/disk@0:,\\\\:tbxi");
 
     // seek to an odd offset, read across a sector boundary.
     CHECK_EQ(r.call("seek", {ih, 0, 1000}, 1)[0], 0u);
@@ -510,4 +512,114 @@ TEST_CASE("firmware/client/console_claim_and_test")
     CHECK_EQ(bare.call("test", {bare.put_string("open")}, 1)[0], ClientInterface::kFail);
     bare.call("open", {bare.put_string("/")}, 1);
     CHECK_EQ(bare.status, ClientInterface::kFail);
+}
+
+// --- Apple Partition Map ---------------------------------------------------------------
+
+#include "core/storage/apple_partition_map.h"
+
+namespace {
+
+void be16(std::vector<u8>& d, size_t at, u16 v) { d[at] = static_cast<u8>(v >> 8); d[at + 1] = static_cast<u8>(v); }
+void be32(std::vector<u8>& d, size_t at, u32 v)
+{
+    be16(d, at, static_cast<u16>(v >> 16));
+    be16(d, at + 2, static_cast<u16>(v));
+}
+// A disk image laid out like Inside Macintosh's description: driver
+// descriptor map in block 0, map entries from block 1.
+std::vector<u8> apm_image(u32 blocks)
+{
+    std::vector<u8> d(static_cast<size_t>(blocks) * 512);
+    for (size_t i = 0; i < d.size(); ++i)
+        d[i] = static_cast<u8>(i * 7 + (i >> 9) * 13);
+    std::memset(d.data(), 0, 512);
+    be16(d, 0, 0x4552);                 // 'ER'
+    be16(d, 2, 512);                    // sbBlkSize
+    be32(d, 4, blocks);                 // sbBlkCount
+    struct E { u32 start, count; const char* name; const char* type; };
+    const E e[] = {{1, 63, "Apple", "Apple_partition_map"},
+                   {64, 32, "Macintosh", "Apple_HFS"},
+                   {96, 1000, "Extra", "Apple_Free"}};  // runs past the image: clipped
+    for (u32 i = 0; i < 3; ++i) {
+        const size_t b = 512u * (1 + i);
+        std::memset(&d[b], 0, 512);
+        be16(d, b, 0x504D);             // 'PM'
+        be32(d, b + 4, 3);              // pmMapBlkCnt
+        be32(d, b + 8, e[i].start);     // pmPyPartStart
+        be32(d, b + 12, e[i].count);    // pmPartBlkCnt
+        std::memcpy(&d[b + 16], e[i].name, std::strlen(e[i].name));
+        std::memcpy(&d[b + 48], e[i].type, std::strlen(e[i].type));
+        be32(d, b + 88, 0x37);          // pmPartStatus
+    }
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("storage/apm/read_map")
+{
+    std::vector<u8> img = apm_image(128);
+    RamBlockDevice disk(img.data(), img.size());
+    ApplePartitionMap map;
+    REQUIRE(map.read(disk));
+    CHECK_EQ(map.count(), 3u);
+    CHECK(std::strcmp(map.partition(1)->type, "Apple_partition_map") == 0);
+    CHECK_EQ(map.partition(2)->start, 64u);
+    CHECK_EQ(map.partition(2)->blocks, 32u);
+    CHECK(std::strcmp(map.partition(2)->name, "Macintosh") == 0);
+    CHECK_EQ(map.partition(2)->status, 0x37u);
+    CHECK(map.partition(0) == nullptr);
+    CHECK(map.partition(4) == nullptr);
+    CHECK_EQ(map.find_type("Apple_HFS"), 2u);
+    CHECK_EQ(map.find_type("Apple_UFS"), 0u);
+    // Not a map: bad signature, or 2048-byte blocks.
+    std::vector<u8> bad = img;
+    bad[0] = 0;
+    RamBlockDevice bd(bad.data(), bad.size());
+    CHECK(!map.read(bd));
+    std::vector<u8> cd = img;
+    be16(cd, 2, 2048);
+    RamBlockDevice cdd(cd.data(), cd.size());
+    CHECK(!map.read(cdd));
+    // A partition window.
+    BlockWindow w(disk, 64, 32);
+    u8 sec[512];
+    CHECK(w.read(0, 1, sec));
+    CHECK_EQ(sec[0], img[64 * 512]);
+    CHECK(!w.read(32, 1, sec));
+    CHECK(!w.read(31, 2, sec));
+}
+
+TEST_CASE("firmware/client/open_partition")
+{
+    InstRig r;
+    r.image = apm_image(128);
+    RamBlockDevice disk(r.image.data(), r.image.size());
+    DiskDriver drv(disk);
+    r.inst.bind(r.f.disk, &drv);
+    const u32 ih = r.call("open", {r.put_string("hd:2,\\\\:tbxi")}, 1)[0];
+    REQUIRE(ih != 0);
+    CHECK_EQ(drv.partition(r.inst.slot(ih)), 2u);
+    CHECK_EQ(drv.window_size(r.inst.slot(ih)), 32u * 512);
+    const u32 buf = 0x4000;
+    CHECK_EQ(r.call("read", {ih, buf, 16}, 1)[0], 16u);
+    CHECK(std::memcmp(&r.ram[buf], &r.image[64 * 512], 16) == 0);   // offset 0 = partition start
+    CHECK_EQ(r.call("seek", {ih, 0, 32 * 512}, 1)[0], 0u);           // end of partition
+    CHECK_EQ(r.call("read", {ih, buf, 16}, 1)[0], 0u);
+    CHECK_EQ(r.call("seek", {ih, 0, 32 * 512 + 1}, 1)[0], ClientInterface::kFail);
+    // Writes stay inside the partition.
+    r.ram[buf] = 0xAB;
+    CHECK_EQ(r.call("seek", {ih, 0, 32 * 512 - 1}, 1)[0], 0u);
+    CHECK_EQ(r.call("write", {ih, buf, 4}, 1)[0], 1u);
+    CHECK_EQ(r.image[96 * 512 - 1], 0xABu);
+    // Partition 3 is clipped to the image; 4 doesn't exist; whole disk without a number.
+    const u32 ih3 = r.call("open", {r.put_string("hd:3")}, 1)[0];
+    REQUIRE(ih3 != 0);
+    CHECK_EQ(drv.window_size(r.inst.slot(ih3)), 32u * 512);
+    CHECK_EQ(r.call("open", {r.put_string("hd:4")}, 1)[0], 0u);
+    CHECK_EQ(r.call("open", {r.put_string("hd:99999")}, 1)[0], 0u);
+    const u32 whole = r.call("open", {r.put_string("hd")}, 1)[0];
+    REQUIRE(whole != 0);
+    CHECK_EQ(drv.window_size(r.inst.slot(whole)), 128u * 512);
 }

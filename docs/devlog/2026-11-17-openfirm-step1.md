@@ -47,3 +47,11 @@
   offset read the same bytes. Both tests are tightened and all mutations
   are caught now.
 - 181/181 tests pass.
+
+## Step 4 (same day): partitions
+
+- `ApplePartitionMap` (Inside Macintosh: Devices layout) and
+  `BlockWindow`. `DiskDriver` opens `hd:N` as partition N, clipped to the
+  image; `hd` and `hd:,file` open the whole disk; a missing partition
+  fails the open.
+- Sabotage: 8 mutations, all caught. 183/183 tests pass.

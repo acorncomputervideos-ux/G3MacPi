@@ -18,7 +18,8 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | Reaching the client interface from guest code (CPU hook) | ✅ step 2 |
 | Instances: open/close/read/write/seek, instance-to-package/-path; disk and console drivers | ✅ step 3 |
 | Memory: claim/release | ✅ step 3 |
-| call-method; disk methods (block-size, read-blocks, ...); partitions (Apple Partition Map) and HFS files | to do |
+| Disk partitions (Apple Partition Map): `hd:N` opens partition N | ✅ step 4 |
+| call-method; disk methods (block-size, read-blocks, ...); HFS/HFS+ files (the `,\\:tbxi` part) | to do |
 | Virtual-memory services (translations, map) | to do, if Mac OS needs them |
 | B&W device tree contents (needs a real device-tree dump) | to do |
 | Forth subset for the boot script (`interpret`) | to do |
@@ -76,9 +77,11 @@ Choices:
 - Arguments of the last component start at its first `:`. For example,
   `hd:9,\\:tbxi` passes `9,\\:tbxi`. `instance-to-path` appends `:args`
   (exact Apple formatting to verify).
-- `DiskDriver` doesn't interpret partition or file arguments yet: every
-  instance sees the whole disk at byte granularity, with read-modify-write
-  for partial sectors. Reads at the end return fewer bytes, then 0.
+- `DiskDriver`: with a leading number in the arguments (`9` or
+  `9,file`), the instance sees only that Apple Partition Map partition
+  (offset 0 = its first byte); otherwise it sees the whole disk. The file
+  part isn't interpreted yet. Access is at byte granularity, with
+  read-modify-write for partial sectors. Reads at the end return fewer bytes, then 0.
 - `ConsoleDriver`: writes go to a sink (the boot log); reads return 0
   bytes. The value Apple's firmware returns when no key is waiting is
   to verify.

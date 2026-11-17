@@ -86,15 +86,42 @@ namespace {
 constexpr u32 kSector = BlockDevice::kSectorSize;
 }
 
-bool DiskDriver::open(u32 slot, const char*)
+bool DiskDriver::open(u32 slot, const char* args)
 {
-    pos_[slot % InstanceTable::kMaxInstances] = 0;
+    const u32 s = slot % InstanceTable::kMaxInstances;
+    pos_[s] = 0;
+    base_[s] = 0;
+    size_[s] = disk_.sector_count() * kSector;
+    part_[s] = 0;
+    if (args == nullptr || args[0] < '0' || args[0] > '9')
+        return true;  // no partition: the whole disk
+    u32 n = 0;
+    for (const char* p = args; *p >= '0' && *p <= '9'; ++p) {
+        n = n * 10 + static_cast<u32>(*p - '0');
+        if (n > ApplePartitionMap::kMaxPartitions)
+            return false;
+    }
+    if (!map_.read(disk_))
+        return false;
+    const ApmPartition* p = map_.partition(n);
+    if (!p)
+        return false;
+    const u64 disk_bytes = disk_.sector_count() * kSector;
+    const u64 start = static_cast<u64>(p->start) * kSector;
+    u64 len = static_cast<u64>(p->blocks) * kSector;
+    if (start >= disk_bytes)
+        return false;
+    if (len > disk_bytes - start)
+        len = disk_bytes - start;  // clip a map entry that runs past the image
+    base_[s] = start;
+    size_[s] = len;
+    part_[s] = n;
     return true;
 }
 
 bool DiskDriver::seek(u32 slot, u64 pos)
 {
-    if (pos > disk_.sector_count() * kSector)
+    if (pos > size_[slot % InstanceTable::kMaxInstances])
         return false;
     pos_[slot % InstanceTable::kMaxInstances] = pos;
     return true;
@@ -102,14 +129,15 @@ bool DiskDriver::seek(u32 slot, u64 pos)
 
 s32 DiskDriver::read(u32 slot, u8* buf, u32 len)
 {
-    u64& pos = pos_[slot % InstanceTable::kMaxInstances];
-    const u64 size = disk_.sector_count() * kSector;
+    const u32 sl = slot % InstanceTable::kMaxInstances;
+    u64& pos = pos_[sl];
+    const u64 size = size_[sl];
     if (len > 0x7FFFFFFFu)
         len = 0x7FFFFFFFu;
     u32 done = 0;
     while (done < len && pos < size) {
-        const u64 lba = pos / kSector;
-        const u32 off = static_cast<u32>(pos % kSector);
+        const u64 lba = (base_[sl] + pos) / kSector;
+        const u32 off = static_cast<u32>((base_[sl] + pos) % kSector);
         u32 n = kSector - off;
         if (n > len - done)
             n = len - done;
@@ -125,16 +153,17 @@ s32 DiskDriver::read(u32 slot, u8* buf, u32 len)
 
 s32 DiskDriver::write(u32 slot, const u8* buf, u32 len)
 {
-    u64& pos = pos_[slot % InstanceTable::kMaxInstances];
-    const u64 size = disk_.sector_count() * kSector;
+    const u32 sl = slot % InstanceTable::kMaxInstances;
+    u64& pos = pos_[sl];
+    const u64 size = size_[sl];
     if (disk_.read_only())
         return -1;
     if (len > 0x7FFFFFFFu)
         len = 0x7FFFFFFFu;
     u32 done = 0;
     while (done < len && pos < size) {
-        const u64 lba = pos / kSector;
-        const u32 off = static_cast<u32>(pos % kSector);
+        const u64 lba = (base_[sl] + pos) / kSector;
+        const u32 off = static_cast<u32>((base_[sl] + pos) % kSector);
         u32 n = kSector - off;
         if (n > len - done)
             n = len - done;
