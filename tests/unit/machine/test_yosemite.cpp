@@ -115,3 +115,32 @@ TEST_CASE("machine/yosemite/macio_moves_with_its_bar")
     p.config_write(0x04, 0x0, 0x3);             // decoding off: unmapped
     CHECK_EQ(p.mapped_base(), 0u);
 }
+
+TEST_CASE("machine/yosemite/macio_dbdma_cell_and_conflict_rollback")
+{
+    static u8 ram[64 * 1024];
+    static u8 other[0x1000];
+    YosemiteConfig cfg;
+    cfg.ram = ram;
+    cfg.ram_size = sizeof ram;
+    YosemiteMachine m(cfg);
+    REQUIRE(m.ok());
+    Paddington& p = m.macio();
+    p.config_write(0x10, 0x80800000u, 0xF);
+    p.config_write(0x04, 0x2, 0x3);
+    // DBDMA channel 4 cmdptr (little-endian register) through the bus.
+    REQUIRE(m.bus().write32(0x80800000u + Paddington::kDbdmaOffset + 0x40C, 0x00100000u));
+    CHECK_EQ(p.dbdma().channel(4).command_pointer(), 0x00001000u);  // byte-swapped: 0x1000
+
+    // Something else already decodes where the VIA would land: the move
+    // fails, mac-io ends up unmapped, and the other region is untouched.
+    other[0] = 0x5A;
+    REQUIRE(m.bus().map_ram(0xA0000000u + Paddington::kViaOffset, other, sizeof other));
+    p.config_write(0x10, 0xA0000000u, 0xF);
+    CHECK_EQ(p.mapped_base(), 0u);
+    u8 v = 0;
+    CHECK(m.bus().read8(0xA0000000u + Paddington::kViaOffset, v));
+    CHECK_EQ(v, 0x5Au);
+    CHECK(!m.bus().read8(0xA0000000u + Paddington::kDbdmaOffset, v));  // rolled back
+    CHECK(!m.bus().read8(0xA0000000u + Paddington::kPicOffset + 0x20, v));
+}

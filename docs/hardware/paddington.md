@@ -11,7 +11,11 @@ Code: `core/devices/macio/paddington.*`. Tests: `tests/unit/machine/test_yosemit
 | Interrupt controller | BAR + 0x00000 | QEMU Old World layout — **to verify for Paddington** |
 | VIA (Cuda) | BAR + 0x16000 | QEMU Old World layout — **to verify** |
 | VIA interrupt | controller input 18 (0x12) | QEMU `OLDWORLD_CUDA_IRQ` — **to verify** |
-| Not modelled yet | DBDMA (+0x08000), SCC (+0x13000), IDE (+0x20000/+0x21000), NVRAM, audio, floppy | QEMU layout for reference |
+| DBDMA controller | BAR + 0x08000 (16 channels × 0x100), see dbdma.md | QEMU Old World layout — **to verify** |
+| Not modelled yet | SCC (+0x13000), IDE (+0x20000/+0x21000), NVRAM, audio, floppy | QEMU layout for reference |
 
 The cells appear on the physical bus when BAR 0 is non-zero and memory
 decoding is enabled, and move/disappear when software changes either.
+If any cell would overlap another bus region, mac-io stays unmapped and only
+the cells it had already mapped are rolled back; the other region is left
+untouched.

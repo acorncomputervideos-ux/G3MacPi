@@ -7,7 +7,7 @@
 namespace g3 {
 
 Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
-    : bus_(bus), via_(scheduler), cuda_(via_, scheduler)
+    : bus_(bus), via_(scheduler), cuda_(via_, scheduler), dbdma_(bus)
 {
     cfg_.init_header(0x106B, 0x0017, revision, 0xFF0000);
     cfg_.define_bar(0, kBarSize, false);
@@ -29,6 +29,7 @@ void Paddington::unmap_cells()
         return;
     bus_.unmap(mapped_base_ + kPicOffset);
     bus_.unmap(mapped_base_ + kViaOffset);
+    bus_.unmap(mapped_base_ + kDbdmaOffset);
     mapped_base_ = 0;
 }
 
@@ -44,13 +45,25 @@ void Paddington::update_mapping()
         return;
     // If a cell overlaps something else on the bus, software assigned a bad
     // address; the cells then stay unmapped (as a decode conflict would).
-    const bool ok = bus_.map_mmio(want + kPicOffset, HeathrowPic::kWindowSize, &pic_) &&
-                    bus_.map_mmio(want + kViaOffset, Via6522::kWindowSize, &via_);
-    if (ok) {
+    // Only the cells mapped here are rolled back, never the other device.
+    struct Cell { u32 offset; u32 size; MmioDevice* dev; };
+    const Cell cells[] = {
+        {kPicOffset, HeathrowPic::kWindowSize, &pic_},
+        {kDbdmaOffset, DbdmaController::kWindowSize, &dbdma_},
+        {kViaOffset, Via6522::kWindowSize, &via_},
+    };
+    constexpr u32 kCells = sizeof cells / sizeof cells[0];
+    u32 mapped = 0;
+    while (mapped < kCells &&
+           bus_.map_mmio(want + cells[mapped].offset, cells[mapped].size, cells[mapped].dev))
+        ++mapped;
+    if (mapped == kCells) {
         mapped_base_ = want;
-    } else {
-        bus_.unmap(want + kPicOffset);
-        bus_.unmap(want + kViaOffset);
+        return;
+    }
+    while (mapped > 0) {
+        --mapped;
+        bus_.unmap(want + cells[mapped].offset);
     }
 }
 
