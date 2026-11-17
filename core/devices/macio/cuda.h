@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// core/devices/macio/cuda.h — the Cuda microcontroller (ADB, real-time
+// clock, parameter RAM, power control) as seen through the VIA.
+//
+// Protocol (docs/hardware/via-cuda.md; Linux via-cuda.c host side and QEMU
+// cuda.c device side agree):
+//   Port B bit 3 TREQ (Cuda -> host, active low), bit 4 TACK and bit 5 TIP
+//   (host -> Cuda, active low). Bytes move through the VIA shift register;
+//   ACR bit 4 (SR_OUT) gives the direction. Every byte step ends with the
+//   Cuda raising the VIA shift-register interrupt.
+//   Host -> Cuda: TIP asserted with the first byte in SR; each TACK toggle
+//     delivers the next byte; TIP negated ends the packet.
+//   Cuda -> host: Cuda asserts TREQ + interrupt ("attention"); the host
+//     reads SR and asserts TIP; each TIP/TACK edge loads the next byte; TREQ
+//     is negated together with the last byte; TIP negated ends it.
+//   Idle sync: with TIP negated, TREQ follows TACK.
+// Packets: type 0 ADB, 1 Cuda command, 2 error. Command replies are
+//   CUDA_PACKET, 0, command, data... ; errors ERROR_PACKET, code, CUDA_PACKET,
+//   command (code 2 unknown command, 5 bad parameters).
+// ADB devices are not attached yet: every ADB command gets a "no response"
+// reply (flag bit 0x02, as the Linux driver interprets it).
+
+#ifndef G3_CORE_DEVICES_MACIO_CUDA_H
+#define G3_CORE_DEVICES_MACIO_CUDA_H
+
+#include "core/common/types.h"
+#include "core/devices/macio/via6522.h"
+#include "core/sched/scheduler.h"
+
+namespace g3 {
+
+class Cuda final : public ViaPeripheral {
+public:
+    // Port B bits.
+    static constexpr u8 kTREQ = 0x08;
+    static constexpr u8 kTACK = 0x10;
+    static constexpr u8 kTIP = 0x20;
+    // Packet types (Linux include/uapi/linux/adb.h).
+    static constexpr u8 kAdbPacket = 0, kCudaPacket = 1, kErrorPacket = 2;
+    // Commands (Linux include/uapi/linux/cuda.h).
+    enum Command : u8 {
+        kWarmStart = 0x00, kAutopoll = 0x01, kGet6805Addr = 0x02, kGetTime = 0x03,
+        kGetPram = 0x07, kSet6805Addr = 0x08, kSetTime = 0x09, kPowerDown = 0x0A,
+        kPowerUpTime = 0x0B, kSetPram = 0x0C, kMsReset = 0x0D, kSendDfac = 0x0E,
+        kResetSystem = 0x11, kSetIpl = 0x12, kSetAutoRate = 0x14, kGetAutoRate = 0x16,
+        kSetDeviceList = 0x19, kGetDeviceList = 0x1A, kGetSetIic = 0x22,
+    };
+    static constexpr u32 kPramSize = 256;  // to verify for the B&W's Cuda
+    static constexpr u32 kMaxPacket = 64;
+
+    using EventCallback = void (*)(void* context);
+
+    Cuda(Via6522& via, Scheduler& scheduler);
+
+    // Delay between a host action and the Cuda's shift-register interrupt.
+    void set_response_delay_ps(u64 ps) { delay_ps_ = ps; }
+    // Real-time clock, seconds since 1904-01-01 at the current guest time.
+    void set_rtc(u32 seconds_since_1904);
+    u32 rtc() const;
+    u8* pram() { return pram_; }
+    void set_power_callbacks(EventCallback power_down, EventCallback reset, void* context);
+    bool autopoll_enabled() const { return autopoll_; }
+
+    // ViaPeripheral
+    void via_port_b_changed(u8 value, u8 driven) override;
+    void via_sr_written(u8) override {}
+    void via_sr_read() override {}
+
+private:
+    enum class State { Idle, Receiving, Sending };
+
+    void signal_byte();             // schedule the SR interrupt
+    static void sr_event(void* ctx, u64 now);
+    void set_treq(bool asserted);
+    void process_packet();
+    void reply_cuda(u8 command, const u8* data, u32 len);
+    void reply_error(u8 code, u8 command);
+    void queue_reply(const u8* bytes, u32 len);
+    void load_next_out_byte();
+
+    Via6522& via_;
+    Scheduler& sched_;
+    u64 delay_ps_ = 20000000;  // 20 us
+    Scheduler::Handle pending_ = Scheduler::kInvalidHandle;
+
+    State state_ = State::Idle;
+    bool tip_ = false, tack_ = false;  // asserted?
+    u8 in_[kMaxPacket] = {};
+    u32 in_len_ = 0;
+    u8 out_[kMaxPacket] = {};
+    u32 out_len_ = 0, out_pos_ = 0;
+    bool out_pending_ = false;
+
+    u64 rtc_base_ps_ = 0;
+    u32 rtc_base_seconds_ = 0;
+    u8 pram_[kPramSize] = {};
+    bool autopoll_ = false;
+    u8 autopoll_rate_ms_ = 11;  // reset value: to verify
+    u16 device_list_ = 0;
+    EventCallback power_down_ = nullptr, reset_ = nullptr;
+    void* power_ctx_ = nullptr;
+};
+
+} // namespace g3
+
+#endif // G3_CORE_DEVICES_MACIO_CUDA_H
