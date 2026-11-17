@@ -29,10 +29,3 @@ platform/**/*.o
 platform/**/*.d
 core/**/*.o
 core/**/*.d
-
-# Objects/libraries built by the Circle make system next to sources
-port/**/*.o
-port/**/*.d
-port/**/*.a
-third_party/dingusppc/**/*.o
-third_party/dingusppc/**/*.d

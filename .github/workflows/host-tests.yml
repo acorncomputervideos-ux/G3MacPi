@@ -27,15 +27,5 @@ jobs:
       - name: Unit tests
         run: ./build/host/g3_unit_tests
 
-      - name: DingusPPC CPU test suite (vs. baseline)
-        run: tools/run-dppc-cpu-tests.sh build/host/dppc_cpu_tests build/dppc_cpu_tests.log
-
-      - name: Upload DingusPPC CPU test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dppc-cpu-tests-${{ matrix.compiler }}
-          path: build/dppc_cpu_tests.log
-
       - name: Core portability rules
         run: tools/check-core.sh

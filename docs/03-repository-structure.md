@@ -39,10 +39,6 @@ G3MacPi/
 │   │                            later the IDisplay/IInput/IAudio/... interfaces); same rules as core/
 │   ├── circle/                  Circle-backed implementations
 │   └── host/                    Linux implementations (headless; optional SDL2)
-├── port/                        DingusPPC <-> host glue (plan ADR-0010)
-│   ├── loguru/                  replacement for DingusPPC's logging library
-│   ├── baremetal/               bare-metal specifics (mutex, test entry points)
-│   └── circle/                  Makefile building libg3dppc.a for the Pi
 ├── app/
 │   ├── circle/                  kernel.cpp, main.cpp, multicore, config menu, Makefile
 │   └── host/                    g3macpi-host command-line runner
@@ -57,8 +53,7 @@ G3MacPi/
 ├── sdcard/                      config.txt, g3macpi.ini template, layout README
 ├── tools/                       scripts: make-sdcard, vector generators, image tools
 └── third_party/
-    ├── circle-stdlib/           git submodule v21 (Circle Step51.1.1 + newlib)
-    └── dingusppc/               vendored DingusPPC (GPL-3.0), see UPSTREAM.md
+    └── circle/                  git submodule, pinned release tag
 ```
 
 ## Rules enforced by the build
