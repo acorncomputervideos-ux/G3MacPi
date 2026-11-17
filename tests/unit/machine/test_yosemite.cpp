@@ -5,7 +5,9 @@
 // finds Paddington behind it, assigns its BAR, enables a VIA timer interrupt
 // through the interrupt controller, and handles the interrupt.
 
+#include "core/common/endian.h"
 #include "core/machine/yosemite.h"
+#include "core/storage/block_device.h"
 #include "tests/framework/g3test.h"
 #include "tests/unit/cpu/ppc_asm.h"
 
@@ -164,4 +166,59 @@ TEST_CASE("machine/yosemite/macio_nvram_cell")
     u8 v = 0;
     CHECK(!m.bus().read8(nv, v));                       // unmapped with the BAR
     CHECK_EQ(p.nvram().byte(0x1FFF), 0x5Au);            // contents kept
+}
+
+TEST_CASE("machine/yosemite/macio_ide0_disk_with_dma_and_irqs")
+{
+    static u8 ram[256 * 1024];
+    static u8 image[64 * 512];
+    for (u32 i = 0; i < sizeof image; ++i)
+        image[i] = static_cast<u8>(i * 7 + 1);
+    RamBlockDevice disk(image, sizeof image);
+    YosemiteConfig cfg;
+    cfg.ram = ram;
+    cfg.ram_size = sizeof ram;
+    YosemiteMachine m(cfg);
+    REQUIRE(m.ok());
+    Paddington& p = m.macio();
+    p.ide(0).bus().attach(0, &disk);
+    p.config_write(0x10, 0x80800000u, 0xF);
+    p.config_write(0x04, 0x2, 0x3);
+    PhysicalBus& bus = m.bus();
+    const u32 ide = 0x80800000u + Paddington::kIdeOffset[0];
+    const u32 chan = 0x80800000u + Paddington::kDbdmaOffset +
+                     Paddington::kIdeDmaChannel[0] * DbdmaController::kChannelStride;
+    auto pic_le32 = [&](u32 off) {
+        u32 v = 0;
+        bus.read32(0x80800000u + Paddington::kPicOffset + off, v);
+        return byteswap32(v);
+    };
+    CHECK_EQ(chan, 0x80808B00u);                  // QEMU's IDE0 DBDMA address
+
+    // Descriptors (little-endian): INPUT_LAST of 2 sectors with an
+    // "interrupt always" bit, then STOP.
+    auto st16 = [&](u32 a, u16 v) { ram[a] = static_cast<u8>(v); ram[a + 1] = static_cast<u8>(v >> 8); };
+    auto st32 = [&](u32 a, u32 v) { st16(a, static_cast<u16>(v)); st16(a + 2, static_cast<u16>(v >> 16)); };
+    st16(0x1000, 1024);
+    st16(0x1002, static_cast<u16>((dbdma::INPUT_LAST << 12) | (3 << 4)));
+    st32(0x1004, 0x8000);
+    st16(0x1012, static_cast<u16>(dbdma::STOP << 12));
+    REQUIRE(bus.write32(chan + 0x0C, byteswap32(0x1000)));
+
+    bus.write8(ide + 2 * 0x10, 2);                // sector count
+    bus.write8(ide + 3 * 0x10, 9);                // LBA 9
+    bus.write8(ide + 4 * 0x10, 0);
+    bus.write8(ide + 5 * 0x10, 0);
+    bus.write8(ide + 6 * 0x10, 0xE0);
+    bus.write8(ide + 7 * 0x10, 0xC8);             // READ DMA
+    CHECK_EQ(pic_le32(0x2C) & (1u << Paddington::kIdeIrq[0]), 0u);
+    REQUIRE(bus.write32(chan, byteswap32((dbdma::RUN << 16) | dbdma::RUN)));
+    CHECK(pic_le32(0x2C) & (1u << Paddington::kIdeIrq[0]));     // INTRQ level
+    CHECK(pic_le32(0x20) & (1u << Paddington::kIdeDmaIrq[0]));  // DMA event latched
+    CHECK_EQ(ram[0x8000], image[9 * 512]);
+    CHECK_EQ(ram[0x8000 + 1023], image[11 * 512 - 1]);
+    u8 st = 0;
+    bus.read8(ide + 7 * 0x10, st);                // status read clears INTRQ
+    CHECK_EQ(st & 0x89, 0u);
+    CHECK_EQ(pic_le32(0x2C) & (1u << Paddington::kIdeIrq[0]), 0u);
 }

@@ -27,7 +27,7 @@ Status key: **have** = consulted in this repo's research; **need** = must obtain
 | *Designing PCI Cards and Drivers for Power Macintosh Computers* (Apple) | NDRV, Name Registry, PCI | need (M5) |
 | IEEE 1275-1994 + PowerPC and CHRP bindings | Open Firmware | need (M5) |
 | CMD646 / PCI0646 datasheet | Ultra ATA | need (M9) |
-| ATA/ATAPI-4 specification | ATA layer | need (M6) |
+| ATA/ATAPI-5 and -6 standards (T13 1321D, 1410D) | ATA protocol (`core/devices/ata`) | used for facts (2026-11-17) |
 | Inside Macintosh / ADB & Cuda documentation | ADB, Cuda | need (M4) |
 | ATI Rage 128 register reference | Graphics | need (M9) |
 

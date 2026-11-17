@@ -12,8 +12,9 @@
 //      0x00000 interrupt controller
 //      0x08000 DBDMA controller (32 channels x 0x80)
 //      0x16000 VIA (Cuda)
+//      0x20000 IDE0, 0x21000 IDE1 (DBDMA channels 0x16 and 0x1A)
 //      0x60000 NVRAM (8 KB, one byte every 16 bytes)
-//    Other cells (SCC 0x13000, IDE 0x20000/0x21000, ...)
+//    Other cells (SCC 0x13000, ...)
 //    are not modelled yet and read as unmapped.
 // The cells are mapped on the physical bus whenever BAR 0 is non-zero and
 // memory decoding is enabled in the command register, and moved/removed
@@ -25,6 +26,7 @@
 #include "core/devices/macio/cuda.h"
 #include "core/devices/macio/dbdma.h"
 #include "core/devices/macio/heathrow_pic.h"
+#include "core/devices/macio/macio_ide.h"
 #include "core/devices/macio/nvram.h"
 #include "core/devices/macio/via6522.h"
 #include "core/devices/pci/pci.h"
@@ -43,6 +45,11 @@ public:
     // Interrupt controller input used by the VIA/Cuda (QEMU Old World
     // OLDWORLD_CUDA_IRQ = 0x12; to verify for the B&W).
     static constexpr u32 kViaIrq = 18;
+    // IDE cells (QEMU Old World layout and IRQs; to verify for the B&W).
+    static constexpr u32 kIdeOffset[2] = {0x20000, 0x21000};
+    static constexpr u32 kIdeDmaChannel[2] = {0x16, 0x1A};
+    static constexpr u32 kIdeIrq[2] = {13, 14};
+    static constexpr u32 kIdeDmaIrq[2] = {2, 3};
 
     Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision = 0);
 
@@ -51,6 +58,7 @@ public:
     Cuda& cuda() { return cuda_; }
     DbdmaController& dbdma() { return dbdma_; }
     MacioNvram& nvram() { return nvram_; }
+    MacioIde& ide(u32 n) { return ide_[n & 1]; }
     u32 mapped_base() const { return mapped_base_; }
 
     // PciFunction
@@ -68,6 +76,10 @@ private:
     Cuda cuda_;
     DbdmaController dbdma_;
     MacioNvram nvram_;
+    MacioIde ide_[2];
+    struct IrqRoute { HeathrowPic* pic; u32 irq; };
+    IrqRoute ide_irq_[2] = {};
+    IrqRoute ide_dma_irq_[2] = {};
     u32 mapped_base_ = 0;  // 0 = not mapped
 };
 

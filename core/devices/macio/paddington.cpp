@@ -14,6 +14,21 @@ Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
     via_.set_irq_output([](void* c, bool a) {
         static_cast<HeathrowPic*>(c)->set_input(kViaIrq, a);
     }, &pic_);
+    for (u32 i = 0; i < 2; ++i) {
+        ide_irq_[i] = {&pic_, kIdeIrq[i]};
+        ide_dma_irq_[i] = {&pic_, kIdeDmaIrq[i]};
+        ide_[i].set_irq([](void* c, bool a) {
+            auto* r = static_cast<IrqRoute*>(c);
+            r->pic->set_input(r->irq, a);
+        }, &ide_irq_[i]);
+        DbdmaChannel& ch = dbdma_.channel(kIdeDmaChannel[i]);
+        ide_[i].attach_dma(&ch);
+        ch.set_irq([](void* c) {  // DBDMA interrupts are pulses (edge)
+            auto* r = static_cast<IrqRoute*>(c);
+            r->pic->set_input(r->irq, true);
+            r->pic->set_input(r->irq, false);
+        }, &ide_dma_irq_[i]);
+    }
 }
 
 void Paddington::config_write(u32 reg, u32 value, u32 byte_enables)
@@ -31,6 +46,8 @@ void Paddington::unmap_cells()
     bus_.unmap(mapped_base_ + kViaOffset);
     bus_.unmap(mapped_base_ + kDbdmaOffset);
     bus_.unmap(mapped_base_ + kNvramOffset);
+    bus_.unmap(mapped_base_ + kIdeOffset[0]);
+    bus_.unmap(mapped_base_ + kIdeOffset[1]);
     mapped_base_ = 0;
 }
 
@@ -53,6 +70,8 @@ void Paddington::update_mapping()
         {kDbdmaOffset, DbdmaController::kWindowSize, &dbdma_},
         {kViaOffset, Via6522::kWindowSize, &via_},
         {kNvramOffset, MacioNvram::kWindowSize, &nvram_},
+        {kIdeOffset[0], MacioIde::kWindowSize, &ide_[0]},
+        {kIdeOffset[1], MacioIde::kWindowSize, &ide_[1]},
     };
     constexpr u32 kCells = sizeof cells / sizeof cells[0];
     u32 mapped = 0;
