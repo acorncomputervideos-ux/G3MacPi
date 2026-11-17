@@ -140,3 +140,18 @@ TEST_CASE("mem/bus/cpu_runs_from_bus")
     cpu.run(2);
     CHECK_EQ(cpu.state().gpr[3], 42u);
 }
+
+TEST_CASE("mem/bus/unmap_and_remap")
+{
+    RecordingDevice dev;
+    PhysicalBus bus;
+    REQUIRE(bus.map_mmio(0x80000000u, 0x100, &dev));
+    u32 v = 0;
+    CHECK(bus.read32(0x80000000u, v));
+    CHECK(bus.unmap(0x80000000u));
+    CHECK(!bus.unmap(0x80000000u));
+    CHECK(!bus.read32(0x80000000u, v));          // gone (bus error)
+    REQUIRE(bus.map_mmio(0x90000000u, 0x100, &dev));
+    CHECK(bus.read32(0x90000010u, v));
+    CHECK_EQ(dev.log.back().offset, 0x10u);
+}

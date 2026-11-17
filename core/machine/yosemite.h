@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// core/machine/yosemite.h — the Power Macintosh G3 (Blue & White),
+// board "Yosemite", PowerMac1,1: wiring of all emulated parts.
+//
+// Topology (docs/hardware/yosemite.md; items marked * are from emulator
+// sources only and must be verified with a real device tree):
+//   RAM at 0, boot ROM at 0xFFF00000 (1 MB)
+//   PCI bus 0: 00:00.0 Grackle (MPC106) host bridge
+//              00:0D.0 DEC 21154 PCI-to-PCI bridge *
+//   behind the bridge: device 5 Paddington mac-io *
+//   VIA (Cuda) -> interrupt controller input 18 * -> CPU external interrupt
+//   CPU 350 MHz, bus 100 MHz, time base = bus / 4 (25 MHz)
+//
+// RAM and ROM buffers are supplied by the caller (the core does not
+// allocate).
+
+#ifndef G3_CORE_MACHINE_YOSEMITE_H
+#define G3_CORE_MACHINE_YOSEMITE_H
+
+#include "core/cpu/ppc750/ppc750.h"
+#include "core/devices/macio/paddington.h"
+#include "core/devices/pci/grackle.h"
+#include "core/devices/pci/pci_bridge.h"
+#include "core/machine/execution_loop.h"
+#include "core/mem/physical_bus.h"
+#include "core/sched/scheduler.h"
+
+namespace g3 {
+
+struct YosemiteConfig {
+    u8* ram = nullptr;
+    u32 ram_size = 0;               // bytes
+    const u8* rom = nullptr;        // optional boot ROM image
+    u32 rom_size = 0;
+    u64 cpu_hz = 350000000;
+    u64 bus_hz = 100000000;
+    u32 rtc_seconds_since_1904 = 0;
+};
+
+class YosemiteMachine {
+public:
+    static constexpr u32 kRomBase = 0xFFF00000u;
+    static constexpr u32 kBridgeDevfn = 0x0D << 3;   // * to verify
+    static constexpr u32 kMacIoDevfn = 0x05 << 3;    // * to verify (behind the bridge)
+
+    explicit YosemiteMachine(const YosemiteConfig& config);
+
+    // False if the configuration could not be wired (e.g. no RAM).
+    bool ok() const { return ok_; }
+
+    void run_for(u64 picoseconds) { loop_.run_for(picoseconds); }
+
+    ppc::Ppc750& cpu() { return cpu_; }
+    PhysicalBus& bus() { return bus_; }
+    Scheduler& scheduler() { return sched_; }
+    Grackle& grackle() { return grackle_; }
+    PciToPciBridge& bridge() { return bridge_; }
+    Paddington& macio() { return macio_; }
+
+private:
+    // Construction order matters: the bus and scheduler come first.
+    Scheduler sched_;
+    PhysicalBus bus_;
+    ppc::Ppc750 cpu_;
+    ExecutionLoop loop_;
+    Grackle grackle_;
+    PciToPciBridge bridge_;
+    Paddington macio_;
+    bool ok_ = false;
+};
+
+} // namespace g3
+
+#endif // G3_CORE_MACHINE_YOSEMITE_H

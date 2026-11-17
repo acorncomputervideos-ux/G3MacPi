@@ -50,6 +50,10 @@ public:
     bool map_rom(u32 base, const u8* data, u32 size);
     bool map_mmio(u32 base, u32 size, MmioDevice* device);
 
+    // Removes the region starting exactly at 'base'. Returns false if there
+    // is none. Used when software moves a PCI device's registers (BAR write).
+    bool unmap(u32 base);
+
     void set_unmapped_policy(UnmappedPolicy p) { unmapped_policy_ = p; }
 
     // Host pointer to 'len' bytes of RAM at physical address 'pa', or

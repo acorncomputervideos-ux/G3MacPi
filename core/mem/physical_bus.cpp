@@ -26,6 +26,19 @@ bool PhysicalBus::add(const Region& r)
     return true;
 }
 
+bool PhysicalBus::unmap(u32 base)
+{
+    for (u32 i = 0; i < count_; ++i) {
+        if (regions_[i].base != base)
+            continue;
+        regions_[i] = regions_[count_ - 1];
+        --count_;
+        last_hit_ = nullptr;
+        return true;
+    }
+    return false;
+}
+
 bool PhysicalBus::map_ram(u32 base, u8* data, u32 size)
 {
     return data && add(Region{base, size, Kind::Ram, data, nullptr});
