@@ -598,7 +598,9 @@ TEST_CASE("firmware/client/open_partition")
     RamBlockDevice disk(r.image.data(), r.image.size());
     DiskDriver drv(disk);
     r.inst.bind(r.f.disk, &drv);
-    const u32 ih = r.call("open", {r.put_string("hd:2,\\\\:tbxi")}, 1)[0];
+    // A file part needs a file system: this partition has none.
+    CHECK_EQ(r.call("open", {r.put_string("hd:2,\\\\:tbxi")}, 1)[0], 0u);
+    const u32 ih = r.call("open", {r.put_string("hd:2")}, 1)[0];
     REQUIRE(ih != 0);
     CHECK_EQ(drv.partition(r.inst.slot(ih)), 2u);
     CHECK_EQ(drv.window_size(r.inst.slot(ih)), 32u * 512);
@@ -622,4 +624,84 @@ TEST_CASE("firmware/client/open_partition")
     const u32 whole = r.call("open", {r.put_string("hd")}, 1)[0];
     REQUIRE(whole != 0);
     CHECK_EQ(drv.window_size(r.inst.slot(whole)), 128u * 512);
+}
+
+// --- files on an HFS Plus partition --------------------------------------------------
+
+#include "tests/unit/storage/hfsplus_image.h"
+
+namespace {
+
+// Disk: partition map (2 entries) + the test HFS Plus volume as partition 2.
+std::vector<u8> bootable_disk(const hfs_image::Volume& vol)
+{
+    const u32 hfs_start = 64, hfs_blocks = static_cast<u32>(vol.img.d.size() / 512);
+    std::vector<u8> d(static_cast<size_t>(hfs_start + hfs_blocks) * 512);
+    be16(d, 0, 0x4552);
+    be16(d, 2, 512);
+    be32(d, 4, hfs_start + hfs_blocks);
+    const char* types[] = {"Apple_partition_map", "Apple_HFS"};
+    const u32 starts[] = {1, hfs_start}, counts[] = {63, hfs_blocks};
+    for (u32 i = 0; i < 2; ++i) {
+        const size_t b = 512u * (1 + i);
+        be16(d, b, 0x504D);
+        be32(d, b + 4, 2);
+        be32(d, b + 8, starts[i]);
+        be32(d, b + 12, counts[i]);
+        std::memcpy(&d[b + 48], types[i], std::strlen(types[i]));
+    }
+    std::memcpy(&d[hfs_start * 512], vol.img.d.data(), vol.img.d.size());
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("firmware/client/open_boot_file_on_hfsplus")
+{
+    InstRig r;
+    hfs_image::Volume vol;
+    std::vector<u8> img = bootable_disk(vol);
+    RamBlockDevice disk(img.data(), img.size());
+    DiskDriver drv(disk);
+    r.inst.bind(r.f.disk, &drv);
+
+    // The Mac OS boot path: blessed folder, file of type 'tbxi'.
+    const u32 ih = r.call("open", {r.put_string("hd:2,\\\\:tbxi")}, 1)[0];
+    REQUIRE(ih != 0);
+    CHECK(drv.is_file(r.inst.slot(ih)));
+    std::vector<u8> got(12000, 0xEE);
+    const u32 buf = 0x2000;  // RAM is 64 KB; the file is 10000 bytes
+    CHECK_EQ(r.call("read", {ih, buf, 12000}, 1)[0], static_cast<u32>(hfs_image::Volume::kRomSize));
+    CHECK(std::memcmp(&r.ram[buf], vol.rom.data(), vol.rom.size()) == 0);
+    CHECK_EQ(r.call("read", {ih, buf, 10}, 1)[0], 0u);             // end of file
+    CHECK_EQ(r.call("seek", {ih, 0, 5000}, 1)[0], 0u);
+    CHECK_EQ(r.call("read", {ih, buf, 4}, 1)[0], 4u);
+    CHECK(std::memcmp(&r.ram[buf], &vol.rom[5000], 4) == 0);
+    CHECK_EQ(r.call("seek", {ih, 0, 10001}, 1)[0], ClientInterface::kFail);  // beyond the file
+    CHECK_EQ(r.call("write", {ih, buf, 4}, 1)[0], ClientInterface::kFail);   // read-only
+
+    // A path from the root, case-insensitive; a fragmented file.
+    const u32 ih2 = r.call("open", {r.put_string("hd:2,\\system folder\\Fragmented")}, 1)[0];
+    REQUIRE(ih2 != 0);
+    CHECK_EQ(r.call("seek", {ih2, 0, 9 * 4096 + 7}, 1)[0], 0u);    // in the overflow extents
+    CHECK_EQ(r.call("read", {ih2, buf, 16}, 1)[0], 16u);
+    CHECK(std::memcmp(&r.ram[buf], &vol.frag[9 * 4096 + 7], 16) == 0);
+    // Reading the first instance again after the second moved the volume's caches.
+    CHECK_EQ(r.call("seek", {ih, 0, 0}, 1)[0], 0u);
+    CHECK_EQ(r.call("read", {ih, buf, 8}, 1)[0], 8u);
+    CHECK(std::memcmp(&r.ram[buf], vol.rom.data(), 8) == 0);
+
+    // Failures: no such file or type, a folder, a file mid-path, bad type length,
+    // a non-HFS partition.
+    for (const char* bad : {"hd:2,\\\\:zzzz", "hd:2,\\System Folder\\Nope", "hd:2,\\System Folder",
+                            "hd:2,\\ReadMe\\x", "hd:2,\\ReadMe\\:TEXT", "hd:2,\\\\:tbx",
+                            "hd:2,\\\\:tbxix", "hd:1,\\\\:tbxi"})
+        CHECK_EQ(r.call("open", {r.put_string(bad)}, 1)[0], 0u);
+    // The raw partition is still available without a file part.
+    const u32 raw = r.call("open", {r.put_string("hd:2")}, 1)[0];
+    REQUIRE(raw != 0);
+    CHECK(!drv.is_file(r.inst.slot(raw)));
+    CHECK_EQ(r.call("seek", {raw, 0, 1024}, 1)[0], 0u);
+    CHECK_EQ(r.call("read", {raw, buf, 2}, 1)[0], 2u);
+    CHECK_EQ(r.ram[buf], 0x48u);                                    // 'H+' volume header
 }

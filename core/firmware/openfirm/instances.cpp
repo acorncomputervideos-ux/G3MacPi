@@ -116,6 +116,82 @@ bool DiskDriver::open(u32 slot, const char* args)
     base_[s] = start;
     size_[s] = len;
     part_[s] = n;
+    file_[s] = false;
+    const char* comma = args;
+    while (*comma && *comma != ',')
+        ++comma;
+    if (*comma == ',' && comma[1] != '\0')
+        return open_file(s, comma + 1);
+    return true;
+}
+
+bool DiskDriver::mount_partition(u32 s)
+{
+    if (fs_base_ == base_[s] && fs_.mounted())
+        return true;
+    window_.set(base_[s] / kSector, size_[s] / kSector);
+    fs_base_ = ~0ull;
+    if (!fs_.mount(window_))
+        return false;
+    fs_base_ = base_[s];
+    return true;
+}
+
+bool DiskDriver::open_file(u32 s, const char* spec)
+{
+    if (!mount_partition(s))
+        return false;
+    u32 folder = HfsPlusVolume::kRootFolder;
+    const char* p = spec;
+    if (p[0] == '\\' && p[1] == '\\') {
+        folder = fs_.blessed_folder();
+        p += 2;
+        if (folder == 0)
+            return false;  // volume isn't bootable
+    } else if (p[0] == '\\') {
+        p += 1;
+    }
+    HfsEntry e;
+    bool have_file = false;
+    while (*p) {
+        if (*p == ':') {  // :TYPE — exactly four characters
+            const char* t = p + 1;
+            if (!t[0] || !t[1] || !t[2] || !t[3] || t[4])
+                return false;
+            const u32 type = (static_cast<u32>(static_cast<u8>(t[0])) << 24) |
+                             (static_cast<u32>(static_cast<u8>(t[1])) << 16) |
+                             (static_cast<u32>(static_cast<u8>(t[2])) << 8) | static_cast<u8>(t[3]);
+            if (!fs_.find_by_type(folder, type, e))
+                return false;
+            have_file = true;
+            break;
+        }
+        char name[256];
+        u32 n = 0;
+        while (*p && *p != '\\' && *p != ':' && n < sizeof name - 1)
+            name[n++] = *p++;
+        name[n] = '\0';
+        if (*p == '\\')
+            ++p;
+        if (n == 0)
+            continue;
+        if (!fs_.lookup(folder, name, e))
+            return false;
+        if (e.folder) {
+            folder = e.id;
+            have_file = false;
+        } else {
+            if (*p)
+                return false;  // a file in the middle of the path
+            have_file = true;
+        }
+    }
+    if (!have_file)
+        return false;  // opening a folder isn't supported
+    file_[s] = true;
+    fork_[s] = e.data;
+    size_[s] = e.data.logical_size;
+    pos_[s] = 0;
     return true;
 }
 
@@ -132,6 +208,14 @@ s32 DiskDriver::read(u32 slot, u8* buf, u32 len)
     const u32 sl = slot % InstanceTable::kMaxInstances;
     u64& pos = pos_[sl];
     const u64 size = size_[sl];
+    if (file_[sl]) {
+        if (!mount_partition(sl))
+            return -1;
+        const s64 n = fs_.read(fork_[sl], pos, buf, len > 0x7FFFFFFFu ? 0x7FFFFFFFu : len);
+        if (n > 0)
+            pos += static_cast<u64>(n);
+        return static_cast<s32>(n);
+    }
     if (len > 0x7FFFFFFFu)
         len = 0x7FFFFFFFu;
     u32 done = 0;
@@ -156,8 +240,8 @@ s32 DiskDriver::write(u32 slot, const u8* buf, u32 len)
     const u32 sl = slot % InstanceTable::kMaxInstances;
     u64& pos = pos_[sl];
     const u64 size = size_[sl];
-    if (disk_.read_only())
-        return -1;
+    if (disk_.read_only() || file_[sl])
+        return -1;  // files are read-only
     if (len > 0x7FFFFFFFu)
         len = 0x7FFFFFFFu;
     u32 done = 0;

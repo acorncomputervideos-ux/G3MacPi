@@ -20,6 +20,7 @@
 #include "core/firmware/openfirm/device_tree.h"
 #include "core/storage/apple_partition_map.h"
 #include "core/storage/block_device.h"
+#include "core/storage/hfsplus.h"
 
 namespace g3::of {
 
@@ -71,8 +72,13 @@ private:
 // read with seek + read). Open arguments "N" or "N,file" select
 // partition N of the Apple Partition Map: the instance then sees only
 // that partition (offset 0 = its first byte). Without a leading number
-// the instance sees the whole disk. The file part is kept for the file
-// system layer (not interpreted yet).
+// the instance sees the whole disk.
+//
+// A file part opens a file of the partition's HFS Plus volume instead,
+// read-only (docs/firmware/open-firmware.md, "File paths"):
+//   \\       the blessed System Folder;  \  the root folder;
+//   name\name  path components;            :TYPE  first file of Finder type TYPE.
+// e.g. "9,\\:tbxi" = the file of type 'tbxi' in partition 9's blessed folder.
 class DiskDriver final : public PackageDriver {
 public:
     explicit DiskDriver(BlockDevice& disk) : disk_(disk) {}
@@ -83,10 +89,19 @@ public:
     u64 position(u32 slot) const { return pos_[slot % InstanceTable::kMaxInstances]; }
     u64 window_size(u32 slot) const { return size_[slot % InstanceTable::kMaxInstances]; }
     u32 partition(u32 slot) const { return part_[slot % InstanceTable::kMaxInstances]; }
+    bool is_file(u32 slot) const { return file_[slot % InstanceTable::kMaxInstances]; }
 
 private:
+    bool mount_partition(u32 slot);
+    bool open_file(u32 slot, const char* spec);
+
     BlockDevice& disk_;
     ApplePartitionMap map_;
+    BlockWindow window_{disk_, 0, 0};
+    HfsPlusVolume fs_;
+    u64 fs_base_ = ~0ull;                           // window the volume is mounted on
+    bool file_[InstanceTable::kMaxInstances] = {};
+    HfsFork fork_[InstanceTable::kMaxInstances];
     u64 pos_[InstanceTable::kMaxInstances] = {};
     u64 base_[InstanceTable::kMaxInstances] = {};   // bytes
     u64 size_[InstanceTable::kMaxInstances] = {};   // bytes

@@ -58,6 +58,7 @@ private:
 class BlockWindow final : public BlockDevice {
 public:
     BlockWindow(BlockDevice& base, u64 first, u64 count) : base_(base), first_(first), count_(count) {}
+    void set(u64 first, u64 count) { first_ = first; count_ = count; }
     u64 sector_count() const override { return count_; }
     bool read_only() const override { return base_.read_only(); }
     bool read(u64 lba, u32 n, u8* out) override

@@ -19,7 +19,8 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | Instances: open/close/read/write/seek, instance-to-package/-path; disk and console drivers | ✅ step 3 |
 | Memory: claim/release | ✅ step 3 |
 | Disk partitions (Apple Partition Map): `hd:N` opens partition N | ✅ step 4 |
-| call-method; disk methods (block-size, read-blocks, ...); HFS/HFS+ files (the `,\\:tbxi` part) | to do |
+| Files on HFS Plus partitions: `hd:N,\\:tbxi` opens the boot file | ✅ step 5 |
+| Plain HFS volumes; call-method and disk methods (block-size, read-blocks, ...) | to do |
 | Virtual-memory services (translations, map) | to do, if Mac OS needs them |
 | B&W device tree contents (needs a real device-tree dump) | to do |
 | Forth subset for the boot script (`interpret`) | to do |
@@ -87,6 +88,25 @@ Choices:
   to verify.
 - A service whose part isn't attached (no memory map or instance table)
   is reported missing by `test` and fails as an unknown service.
+
+## File paths (step 5)
+
+After the partition number and a comma, the arguments name a file on the
+partition's HFS Plus volume (`core/storage/hfsplus`):
+
+| Syntax | Meaning |
+|---|---|
+| `\\` (two backslashes) at the start | the blessed System Folder (volume header finderInfo[0]) |
+| `\` at the start | the root folder |
+| `name\name` | path components, ASCII case-insensitive |
+| `:TYPE` (last) | the first file of Finder type TYPE in the folder reached so far |
+
+So `hd:9,\\:tbxi` opens the file of type `tbxi` (the `Mac OS ROM`
+file) in partition 9's blessed folder. This is how Mac OS 9 boot paths
+look, but the exact grammar Apple's firmware accepts is to verify. File
+instances are read-only; seek is limited to the file size. A file part
+on a partition without HFS Plus, a missing file, a folder, or a file in
+the middle of a path makes `open` fail.
 
 ## Modelling choices
 
