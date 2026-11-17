@@ -55,15 +55,15 @@ u32 Grackle::data_read(u32 offset, u32 size)
 {
     const u32 a = config_address_;
     u32 dword = 0xFFFFFFFFu;  // disabled or no device: master abort
-    if ((a & kEnable) && bus_of(a) == 0)
-        dword = bus0_.config_read(devfn_of(a), reg_of(a));
+    if (a & kEnable)
+        dword = bus0_.config_read_routed(0, bus_of(a), devfn_of(a), reg_of(a));
     return le_reg_read(dword, offset & 3, size);
 }
 
 void Grackle::data_write(u32 offset, u32 size, u32 value)
 {
     const u32 a = config_address_;
-    if (!(a & kEnable) || bus_of(a) != 0)
+    if (!(a & kEnable))
         return;
     // Merge into a dword image and pass the byte enables of the bytes written.
     const u32 lane = offset & 3;
@@ -71,7 +71,7 @@ void Grackle::data_write(u32 offset, u32 size, u32 value)
     for (u32 i = 0; i < size && lane + i < 4; ++i)
         enables |= 1u << (lane + i);
     const u32 dword = le_reg_write(0, lane, size, value);
-    bus0_.config_write(devfn_of(a), reg_of(a), dword, enables);
+    bus0_.config_write_routed(0, bus_of(a), devfn_of(a), reg_of(a), dword, enables);
 }
 
 } // namespace g3

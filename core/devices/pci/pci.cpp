@@ -4,6 +4,8 @@
 
 #include "core/devices/pci/pci.h"
 
+#include "core/devices/pci/pci_bridge.h"
+
 namespace g3 {
 
 void PciConfigSpace::init_header(u16 vendor, u16 device, u8 revision, u32 class_code,
@@ -72,6 +74,41 @@ void PciBus::config_write(u32 devfn, u32 reg, u32 value, u32 byte_enables)
 {
     if (PciFunction* f = function(devfn))
         f->config_write(reg & 0xFC, value, byte_enables);
+}
+
+namespace {
+PciToPciBridge* claiming_bridge(PciBus& bus, u32 target)
+{
+    for (u32 devfn = 0; devfn < 256; ++devfn) {
+        PciFunction* f = bus.function(devfn);
+        PciToPciBridge* b = f ? f->as_bridge() : nullptr;
+        if (b && b->forwards_bus(target))
+            return b;
+    }
+    return nullptr;
+}
+} // namespace
+
+u32 PciBus::config_read_routed(u32 own_number, u32 bus, u32 devfn, u32 reg)
+{
+    if (bus == own_number)
+        return config_read(devfn, reg);
+    PciToPciBridge* b = claiming_bridge(*this, bus);
+    if (!b)
+        return 0xFFFFFFFFu;
+    return b->secondary_bus().config_read_routed(b->secondary_number(), bus, devfn, reg);
+}
+
+void PciBus::config_write_routed(u32 own_number, u32 bus, u32 devfn, u32 reg, u32 value,
+                                 u32 byte_enables)
+{
+    if (bus == own_number) {
+        config_write(devfn, reg, value, byte_enables);
+        return;
+    }
+    if (PciToPciBridge* b = claiming_bridge(*this, bus))
+        b->secondary_bus().config_write_routed(b->secondary_number(), bus, devfn, reg, value,
+                                               byte_enables);
 }
 
 } // namespace g3

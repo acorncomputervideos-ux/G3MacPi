@@ -13,8 +13,12 @@
 
 namespace g3 {
 
+class PciToPciBridge;
+
 class PciFunction {
 public:
+    // Non-null if this function is a PCI-to-PCI bridge (no RTTI on bare metal).
+    virtual PciToPciBridge* as_bridge() { return nullptr; }
     // reg: dword-aligned offset 0x00..0xFC.
     virtual u32 config_read(u32 reg) = 0;
     virtual void config_write(u32 reg, u32 value, u32 byte_enables) = 0;
@@ -64,6 +68,15 @@ public:
     // Absent functions read all ones (master abort) and ignore writes.
     u32 config_read(u32 devfn, u32 reg) const;
     void config_write(u32 devfn, u32 reg, u32 value, u32 byte_enables);
+
+    // Configuration access by bus number, starting at this (root) bus whose
+    // number is 'own_number': bus == own_number is a type 0 cycle here;
+    // otherwise it is forwarded through the bridge whose secondary..
+    // subordinate range contains it (PCI-to-PCI Bridge Architecture spec
+    // 3.2.1). No claiming bridge: master abort.
+    u32 config_read_routed(u32 own_number, u32 bus, u32 devfn, u32 reg);
+    void config_write_routed(u32 own_number, u32 bus, u32 devfn, u32 reg, u32 value,
+                             u32 byte_enables);
 
 private:
     PciFunction* slots_[256] = {};

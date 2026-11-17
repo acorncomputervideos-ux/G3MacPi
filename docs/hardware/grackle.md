@@ -25,7 +25,11 @@ Code: `core/devices/pci/{pci,grackle}.*`. Tests: `tests/unit/devices/test_grackl
 ## Not yet / to verify
 - Decode range of the two ports (we map 4 KB each; the MPC106 manual's
   "address map B" ranges must be checked).
-- Buses > 0: need the DEC 21154 PCI-PCI bridge model (00:0D.0 per
-  DingusPPC's Yosemite definition — to verify with a device-tree dump).
+- Buses > 0: routed through PCI-to-PCI bridges (`pci_bridge.*`, type 1
+  header per the PCI-to-PCI Bridge Architecture spec). The B&W's DEC 21154
+  (IDs 1011:0026) sits at 00:0D.0 per DingusPPC's Yosemite definition —
+  **to verify** with a device-tree dump. Not modelled: memory/I/O window
+  forwarding (devices are mapped directly on the physical bus), secondary
+  status W1C bits, secondary bus reset, 21154 chip registers.
 - MPC106 revision ID on the B&W part; memory controller behaviour; error
   status registers (write-1-to-clear); PCI-to-system address maps.

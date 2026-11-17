@@ -15,8 +15,8 @@
 //  - The bridge itself is bus 0, device 0, function 0; PCI IDs 1057:0002
 //    (Motorola MPC106); class 0x060000 (host bridge).
 // Not modelled yet: the memory-controller registers (0x80-0xFF are plain
-// storage), PCI-to-memory/ROM address maps, error reporting, bus > 0
-// (needs the DEC21154 bridge model).
+// storage), PCI-to-memory/ROM address maps, error reporting. Buses > 0 are
+// reached through PCI-to-PCI bridges attached to bus 0 (pci_bridge.h).
 
 #ifndef G3_CORE_DEVICES_PCI_GRACKLE_H
 #define G3_CORE_DEVICES_PCI_GRACKLE_H
