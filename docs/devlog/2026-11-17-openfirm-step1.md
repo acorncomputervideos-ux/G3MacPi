@@ -27,3 +27,23 @@
   0) still raise a program exception.
 - Sabotage: not returning to LR, and claiming every opcode-0 word, are
   both caught. 178/178 tests pass.
+
+## Step 3 (same day): memory and instances
+
+- `of::MemoryMap` (claim/release with exact and aligned claims, merging,
+  double-free refusal) and `of::InstanceTable` (ihandles, per-package C++
+  drivers, device-specifier arguments).
+- Drivers: `DiskDriver` (byte-addressed seek/read/write over a
+  BlockDevice, per-instance position, read-modify-write) and
+  `ConsoleDriver` (output to a sink).
+- Client services: claim, release, open, close, read, write, seek,
+  instance-to-package, instance-to-path; `test` reports only the parts
+  that are attached.
+- Two of my test expectations were wrong (a miscounted path length, and
+  0x9000 being 4 KB-aligned itself); the code was right.
+- Sabotage: 11 mutations. Two first went unnoticed: read-modify-write,
+  because the test checked the wrong neighbour; and a shared disk
+  position, because the test image's byte pattern repeated so the wrong
+  offset read the same bytes. Both tests are tightened and all mutations
+  are caught now.
+- 181/181 tests pass.

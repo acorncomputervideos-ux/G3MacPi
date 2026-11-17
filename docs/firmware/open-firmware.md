@@ -16,8 +16,10 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | Device tree storage, walking, properties, paths, aliases | ✅ step 1 |
 | Client interface: tree services, test, milliseconds, exit/enter | ✅ step 1 |
 | Reaching the client interface from guest code (CPU hook) | ✅ step 2 |
-| Instances: open/close/read/write/seek, call-method | to do |
-| Memory: claim/release, translations | to do |
+| Instances: open/close/read/write/seek, instance-to-package/-path; disk and console drivers | ✅ step 3 |
+| Memory: claim/release | ✅ step 3 |
+| call-method; disk methods (block-size, read-blocks, ...); partitions (Apple Partition Map) and HFS files | to do |
+| Virtual-memory services (translations, map) | to do, if Mac OS needs them |
 | B&W device tree contents (needs a real device-tree dump) | to do |
 | Forth subset for the boot script (`interpret`) | to do |
 
@@ -55,6 +57,33 @@ on real hardware (tested).
 Open question, to be answered by logging Mac OS's calls: whether the
 boot code calls with address translation on. For now the argument
 addresses are physical.
+
+## Memory and instances (step 3)
+
+| Fact | Source |
+|---|---|
+| `claim ( virt size align -- base )`: align 0 claims exactly at virt; otherwise the firmware picks an aligned free area; −1 on failure. `release ( virt size -- )` | IEEE 1275 + PowerPC binding |
+| `open ( device-specifier -- ihandle )` returns 0 on failure; the arguments of the last path component go to the package's open | IEEE 1275 |
+| `read`/`write ( ihandle addr len -- actual )`, −1 on error; `seek ( ihandle pos.hi pos.lo -- status )`, 0 ok / −1 error | IEEE 1275 |
+| `instance-to-package ( ihandle -- phandle )`; `instance-to-path ( ihandle buf buflen -- length )` | IEEE 1275 |
+
+Choices:
+- claim maps 1:1 (real mode), doesn't round sizes, and picks the
+  lowest aligned free area. Real Apple firmware may allocate top-down;
+  that will show up in logs if it matters.
+- The memory map refuses a double free. Ranges are kept merged.
+- ihandles are `0x20000000 + slot` (32 instances).
+- Arguments of the last component start at its first `:`. For example,
+  `hd:9,\\:tbxi` passes `9,\\:tbxi`. `instance-to-path` appends `:args`
+  (exact Apple formatting to verify).
+- `DiskDriver` doesn't interpret partition or file arguments yet: every
+  instance sees the whole disk at byte granularity, with read-modify-write
+  for partial sectors. Reads at the end return fewer bytes, then 0.
+- `ConsoleDriver`: writes go to a sink (the boot log); reads return 0
+  bytes. The value Apple's firmware returns when no key is waiting is
+  to verify.
+- A service whose part isn't attached (no memory map or instance table)
+  is reported missing by `test` and fails as an unknown service.
 
 ## Modelling choices
 

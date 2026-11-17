@@ -56,8 +56,171 @@ u32 ClientInterface::call(u32 args_addr)
     return 0;
 }
 
+bool ClientInterface::provides(const char* n) const
+{
+    static const char* const core[] = {
+        "test", "peer", "child", "parent", "getproplen", "getprop", "nextprop",
+        "setprop", "finddevice", "canon", "package-to-path", "milliseconds", "exit",
+        "enter",
+    };
+    static const char* const memory[] = {"claim", "release"};
+    static const char* const inst[] = {
+        "open", "close", "read", "write", "seek", "instance-to-package", "instance-to-path",
+    };
+    for (const char* k : core)
+        if (cstr::equal(n, k))
+            return true;
+    if (memory_)
+        for (const char* k : memory)
+            if (cstr::equal(n, k))
+                return true;
+    if (instances_)
+        for (const char* k : inst)
+            if (cstr::equal(n, k))
+                return true;
+    return false;
+}
+
+u32 ClientInterface::copy_out(u32 addr, const char* text, u32 len, u32 buflen)
+{
+    const u32 n = len + 1 < buflen ? len + 1 : buflen;  // with the NUL if it fits
+    return write_bytes(addr, reinterpret_cast<const u8*>(text), n) ? len : kFail;
+}
+
+bool ClientInterface::dispatch_memory()
+{
+    const char* s = service_;
+    if (cstr::equal(s, "claim")) {  // ( virt size align -- base )
+        if (nargs_ < 3 || nrets_ < 1)
+            return false;
+        ret(0, memory_->claim(arg(0), arg(1), arg(2)));
+        return true;
+    }
+    if (cstr::equal(s, "release")) {  // ( virt size -- )
+        if (nargs_ < 2)
+            return false;
+        memory_->release(arg(0), arg(1));
+        return true;
+    }
+    return false;
+}
+
+bool ClientInterface::dispatch_instances()
+{
+    const char* s = service_;
+    InstanceTable& t = *instances_;
+    if (cstr::equal(s, "open")) {  // ( device-specifier -- ihandle )
+        if (nargs_ < 1 || nrets_ < 1)
+            return false;
+        char spec[kMaxString];
+        Ihandle ih = 0;
+        if (read_string(arg(0), spec, sizeof spec)) {
+            // Arguments of the last component: after its first ':'.
+            const char* last = spec;
+            for (const char* p = spec; *p; ++p)
+                if (*p == '/')
+                    last = p + 1;
+            const char* args = "";
+            for (const char* p = last; *p; ++p)
+                if (*p == ':') {
+                    args = p + 1;
+                    break;
+                }
+            const Phandle ph = tree_.find(spec);
+            if (ph != kNone)
+                ih = t.open(ph, args);
+        }
+        ret(0, ih);
+        return true;
+    }
+    if (cstr::equal(s, "close")) {  // ( ihandle -- )
+        if (nargs_ < 1)
+            return false;
+        t.close(arg(0));
+        return true;
+    }
+    if (cstr::equal(s, "read") || cstr::equal(s, "write")) {  // ( ihandle addr len -- actual )
+        if (nargs_ < 3 || nrets_ < 1)
+            return false;
+        PackageDriver* d = t.driver(arg(0));
+        if (!d) {
+            ret(0, kFail);
+            return true;
+        }
+        const bool is_read = s[0] == 'r';
+        const u32 slot = t.slot(arg(0));
+        u32 addr = arg(1), left = arg(2), total = 0;
+        bool error = false;
+        while (left > 0) {
+            const u32 chunk = left < sizeof xfer_ ? left : static_cast<u32>(sizeof xfer_);
+            s32 n;
+            if (is_read) {
+                n = d->read(slot, xfer_, chunk);
+                if (n > 0 && !write_bytes(addr, xfer_, static_cast<u32>(n)))
+                    n = -1;
+            } else {
+                bool ok = true;
+                for (u32 i = 0; ok && i < chunk; ++i)
+                    ok = mem_.read8(addr + i, xfer_[i]);
+                n = ok ? d->write(slot, xfer_, chunk) : -1;
+            }
+            if (n < 0) {
+                error = total == 0;
+                break;
+            }
+            total += static_cast<u32>(n);
+            addr += static_cast<u32>(n);
+            left -= static_cast<u32>(n);
+            if (static_cast<u32>(n) < chunk)
+                break;  // short transfer: end of data
+        }
+        ret(0, error ? kFail : total);
+        return true;
+    }
+    if (cstr::equal(s, "seek")) {  // ( ihandle pos.hi pos.lo -- status )
+        if (nargs_ < 3 || nrets_ < 1)
+            return false;
+        PackageDriver* d = t.driver(arg(0));
+        const u64 pos = (static_cast<u64>(arg(1)) << 32) | arg(2);
+        ret(0, d && d->seek(t.slot(arg(0)), pos) ? 0 : kFail);
+        return true;
+    }
+    if (cstr::equal(s, "instance-to-package")) {  // ( ihandle -- phandle )
+        if (nargs_ < 1 || nrets_ < 1)
+            return false;
+        const Phandle ph = t.package(arg(0));
+        ret(0, ph == kNone ? kFail : ph);
+        return true;
+    }
+    if (cstr::equal(s, "instance-to-path")) {  // ( ihandle buf buflen -- length )
+        if (nargs_ < 3 || nrets_ < 1)
+            return false;
+        if (!t.valid(arg(0))) {
+            ret(0, kFail);
+            return true;
+        }
+        char path[kMaxString];
+        u32 len = tree_.path_of(t.package(arg(0)), path, sizeof path);
+        const char* a = t.args(arg(0));
+        if (*a && len + 1 < sizeof path) {
+            path[len++] = ':';
+            for (; *a && len + 1 < sizeof path; ++a)
+                path[len++] = *a;
+            path[len] = '\0';
+        }
+        ret(0, len < sizeof path ? copy_out(arg(1), path, len, arg(2)) : kFail);
+        return true;
+    }
+    return false;
+}
+
 bool ClientInterface::dispatch()
 {
+    if (memory_ && dispatch_memory())
+        return true;
+    if (instances_ && dispatch_instances())
+        return true;
+
     const char* s = service_;
     auto is = [s](const char* name) { return cstr::equal(s, name); };
     auto need = [this](u32 n, u32 r) { return nargs_ >= n && nrets_ >= r; };
@@ -66,17 +229,7 @@ bool ClientInterface::dispatch()
     if (is("test")) {  // ( name -- missing? )
         if (!need(1, 1))
             return false;
-        static const char* const known[] = {
-            "test", "peer", "child", "parent", "getproplen", "getprop", "nextprop",
-            "setprop", "finddevice", "canon", "package-to-path", "milliseconds", "exit",
-            "enter",
-        };
-        u32 missing = kFail;
-        if (read_string(arg(0), name, sizeof name))
-            for (const char* k : known)
-                if (cstr::equal(name, k))
-                    missing = 0;
-        ret(0, missing);
+        ret(0, read_string(arg(0), name, sizeof name) && provides(name) ? 0 : kFail);
         return true;
     }
     if (is("peer") || is("child") || is("parent")) {  // ( phandle -- phandle' )

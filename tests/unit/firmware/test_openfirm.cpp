@@ -362,3 +362,152 @@ TEST_CASE("firmware/client/other_opcode0_words_still_fault")
     }
     CHECK_EQ(fw.calls(), 0u);
 }
+
+// --- memory map ------------------------------------------------------------------------
+
+TEST_CASE("firmware/memory/claim_release")
+{
+    MemoryMap m;
+    REQUIRE(m.add_free(0x00000000, 0x00400000));   // 4 MB
+    CHECK_EQ(m.claim(0x00100000, 0x1000, 0), 0x00100000u);      // exact
+    CHECK_EQ(m.range_count(), 2u);
+    CHECK_EQ(m.claim(0x00100800, 0x100, 0), MemoryMap::kFail);  // already taken
+    CHECK_EQ(m.claim(0x003FF000, 0x2000, 0), MemoryMap::kFail);  // runs past the end
+    // Aligned claims: lowest fit.
+    CHECK_EQ(m.claim(0, 0x10, 0x1000), 0x00000000u);
+    CHECK_EQ(m.claim(0, 0x10, 0x1000), 0x00001000u);
+    CHECK_EQ(m.claim(0, 0x100000, 0x100000), 0x00200000u);      // 0x100000 is partly taken
+    CHECK_EQ(m.claim(0, 0x10, 3), MemoryMap::kFail);            // align not a power of two
+    CHECK_EQ(m.claim(0, 0, 0x10), MemoryMap::kFail);            // empty
+    CHECK(!m.is_free(0x00200000, 1));
+    // Release merges neighbours again.
+    CHECK(m.release(0x00200000, 0x100000));
+    CHECK(m.release(0x00100000, 0x1000));
+    CHECK(m.release(0x00000000, 0x10));
+    CHECK(m.release(0x00001000, 0x10));
+    CHECK_EQ(m.range_count(), 1u);
+    CHECK_EQ(m.free_bytes(), 0x00400000u);
+    CHECK(!m.release(0x00001000, 0x10));                        // double free refused
+    CHECK(m.is_free(0, 0x00400000));
+    // Top of the 32-bit space.
+    MemoryMap hi;
+    REQUIRE(hi.add_free(0xFFFF0000u, 0x10000));
+    CHECK_EQ(hi.claim(0, 0x10000, 0x10000), 0xFFFF0000u);
+    CHECK_EQ(hi.range_count(), 0u);
+}
+
+// --- instances through the client interface --------------------------------------------
+
+namespace {
+
+struct InstRig : CiRig {
+    std::vector<u8> image = std::vector<u8>(64 * 512);
+    RamBlockDevice disk{image.data(), image.size()};
+    DiskDriver disk_driver{disk};
+    ConsoleDriver console;
+    std::string out;
+    InstanceTable inst;
+    MemoryMap mem;
+    Phandle stdout_node;
+    InstRig()
+    {
+        for (size_t i = 0; i < image.size(); ++i)
+            image[i] = static_cast<u8>(i * 7 + (i >> 9) * 13);  // no short-period aliasing
+        stdout_node = f.t->add_node(f.macio, "escc", "13000");
+        inst.bind(f.disk, &disk_driver);
+        inst.bind(stdout_node, &console);
+        console.set_sink([](void* c, const char* t, u32 n) {
+            static_cast<std::string*>(c)->append(t, n);
+        }, &out);
+        mem.add_free(0x9000, 0x7000);
+        ci.set_instances(&inst);
+        ci.set_memory(&mem);
+    }
+};
+
+} // namespace
+
+TEST_CASE("firmware/client/open_read_seek_write_close")
+{
+    InstRig r;
+    const u32 ih = r.call("open", {r.put_string("hd:9,\\\\:tbxi")}, 1)[0];
+    REQUIRE(ih != 0);
+    CHECK(std::string(r.inst.args(ih)) == "9,\\\\:tbxi");
+    CHECK_EQ(r.call("instance-to-package", {ih}, 1)[0], r.f.disk);
+    const u32 buf = 0x4000;
+    CHECK_EQ(r.call("instance-to-path", {ih, buf, 200}, 1)[0], 50u);  // 40 + ":" + 9
+    CHECK(std::string(reinterpret_cast<const char*>(&r.ram[buf])) ==
+          "/pci@80000000/mac-io@10/ata@20000/disk@0:9,\\\\:tbxi");
+
+    // seek to an odd offset, read across a sector boundary.
+    CHECK_EQ(r.call("seek", {ih, 0, 1000}, 1)[0], 0u);
+    CHECK_EQ(r.call("read", {ih, buf, 700}, 1)[0], 700u);
+    CHECK_EQ(r.ram[buf], r.image[1000]);
+    CHECK_EQ(r.ram[buf + 699], r.image[1699]);
+    // Reading past the end returns what's there.
+    CHECK_EQ(r.call("seek", {ih, 0, 64 * 512 - 10}, 1)[0], 0u);
+    CHECK_EQ(r.call("read", {ih, buf, 100}, 1)[0], 10u);
+    CHECK_EQ(r.call("read", {ih, buf, 100}, 1)[0], 0u);
+    CHECK_EQ(r.call("seek", {ih, 0, 64 * 512 + 1}, 1)[0], ClientInterface::kFail);
+    CHECK_EQ(r.call("seek", {ih, 1, 0}, 1)[0], ClientInterface::kFail);   // 4 GB: beyond
+
+    // Write a partial sector (read-modify-write keeps the neighbours).
+    for (u32 i = 0; i < 4; ++i)
+        r.ram[buf + i] = static_cast<u8>(0xF0 + i);
+    const u8 before = r.image[2047];
+    const u8 after = r.image[2052];                      // same sector as the write
+    CHECK_EQ(r.call("seek", {ih, 0, 2048}, 1)[0], 0u);
+    CHECK_EQ(r.call("write", {ih, buf, 4}, 1)[0], 4u);
+    CHECK_EQ(r.image[2048], 0xF0u);
+    CHECK_EQ(r.image[2051], 0xF3u);
+    CHECK_EQ(r.image[2047], before);
+    CHECK_EQ(r.image[2052], after);
+
+    // A second instance has its own position.
+    const u32 ih2 = r.call("open", {r.put_string("/pci/mac-io/ata/disk")}, 1)[0];
+    REQUIRE(ih2 != 0);
+    CHECK(ih2 != ih);
+    CHECK_EQ(r.call("read", {ih2, buf, 4}, 1)[0], 4u);
+    CHECK(std::memcmp(&r.ram[buf], &r.image[0], 4) == 0);
+    CHECK_EQ(r.call("read", {ih, buf, 4}, 1)[0], 4u);    // ih continues after its write
+    CHECK(std::memcmp(&r.ram[buf], &r.image[2052], 4) == 0);
+    CHECK_EQ(r.inst.open_count(), 2u);
+    r.call("close", {ih}, 0);
+    CHECK_EQ(r.inst.open_count(), 1u);
+    CHECK_EQ(r.call("read", {ih, buf, 4}, 1)[0], ClientInterface::kFail);    // closed
+    CHECK_EQ(r.call("instance-to-package", {ih}, 1)[0], ClientInterface::kFail);
+    // No driver / no such node: open fails with 0.
+    CHECK_EQ(r.call("open", {r.put_string("/cpus")}, 1)[0], 0u);
+    CHECK_EQ(r.call("open", {r.put_string("/nowhere")}, 1)[0], 0u);
+}
+
+TEST_CASE("firmware/client/console_claim_and_test")
+{
+    InstRig r;
+    const u32 con = r.call("open", {r.put_string("/pci/mac-io/escc")}, 1)[0];
+    REQUIRE(con != 0);
+    const u32 msg = r.put_string("Hello from the guest\n");
+    CHECK_EQ(r.call("write", {con, msg, 21}, 1)[0], 21u);
+    CHECK(r.out == "Hello from the guest\n");
+    CHECK_EQ(r.call("read", {con, 0x4000, 10}, 1)[0], 0u);           // no input
+    // A large write goes through the bounce buffer in pieces.
+    std::vector<u8> big(1500, 'x');
+    std::memcpy(&r.ram[0x5000], big.data(), big.size());
+    CHECK_EQ(r.call("write", {con, 0x5000, 1500}, 1)[0], 1500u);
+    CHECK_EQ(r.out.size(), 21u + 1500u);
+
+    CHECK_EQ(r.call("claim", {0, 0x1000, 0x1000}, 1)[0], 0x9000u);  // lowest aligned fit
+    CHECK_EQ(r.call("claim", {0, 0x10, 0x1000}, 1)[0], 0xA000u);
+    CHECK_EQ(r.call("claim", {0xB000, 0x100, 0}, 1)[0], 0xB000u);
+    CHECK_EQ(r.call("claim", {0xB080, 0x100, 0}, 1)[0], ClientInterface::kFail);
+    r.call("release", {0xB000, 0x100}, 0);
+    CHECK_EQ(r.call("claim", {0xB080, 0x100, 0}, 1)[0], 0xB080u);
+
+    CHECK_EQ(r.call("test", {r.put_string("claim")}, 1)[0], 0u);
+    CHECK_EQ(r.call("test", {r.put_string("instance-to-path")}, 1)[0], 0u);
+    CiRig bare;  // without memory map and instances these are missing
+    CHECK_EQ(bare.call("test", {bare.put_string("claim")}, 1)[0], ClientInterface::kFail);
+    CHECK_EQ(bare.call("test", {bare.put_string("open")}, 1)[0], ClientInterface::kFail);
+    bare.call("open", {bare.put_string("/")}, 1);
+    CHECK_EQ(bare.status, ClientInterface::kFail);
+}

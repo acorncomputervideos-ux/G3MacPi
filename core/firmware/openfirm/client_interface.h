@@ -15,8 +15,9 @@
 //
 // Services so far: test, peer, child, parent, getproplen, getprop,
 // nextprop, setprop, finddevice, canon, package-to-path, milliseconds,
-// exit, enter. Instances (open/close/read/write/seek, call-method),
-// memory (claim/release) and interpret come in later steps.
+// exit, enter; with a MemoryMap: claim, release; with an InstanceTable:
+// open, close, read, write, seek, instance-to-package, instance-to-path.
+// call-method and interpret come in later steps.
 
 #ifndef G3_CORE_FIRMWARE_OPENFIRM_CLIENT_INTERFACE_H
 #define G3_CORE_FIRMWARE_OPENFIRM_CLIENT_INTERFACE_H
@@ -24,6 +25,8 @@
 #include "core/common/types.h"
 #include "core/cpu/ppc750/memory_interface.h"
 #include "core/firmware/openfirm/device_tree.h"
+#include "core/firmware/openfirm/instances.h"
+#include "core/firmware/openfirm/memory_map.h"
 
 namespace g3::of {
 
@@ -42,6 +45,11 @@ public:
     void set_exit(EventCallback cb, void* ctx) { exit_cb_ = cb; exit_ctx_ = ctx; }
     void set_enter(EventCallback cb, void* ctx) { enter_cb_ = cb; enter_ctx_ = ctx; }
     void set_clock(ClockCallback cb, void* ctx) { clock_cb_ = cb; clock_ctx_ = ctx; }
+    void set_memory(MemoryMap* m) { memory_ = m; }
+    void set_instances(InstanceTable* t) { instances_ = t; }
+
+    // True if `service` is implemented with the parts attached now.
+    bool provides(const char* service) const;
 
     // Handles one client call; returns the value for r3 (0 or kFail).
     u32 call(u32 args_addr);
@@ -60,6 +68,9 @@ private:
     void ret(u32 i, u32 v);
 
     bool dispatch();
+    bool dispatch_memory();
+    bool dispatch_instances();
+    u32 copy_out(u32 addr, const char* text, u32 len, u32 buflen);  // path-style result
 
     DeviceTree& tree_;
     ppc::MemoryInterface& mem_;
@@ -77,6 +88,9 @@ private:
     char service_[64] = {};
     u32 unknown_calls_ = 0;
     u8 setprop_buf_[4096] = {};
+    MemoryMap* memory_ = nullptr;
+    InstanceTable* instances_ = nullptr;
+    u8 xfer_[512] = {};  // bounce buffer for read/write
 };
 
 } // namespace g3::of
