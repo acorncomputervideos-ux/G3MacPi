@@ -12,6 +12,7 @@
 //      0x00000 interrupt controller
 //      0x08000 DBDMA controller (16 channels x 0x100)
 //      0x16000 VIA (Cuda)
+//      0x60000 NVRAM (8 KB, one byte every 16 bytes)
 //    Other cells (SCC 0x13000, IDE 0x20000/0x21000, ...)
 //    are not modelled yet and read as unmapped.
 // The cells are mapped on the physical bus whenever BAR 0 is non-zero and
@@ -24,6 +25,7 @@
 #include "core/devices/macio/cuda.h"
 #include "core/devices/macio/dbdma.h"
 #include "core/devices/macio/heathrow_pic.h"
+#include "core/devices/macio/nvram.h"
 #include "core/devices/macio/via6522.h"
 #include "core/devices/pci/pci.h"
 #include "core/mem/physical_bus.h"
@@ -37,6 +39,7 @@ public:
     static constexpr u32 kPicOffset = 0x00000;
     static constexpr u32 kDbdmaOffset = 0x08000;
     static constexpr u32 kViaOffset = 0x16000;
+    static constexpr u32 kNvramOffset = 0x60000;
     // Interrupt controller input used by the VIA/Cuda (QEMU Old World
     // OLDWORLD_CUDA_IRQ = 0x12; to verify for the B&W).
     static constexpr u32 kViaIrq = 18;
@@ -47,6 +50,7 @@ public:
     Via6522& via() { return via_; }
     Cuda& cuda() { return cuda_; }
     DbdmaController& dbdma() { return dbdma_; }
+    MacioNvram& nvram() { return nvram_; }
     u32 mapped_base() const { return mapped_base_; }
 
     // PciFunction
@@ -63,6 +67,7 @@ private:
     Via6522 via_;
     Cuda cuda_;
     DbdmaController dbdma_;
+    MacioNvram nvram_;
     u32 mapped_base_ = 0;  // 0 = not mapped
 };
 

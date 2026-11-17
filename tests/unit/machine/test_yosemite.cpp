@@ -144,3 +144,23 @@ TEST_CASE("machine/yosemite/macio_dbdma_cell_and_conflict_rollback")
     CHECK(!m.bus().read8(0xA0000000u + Paddington::kDbdmaOffset, v));  // rolled back
     CHECK(!m.bus().read8(0xA0000000u + Paddington::kPicOffset + 0x20, v));
 }
+
+TEST_CASE("machine/yosemite/macio_nvram_cell")
+{
+    static u8 ram[64 * 1024];
+    YosemiteConfig cfg;
+    cfg.ram = ram;
+    cfg.ram_size = sizeof ram;
+    YosemiteMachine m(cfg);
+    REQUIRE(m.ok());
+    Paddington& p = m.macio();
+    p.config_write(0x10, 0x80800000u, 0xF);
+    p.config_write(0x04, 0x2, 0x3);
+    const u32 nv = 0x80800000u + Paddington::kNvramOffset;
+    REQUIRE(m.bus().write8(nv + 0x1FFF * 16, 0x5A));   // last NVRAM byte
+    CHECK_EQ(p.nvram().byte(0x1FFF), 0x5Au);
+    p.config_write(0x04, 0x0, 0x3);
+    u8 v = 0;
+    CHECK(!m.bus().read8(nv, v));                       // unmapped with the BAR
+    CHECK_EQ(p.nvram().byte(0x1FFF), 0x5Au);            // contents kept
+}

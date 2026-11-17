@@ -12,7 +12,8 @@ Code: `core/devices/macio/paddington.*`. Tests: `tests/unit/machine/test_yosemit
 | VIA (Cuda) | BAR + 0x16000 | QEMU Old World layout — **to verify** |
 | VIA interrupt | controller input 18 (0x12) | QEMU `OLDWORLD_CUDA_IRQ` — **to verify** |
 | DBDMA controller | BAR + 0x08000 (16 channels × 0x100), see dbdma.md | QEMU Old World layout — **to verify** |
-| Not modelled yet | SCC (+0x13000), IDE (+0x20000/+0x21000), NVRAM, audio, floppy | QEMU layout for reference |
+| NVRAM | BAR + 0x60000, 8 KB at stride 16, see nvram.md | QEMU Old World layout — **to verify** |
+| Not modelled yet | SCC (+0x13000), IDE (+0x20000/+0x21000), audio, floppy | QEMU layout for reference |
 
 The cells appear on the physical bus when BAR 0 is non-zero and memory
 decoding is enabled, and move/disappear when software changes either.

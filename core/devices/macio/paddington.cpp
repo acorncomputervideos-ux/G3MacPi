@@ -30,6 +30,7 @@ void Paddington::unmap_cells()
     bus_.unmap(mapped_base_ + kPicOffset);
     bus_.unmap(mapped_base_ + kViaOffset);
     bus_.unmap(mapped_base_ + kDbdmaOffset);
+    bus_.unmap(mapped_base_ + kNvramOffset);
     mapped_base_ = 0;
 }
 
@@ -51,6 +52,7 @@ void Paddington::update_mapping()
         {kPicOffset, HeathrowPic::kWindowSize, &pic_},
         {kDbdmaOffset, DbdmaController::kWindowSize, &dbdma_},
         {kViaOffset, Via6522::kWindowSize, &via_},
+        {kNvramOffset, MacioNvram::kWindowSize, &nvram_},
     };
     constexpr u32 kCells = sizeof cells / sizeof cells[0];
     u32 mapped = 0;
