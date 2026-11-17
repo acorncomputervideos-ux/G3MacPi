@@ -27,3 +27,21 @@ Code: `core/devices/adb/adb.*`, ADB handling in `core/devices/macio/cuda.*`,
   one packet per tick only when the link is idle.
 - HID->ADB: Windows/GUI keys -> Command, Alt -> Option, Insert -> Help,
   PrintScreen/ScrollLock/Pause -> F13/F14/F15, NumLock -> keypad Clear.
+
+## Why the guest gets ADB and not USB
+
+The real Blue & White G3 has both (two USB 1.1 ports and one ADB port).
+The emulator gives the guest ADB first (ADR-0003) because:
+
+- the Cuda chip is needed anyway (clock, PRAM, power), and ADB runs
+  through it, so it costs two small device models;
+- an emulated USB host controller (descriptor lists in RAM, DMA, frame
+  timing, a root hub and HID devices that enumerate correctly) is several
+  times the work, and Mac OS 9's USB stack is timing-sensitive;
+- ADB works from the very first instruction of boot: firmware prompt,
+  startup key combinations and the Mac OS ROM need no USB stack loaded.
+
+The Pi's own USB keyboard and mouse are still USB on the host side: Circle
+reads them and `platform/common/hid_to_adb` translates them to ADB.
+A guest USB controller (OHCI), for passing real USB devices through to
+Mac OS, is planned as an optional extension in M9.

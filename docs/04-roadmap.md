@@ -29,7 +29,7 @@ The brief's milestones are kept, with three changes, each for a reason:
 | **M6** | Display, storage, input, audio | L | Paddington ATA + disk images (Apple Partition Map); simple framebuffer + our NDRV; ADB keyboard/mouse from Pi USB; Burgundy + DBDMA → HDMI audio |
 | **M7** | Mac OS 9 boot | XL | Happy Mac → Mac OS 9.2.2 desktop on the Pi 400; Finder usable; known-issue list maintained |
 | **M8** | Optimisation | XL | Profiling on Pi; memory fast paths; display dirty-rect conversion; PPC→AArch64 JIT with interpreter as reference; measured speed-ups recorded |
-| **M9** | Fidelity extensions | XL | CMD646 Ultra ATA; USB OHCI + guest HID; ATI Rage 128 (for ATI drivers); optional LLE boot of a user-dumped B&W boot ROM |
+| **M9** | Fidelity extensions | XL | CMD646 Ultra ATA; USB OHCI + guest HID and pass-through of real USB devices (storage, printers) to Mac OS; ATI Rage 128 (for ATI drivers); optional LLE boot of a user-dumped B&W boot ROM |
 
 ## Critical-path risks and early spikes
 
