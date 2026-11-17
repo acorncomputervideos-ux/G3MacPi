@@ -22,7 +22,7 @@ manuals leave undefined follow the hardware-derived vectors in
 | Exceptions: program (illegal/privileged/trap), sc, FP unavailable, alignment (lwarx/stwcx./lmw/stmw), machine check / checkstop, external, decrementer; rfi | **Done** | unit tests |
 | Floating point (Milestone 2b): all 750 FP arithmetic, fused multiply-add family, compares, frsp, fctiw[z], moves, fsel, fres, frsqrte, FPSCR instructions, FP loads/stores, FP-unavailable and FP-enabled exceptions | **Done** | all 2054 FP vectors pass; 18 unit tests; IEEE core checked against host FPU |
 | MMU (BAT, segments, hashed page table), DSI/ISI | **Not started** (Milestone 3): addresses are physical | — |
-| Disassembler | Not started (452 vectors available) | — |
+| Disassembler (`disasm.h`): simplified mnemonics, freestanding | **Done** | all 397 reference vectors (52 POWER/601/603-only encodings correctly shown as `dc.l`); 1 M random words cross-checked against the interpreter |
 
 ## Decisions and known deviations (to verify or complete)
 
@@ -71,6 +71,17 @@ Decisions — evidence and confidence:
 | Trap-enabled overflow/underflow (OE/UE) | exponent adjusted by 1536/192 (PEM) | not covered by vectors — unit-tested only indirectly |
 | Imprecise FP exception modes | treated as precise | Mac OS 9 runs with FE0 = FE1 = 0 |
 | fsqrt / fsqrts | illegal (the 750 does not implement them) | 750 UM |
+
+## Disassembler / interpreter consistency
+
+`tests/unit/cpu/test_decode_consistency.cpp` decodes one million random
+instruction words with both independent decoders. Rule: anything the
+disassembler accepts must not be illegal in the interpreter. Its first run
+found that the disassembler accepted mfspr/mtspr of SPRs the 750 does not
+implement (fixed: the disassembler now applies the interpreter's SPR rules).
+The converse direction (~6 % of random words) consists only of encodings
+with non-zero reserved fields, which the CPU executes like the valid form
+(e.g. fmuls with frB != 0, sc with extra bits, bclr with rB != 0).
 
 ## Interfaces
 - `MemoryInterface`: physical, big-endian guest values; returns false on
