@@ -4,6 +4,8 @@
 
 #include "core/machine/bw_firmware.h"
 
+#include "core/machine/bw_nvram.h"
+
 #include "core/common/cstring.h"
 
 namespace g3 {
@@ -34,6 +36,9 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
       mmu_(tree_, translations_, virt_free_),
       memdrv_(memory_),
       rtas_(rtas_hooks(this)),
+      nvram_driver_(MacioNvram::kSize,
+                    [](void* ctx, u32 i) { return static_cast<BwFirmware*>(ctx)->m_.macio().nvram().byte(i); },
+                    [](void* ctx, u32 i, u8 v) { static_cast<BwFirmware*>(ctx)->m_.macio().nvram().set_byte(i, v); }, this),
       forth_(view_, layout_.forth_data, layout_.forth_size),
       words_(forth_, tree_, inst_, layout_.scratch, layout_.scratch_size, c.load_base, layout_.base),
       fw_(tree_, view_),
@@ -75,6 +80,9 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         desc.linebytes = fb.pitch();
     }
     if (!of::build_bw_device_tree(tree_, desc, nodes_))
+        return;
+    if (nodes_.display != of::kNone && c.display_driver && c.display_driver_size &&
+        !tree_.set_property(nodes_.display, "driver,AAPL,MacOS,PowerPC", c.display_driver, c.display_driver_size))
         return;
 
     // Free memory: everything below the page table and firmware region, except the
@@ -119,6 +127,16 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     // looking for one). The value is a phandle: Apple's Mac OS ROM loader
     // passes it straight to getprop (seen in its client interface calls).
     tree_.set_int(nodes_.chosen, "interrupt-controller", nodes_.pic);
+    // NVRAM: formatted if blank or damaged, as firmware does (bw_nvram.h).
+    if (!bw_nvram::valid(m.macio().nvram()))
+        bw_nvram::format(m.macio().nvram());
+    // /chosen "nvram" is an open instance of mac-io's nvram node
+    // (Apple's Mac OS ROM loader looks for it; without it, it guesses an offset).
+    inst_.bind(nodes_.nvram, &nvram_driver_);
+    const of::Ihandle nv_ih = inst_.open(nodes_.nvram, "");
+    if (!nv_ih)
+        return;
+    tree_.set_int(nodes_.chosen, "nvram", nv_ih);
     fw_.set_virtual_mode(true);
 
     // RTAS (docs/firmware/rtas.md).

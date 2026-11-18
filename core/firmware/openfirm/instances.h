@@ -113,6 +113,32 @@ private:
     u8 sector_[BlockDevice::kSectorSize] = {};
 };
 
+// NVRAM as a byte stream (IEEE 1275 nvram package: read, write, seek, size),
+// over a byte store given by callbacks. /chosen "nvram" names an instance.
+class NvramDriver final : public PackageDriver {
+public:
+    using Get = u8 (*)(void* ctx, u32 index);
+    using Put = void (*)(void* ctx, u32 index, u8 v);
+    NvramDriver(u32 size, Get get, Put put, void* ctx) : size_(size), get_(get), put_(put), ctx_(ctx) {}
+    bool open(u32 slot, const char*) override
+    {
+        pos_[slot % InstanceTable::kMaxInstances] = 0;
+        return true;
+    }
+    s32 read(u32 slot, u8* buf, u32 len) override;
+    s32 write(u32 slot, const u8* buf, u32 len) override;
+    bool seek(u32 slot, u64 pos) override;
+    // size ( -- bytes )
+    bool method(u32 slot, const char* name, forth::Forth& f) override;
+
+private:
+    u32 size_;
+    Get get_;
+    Put put_;
+    void* ctx_;
+    u32 pos_[InstanceTable::kMaxInstances] = {};
+};
+
 // The console (stdout): written text goes to a sink, e.g. the boot log.
 // Reading returns 0 bytes (no input yet).
 class ConsoleDriver final : public PackageDriver {

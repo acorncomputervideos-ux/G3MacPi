@@ -38,6 +38,11 @@ public:
         BlockDevice* disk[2] = {nullptr, nullptr};  // IDE0 and IDE1 master disks
         u32 macio_base = 0x80800000u;
         u32 load_base = 0x00400000u;
+        // Our Mac OS display driver (guest/ndrv, a PEF container), placed in the
+        // display node's "driver,AAPL,MacOS,PowerPC" property, which is where
+        // Mac OS finds a device's native driver. Optional; the caller owns it.
+        const u8* display_driver = nullptr;
+        u32 display_driver_size = 0;
         // The real-time clock at power-on (RTAS get-time-of-day): seconds
         // since 1970-01-01 UTC. The Pi side will supply the real time.
         u64 rtc_seconds = 978307200ull;  // 2001-01-01 00:00:00
@@ -117,6 +122,7 @@ private:
     of::MemoryDriver memdrv_;
     u32 ram_window_ = 0;              // size of the RAM BAT window(s)
     of::Rtas rtas_;
+    of::NvramDriver nvram_driver_;
     u64 rtc_base_ = 0;                // seconds at machine time 0
     bool powered_off_ = false, reboot_ = false;
     forth::Forth forth_;

@@ -4,6 +4,8 @@
 
 #include "core/firmware/openfirm/instances.h"
 
+#include "core/common/cstring.h"
+
 namespace g3::of {
 
 bool InstanceTable::bind(Phandle package, PackageDriver* driver)
@@ -261,6 +263,44 @@ s32 DiskDriver::write(u32 slot, const u8* buf, u32 len)
         pos += n;
     }
     return static_cast<s32>(done);
+}
+
+} // namespace g3::of
+
+namespace g3::of {
+
+s32 NvramDriver::read(u32 slot, u8* buf, u32 len)
+{
+    u32& pos = pos_[slot % InstanceTable::kMaxInstances];
+    u32 n = 0;
+    for (; n < len && pos < size_; ++n, ++pos)
+        buf[n] = get_(ctx_, pos);
+    return static_cast<s32>(n);
+}
+
+s32 NvramDriver::write(u32 slot, const u8* buf, u32 len)
+{
+    u32& pos = pos_[slot % InstanceTable::kMaxInstances];
+    u32 n = 0;
+    for (; n < len && pos < size_; ++n, ++pos)
+        put_(ctx_, pos, buf[n]);
+    return static_cast<s32>(n);
+}
+
+bool NvramDriver::seek(u32 slot, u64 pos)
+{
+    if (pos > size_)
+        return false;
+    pos_[slot % InstanceTable::kMaxInstances] = static_cast<u32>(pos);
+    return true;
+}
+
+bool NvramDriver::method(u32, const char* name, forth::Forth& f)
+{
+    if (!cstr::equal(name, "size"))
+        return false;
+    f.push(size_);
+    return true;
 }
 
 } // namespace g3::of

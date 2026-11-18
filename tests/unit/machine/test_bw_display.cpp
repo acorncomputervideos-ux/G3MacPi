@@ -6,6 +6,7 @@
 #include "tests/framework/g3test.h"
 
 #include <cstring>
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -310,4 +311,33 @@ TEST_CASE("machine/bw-display/forth_output_goes_to_stdout")
     TermRig ref;
     ref.write("H");
     CHECK(r.cell(0, 0) == ref.cell(0, 0));                    // on the screen too
+}
+
+TEST_CASE("machine/bw-display/native_driver_property")
+{
+    // The display node carries the Mac OS driver it is given, byte for byte,
+    // in "driver,AAPL,MacOS,PowerPC"; without one there is no such property.
+    std::vector<u8> ram(kRam), vram(kVramSize);
+    std::vector<u8> pef(12000);
+    for (size_t i = 0; i < pef.size(); ++i)
+        pef[i] = static_cast<u8>(i * 31 + 7);
+    YosemiteConfig cfg;
+    cfg.ram = ram.data();
+    cfg.ram_size = kRam;
+    cfg.vram = vram.data();
+    cfg.vram_size = kVramSize;
+    YosemiteMachine m(cfg);
+    BwFirmware::Config fc;
+    fc.display_driver = pef.data();
+    fc.display_driver_size = static_cast<u32>(pef.size());
+    BwFirmware fw(m, fc);
+    REQUIRE(fw.ok());
+    const u8* d = nullptr;
+    u32 len = 0;
+    REQUIRE(fw.tree().get_property(fw.nodes().display, "driver,AAPL,MacOS,PowerPC", d, len));
+    CHECK(len == pef.size());
+    CHECK(std::equal(pef.begin(), pef.end(), d));
+    Rig plain;
+    REQUIRE(plain.fw->ok());
+    CHECK(!plain.fw->tree().has_property(plain.fw->nodes().display, "driver,AAPL,MacOS,PowerPC"));
 }

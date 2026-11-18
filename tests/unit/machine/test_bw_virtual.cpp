@@ -175,3 +175,19 @@ TEST_CASE("machine/bw-virtual/physical_claims_come_from_the_top")
     // The exception vectors are never handed out.
     CHECK(!r.fw->command("0 1000 0 \" claim\" xmem $call-method"));
 }
+
+TEST_CASE("machine/bw-virtual/chosen_nvram")
+{
+    Rig r;
+    REQUIRE(r.fw->ok());
+    const u32 ih = r.prop_cell(r.fw->nodes().chosen, "nvram");
+    CHECK(r.fw->instances().package(ih) == r.fw->nodes().nvram);
+    // Through the instance: seek, write, read back; the bytes are mac-io's NVRAM.
+    REQUIRE(r.fw->command("\" nvram\" \" /chosen\" find-package drop get-package-property drop decode-int constant nv 2drop"));
+    REQUIRE(r.fw->command("1404 0 \" seek\" nv $call-method drop"));   // ( pos.lo pos.hi -- status )
+    REQUIRE(r.fw->command("\" xyz\" \" write\" nv $call-method"));
+    CHECK_EQ(r.fw->forth().pop(), 3u);
+    CHECK(r.m->macio().nvram().byte(0x1404) == 'x' && r.m->macio().nvram().byte(0x1406) == 'z');
+    REQUIRE(r.fw->command("\" size\" nv $call-method"));
+    CHECK_EQ(r.fw->forth().pop(), 0x2000u);
+}

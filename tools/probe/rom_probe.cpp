@@ -11,6 +11,7 @@
 
 #include "core/cpu/ppc750/disasm.h"
 #include "core/machine/bw_firmware.h"
+#include "core/machine/bw_nvram.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +47,21 @@ int main(int argc, char** argv)
     cfg.vram_size = static_cast<u32>(vram.size());
     YosemiteMachine m(cfg);
     BwFirmware::Config fc;
+    // G3_NDRV=file.pef: our display driver for the display node.
+    std::vector<u8> ndrv;
+    if (const char* path = std::getenv("G3_NDRV")) {
+        if (FILE* f = std::fopen(path, "rb")) {
+            for (int c; (c = std::fgetc(f)) != EOF;)
+                ndrv.push_back(static_cast<u8>(c));
+            std::fclose(f);
+            fc.display_driver = ndrv.data();
+            fc.display_driver_size = static_cast<u32>(ndrv.size());
+            std::printf("[probe] display driver: %zu bytes from %s\n", ndrv.size(), path);
+        } else {
+            std::printf("[probe] cannot open %s\n", path);
+            return 2;
+        }
+    }
     BwFirmware fw(m, fc);
     std::string console;
     fw.set_console([](void* c, const char* t, u32 n) {
@@ -176,6 +192,17 @@ int main(int argc, char** argv)
                     std::printf("\n");
                 }
             }
+        } else if (const char* every = std::getenv("G3_SAMPLE_MS")) {
+            // Run in slices, printing where the CPU is after each one.
+            const u64 slice = std::strtoull(every, nullptr, 10);
+            for (u64 t = 0; slice && t < ms && !fw.client_exited(); t += slice) {
+                m.run_for(slice * 1000000000ull);
+                const auto& st = m.cpu().state();
+                std::printf("[sample] %6llu ms  pc=%08X lr=%08X msr=%08X r1=%08X r3=%08X r24=%08X r25=%08X  %llu insns\n",
+                            static_cast<unsigned long long>(t + slice), st.pc, st.lr(), st.msr, st.gpr[1], st.gpr[3],
+                            st.gpr[24], st.gpr[25], static_cast<unsigned long long>(m.cpu().instructions_executed()));
+                std::fflush(stdout);
+            }
         } else {
             m.run_for(ms * 1000000000ull);  // picoseconds
         }
@@ -196,6 +223,48 @@ int main(int argc, char** argv)
         for (u32 i = 0; i < 32; i += 8)
             std::printf("[probe] r%-2u %08X %08X %08X %08X %08X %08X %08X %08X\n", i, s.gpr[i], s.gpr[i + 1],
                         s.gpr[i + 2], s.gpr[i + 3], s.gpr[i + 4], s.gpr[i + 5], s.gpr[i + 6], s.gpr[i + 7]);
+    }
+    // NVRAM partitions at the end.
+    for (u32 i = 0;; ++i) {
+        NvramPartition p{};
+        if (!bw_nvram::partition(m.macio().nvram(), i, p))
+            break;
+        std::printf("[nvram] %04X sig %02X len %04X \"%s\"%s\n", p.offset, p.signature, p.length, p.name,
+                    bw_nvram::valid(m.macio().nvram()) ? "" : " (chain invalid)");
+    }
+    // G3_DUMP=physaddr,len: physical memory at the end, in hex.
+    if (const char* dump = std::getenv("G3_DUMP")) {
+        char* end = nullptr;
+        const u32 at = static_cast<u32>(std::strtoul(dump, &end, 16));
+        const u32 len = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 16)) : 0x40;
+        for (u32 i = 0; i < len; i += 16) {
+            std::printf("[dump] %08X:", at + i);
+            for (u32 k = 0; k < 16; k += 2) {
+                u16 v = 0;
+                m.bus().read16(at + i + k, v);
+                std::printf(" %04X", v);
+            }
+            std::printf("\n");
+        }
+    }
+    // G3_VDUMP=addr,len: memory as the CPU's data accesses see it now
+    // (current translation), in hex; also follows *addr when len is 0.
+    if (const char* vd = std::getenv("G3_VDUMP")) {
+        char* end = nullptr;
+        const u32 at = static_cast<u32>(std::strtoul(vd, &end, 16));
+        const u32 len = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 16)) : 0x40;
+        ppc::MemoryInterface& mem = fw.client().memory();
+        u32 pa = 0;
+        const bool mapped = m.cpu().probe_translate(at, false, pa);
+        std::printf("[vdump] %08X -> %s%08X\n", at, mapped ? "" : "unmapped ", pa);
+        for (u32 i = 0; i < len; i += 16) {
+            std::printf("[vdump] %08X:", at + i);
+            for (u32 k = 0; k < 16; k += 2) {
+                u16 v = 0;
+                std::printf(mem.read16(at + i + k, v) ? " %04X" : " ----", v);
+            }
+            std::printf("\n");
+        }
     }
     // G3_SCREEN=file.ppm: the emulated display at the end (binary PPM).
     if (const char* shot = std::getenv("G3_SCREEN"); shot && m.has_display()) {

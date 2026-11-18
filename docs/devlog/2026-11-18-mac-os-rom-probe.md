@@ -134,3 +134,33 @@ instruction behind each program exception.
 Speed is now the limit. The interpreter runs about 7-8 million
 instructions per second on this host, so a full Mac OS boot will need
 many seconds to minutes of host time.
+
+## Display driver, NVRAM, and the first 68K stall
+
+- **Display driver.** `BwFirmware::Config::display_driver` puts our PEF
+  driver in the display node's "driver,AAPL,MacOS,PowerPC"
+  (`G3_NDRV=…pef` in the probe). The loader copies the property into
+  Mac OS's Name Registry.
+- **/chosen "nvram"**: an instance of mac-io's nvram node (an
+  NvramDriver: read, write, seek, size).
+  - The loader walks the CHRP partition chain through it.
+  - Blank NVRAM (all lengths 0) made it read offset 0 forever. Firmware
+    now formats a blank NVRAM: free space, "APL,MacOS75" at 0x12F0
+    (XPRAM 0x1300, Name Registry 0x1400), "common" at 0x1800
+    (core/machine/bw_nvram.*).
+  - The loader showed that "APL,MacOS75" carries signature 0xA0. With
+    0x5F it made its own partition; with 0xA0 it uses ours.
+- **The stall.** After the hand-over the 68K code loops at ROM
+  0xFFC156B6:
+
+      FFC156B8  move.w ([$5FFFEFD0],$7A),d0
+      FFC156C0  cmpi.w #$0800,d0
+      FFC156C4  beq.s  $FFC156B6
+
+  The pointer at 0x5FFFEFD0 is 0. The ROM polls a register (offsets
+  0x7A and 0x1C nearby) of a device whose base it never got. That is
+  likely one the loader reported missing (SCC, sound, SCSI, …) and that a
+  B&W has. Next: identify it.
+- **Probe additions:** G3_SAMPLE_MS (where the CPU is, every N ms),
+  G3_DUMP (physical memory), G3_VDUMP (through the CPU's translation),
+  NVRAM partition listing.
