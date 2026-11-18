@@ -24,6 +24,7 @@
 #include "core/devices/macio/paddington.h"
 #include "core/devices/pci/grackle.h"
 #include "core/devices/pci/pci_bridge.h"
+#include "core/devices/video/framebuffer.h"
 #include "core/machine/execution_loop.h"
 #include "core/mem/physical_bus.h"
 #include "core/sched/scheduler.h"
@@ -38,6 +39,9 @@ struct YosemiteConfig {
     u64 cpu_hz = 350000000;
     u64 bus_hz = 100000000;
     u32 rtc_seconds_since_1904 = 0;
+    // Video memory for the display device (optional; at most kMaxVram).
+    u8* vram = nullptr;
+    u32 vram_size = 0;
 };
 
 class YosemiteMachine {
@@ -45,6 +49,11 @@ public:
     static constexpr u32 kRomBase = 0xFFF00000u;
     static constexpr u32 kBridgeDevfn = 0x0D << 3;   // * to verify
     static constexpr u32 kMacIoDevfn = 0x05 << 3;    // * to verify (behind the bridge)
+    // The display device (our own; docs/hardware/framebuffer.md): video
+    // memory and registers in PCI memory space, outside any PCI BAR.
+    static constexpr u32 kVramBase = 0x90000000u;
+    static constexpr u32 kMaxVram = 16u << 20;
+    static constexpr u32 kDisplayRegs = 0x91000000u;
 
     explicit YosemiteMachine(const YosemiteConfig& config);
 
@@ -64,6 +73,8 @@ public:
     Paddington& macio() { return macio_; }
     AdbKeyboard& keyboard() { return keyboard_; }
     AdbMouse& mouse() { return mouse_; }
+    Framebuffer& display() { return display_; }
+    bool has_display() const { return has_display_; }
 
 private:
     // Construction order matters: the bus and scheduler come first.
@@ -77,6 +88,8 @@ private:
     AdbBus adb_;
     AdbKeyboard keyboard_;
     AdbMouse mouse_;
+    Framebuffer display_;
+    bool has_display_ = false;
     bool ok_ = false;
     u32 ram_size_ = 0;
     u64 cpu_hz_ = 0, bus_hz_ = 0;

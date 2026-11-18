@@ -10,7 +10,7 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
     : cpu_(bus_),
       loop_(cpu_, sched_, CpuTiming{c.cpu_hz, c.bus_hz / 4, 1}),
       bridge_(PciToPciBridge::dec21154()),
-      macio_(bus_, sched_)
+      macio_(bus_, sched_), display_(c.vram, c.vram_size)
 {
     bool ok = c.ram && c.ram_size > 0 && bus_.map_ram(0, c.ram, c.ram_size);
     ram_size_ = c.ram_size;
@@ -26,6 +26,10 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
     macio_.cuda().set_rtc(c.rtc_seconds_since_1904);
     ok = ok && adb_.attach(&keyboard_) && adb_.attach(&mouse_);
     macio_.cuda().attach_adb(&adb_);
+    if (ok && c.vram) {
+        has_display_ = c.vram_size <= kMaxVram && display_.map(bus_, kVramBase, kDisplayRegs);
+        ok = has_display_;
+    }
     ok_ = ok;
 }
 

@@ -19,6 +19,7 @@
 
 #include "core/firmware/forth/forth.h"
 #include "core/firmware/openfirm/bw_device_tree.h"
+#include "core/firmware/openfirm/display_driver.h"
 #include "core/firmware/openfirm/firmware.h"
 #include "core/firmware/openfirm/forth_words.h"
 #include "core/firmware/openfirm/instances.h"
@@ -34,6 +35,8 @@ public:
         BlockDevice* disk[2] = {nullptr, nullptr};  // IDE0 and IDE1 master disks
         u32 macio_base = 0x80800000u;
         u32 load_base = 0x00400000u;
+        // Power-on display mode (if the machine has a display).
+        u32 width = 640, height = 480, depth = 8;
     };
     // Firmware memory at the top of RAM.
     struct Layout {
@@ -89,6 +92,7 @@ private:
     of::ConsoleDriver console_;
     RamBlockDevice no_disk_{nullptr, 0};
     of::DiskDriver disk_[2];
+    of::DisplayDriver display_;
 };
 
 } // namespace g3

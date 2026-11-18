@@ -17,6 +17,7 @@
 #define G3_CORE_FIRMWARE_OPENFIRM_INSTANCES_H
 
 #include "core/common/types.h"
+#include "core/firmware/forth/forth.h"
 #include "core/firmware/openfirm/device_tree.h"
 #include "core/storage/apple_partition_map.h"
 #include "core/storage/block_device.h"
@@ -35,6 +36,9 @@ public:
     virtual s32 read(u32 /*slot*/, u8* /*buf*/, u32 /*len*/) { return -1; }
     virtual s32 write(u32 /*slot*/, const u8* /*buf*/, u32 /*len*/) { return -1; }
     virtual bool seek(u32 /*slot*/, u64 /*pos*/) { return false; }
+    // Other methods, called by $call-method: take arguments from and leave
+    // results on the Forth stack. Returns false if the method doesn't exist.
+    virtual bool method(u32 /*slot*/, const char* /*name*/, forth::Forth& /*f*/) { return false; }
 
 protected:
     ~PackageDriver() = default;

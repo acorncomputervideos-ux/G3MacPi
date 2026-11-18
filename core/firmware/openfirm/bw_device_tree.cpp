@@ -179,6 +179,22 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
 
+    // --- display (our framebuffer device; properties as Linux offb reads them)
+    if (m.vram_size) {
+        char unit[9];
+        hex_unit(unit, m.vram_base);
+        n.display = t.add_node(n.root, "display", unit);
+        t.set_string(n.display, "device_type", "display");
+        t.set_string(n.display, "compatible", "display");
+        const u32 reg[2] = {m.vram_base, m.vram_size};
+        t.set_ints(n.display, "reg", reg, 2);
+        t.set_int(n.display, "address", m.vram_base);
+        t.set_int(n.display, "width", m.width);
+        t.set_int(n.display, "height", m.height);
+        t.set_int(n.display, "depth", m.depth);
+        t.set_int(n.display, "linebytes", m.linebytes);
+    }
+
     // --- aliases
     char path[256];
     t.path_of(n.disk[0], path, sizeof path);
@@ -188,6 +204,10 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     t.set_string(n.aliases, "ide1", path);
     t.path_of(n.macio, path, sizeof path);
     t.set_string(n.aliases, "mac-io", path);
+    if (n.display != kNone) {
+        t.path_of(n.display, path, sizeof path);
+        t.set_string(n.aliases, "screen", path);
+    }
     return t.ok();
 }
 

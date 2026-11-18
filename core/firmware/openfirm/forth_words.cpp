@@ -540,6 +540,8 @@ void FirmwareWords::w_call_method(Forth& f, void* ctx)
         f.push(d->seek(slot, (static_cast<u64>(hi) << 32) | lo) ? 0 : 0xFFFFFFFFu);
         return;
     }
+    if (d->method(slot, method, f))
+        return;
     f.fail(-21, "$call-method: method not supported");
 }
 

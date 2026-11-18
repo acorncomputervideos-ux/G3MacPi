@@ -26,7 +26,8 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
       forth_(m.bus(), layout_.forth_data, layout_.forth_size),
       words_(forth_, tree_, inst_, layout_.scratch, layout_.scratch_size, c.load_base, layout_.base),
       fw_(tree_, m.bus()),
-      disk_{of::DiskDriver(c.disk[0] ? *c.disk[0] : no_disk_), of::DiskDriver(c.disk[1] ? *c.disk[1] : no_disk_)}
+      disk_{of::DiskDriver(c.disk[0] ? *c.disk[0] : no_disk_), of::DiskDriver(c.disk[1] ? *c.disk[1] : no_disk_)},
+      display_(m.display())
 {
     if (!m.ok() || m.ram_size() < kMinRam || c.load_base >= layout_.base)
         return;
@@ -46,6 +47,19 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     desc.bus_hz = static_cast<u32>(m.bus_hz());
     desc.pvr = m.cpu().state().spr[ppc::spr::PVR];
     desc.macio_base = c.macio_base;
+    if (m.has_display()) {
+        Framebuffer& fb = m.display();
+        if (!fb.set_mode(c.width, c.height, c.depth))
+            return;
+        display_.fill(0, 0, 0, fb.width(), fb.height());  // black (palette 0 = black at power-on)
+        fb.set_enabled(true);
+        desc.vram_base = fb.vram_base();
+        desc.vram_size = fb.vram_size();
+        desc.width = fb.width();
+        desc.height = fb.height();
+        desc.depth = fb.depth();
+        desc.linebytes = fb.pitch();
+    }
     if (!of::build_bw_device_tree(tree_, desc, nodes_))
         return;
 
@@ -57,6 +71,8 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         if (c.disk[i])
             inst_.bind(nodes_.disk[i], &disk_[i]);
     inst_.bind(nodes_.console, &console_);
+    if (nodes_.display != of::kNone)
+        inst_.bind(nodes_.display, &display_);
     const of::Ihandle con = inst_.open(nodes_.console, "");
     tree_.set_int(nodes_.chosen, "stdout", con);
     tree_.set_int(nodes_.chosen, "stdin", con);

@@ -26,12 +26,16 @@ struct BwMachine {
     u32 macio_base = 0x80800000u;   // mac-io BAR as the firmware assigns it
     u32 bridge_device = 0x0D;       // DEC 21154 on bus 0
     u32 macio_device = 0x05;        // mac-io on bus 1 (behind the bridge)
+    // The display device (0 = none) and its current mode.
+    u32 vram_base = 0, vram_size = 0;
+    u32 width = 0, height = 0, depth = 0, linebytes = 0;
 };
 
 struct BwNodes {
     Phandle root, cpus, cpu, memory, chosen, aliases, options, openprom, packages, console;
     Phandle pci, bridge, macio, cuda, nvram;
     Phandle ata[2], disk[2];
+    Phandle display;  // kNone without a display
 };
 
 // Builds the whole tree into `t` (which must be empty). False if the tree
