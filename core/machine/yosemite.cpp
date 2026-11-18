@@ -13,6 +13,9 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
       macio_(bus_, sched_)
 {
     bool ok = c.ram && c.ram_size > 0 && bus_.map_ram(0, c.ram, c.ram_size);
+    ram_size_ = c.ram_size;
+    cpu_hz_ = c.cpu_hz;
+    bus_hz_ = c.bus_hz;
     if (ok && c.rom)
         ok = bus_.map_rom(kRomBase, c.rom, c.rom_size);
     ok = ok && grackle_.attach(bus_) && grackle_.pci_bus().attach(kBridgeDevfn, &bridge_) &&

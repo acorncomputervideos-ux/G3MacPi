@@ -31,7 +31,7 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | `boot`, `init-program`, `go`: bootinfo scripts and ELF programs | ✅ step 11 |
 | `interpret` and `call-method` client services (through the Forth interpreter) | ✅ step 12 |
 | The B&W device tree (bw-device-tree.md) | ✅ step 13 |
-| Wiring the firmware into the machine (boot from a disk image) | to do |
+| Wiring the firmware into the machine: `BwFirmware` boots a client from a disk image (machine-boot.md) | ✅ step 14 |
 
 ## Facts used
 

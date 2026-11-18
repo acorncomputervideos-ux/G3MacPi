@@ -54,6 +54,9 @@ public:
     void run_for(u64 picoseconds) { loop_.run_for(picoseconds); }
 
     ppc::Ppc750& cpu() { return cpu_; }
+    u32 ram_size() const { return ram_size_; }
+    u64 cpu_hz() const { return cpu_hz_; }
+    u64 bus_hz() const { return bus_hz_; }
     PhysicalBus& bus() { return bus_; }
     Scheduler& scheduler() { return sched_; }
     Grackle& grackle() { return grackle_; }
@@ -75,6 +78,8 @@ private:
     AdbKeyboard keyboard_;
     AdbMouse mouse_;
     bool ok_ = false;
+    u32 ram_size_ = 0;
+    u64 cpu_hz_ = 0, bus_hz_ = 0;
 };
 
 } // namespace g3
