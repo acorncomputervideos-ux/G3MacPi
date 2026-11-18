@@ -113,7 +113,7 @@ private:
     };
 
     // Control-flow entries while compiling.
-    enum class Ctl : u8 { Orig, Dest, Do, Case, Of, Colon };
+    enum class Ctl : u8 { Orig, Dest, Do, Case, Of, Colon, Temp };
     struct Control { Ctl kind; u32 at; };
 
     // --- input ---
@@ -165,6 +165,7 @@ private:
 
     bool state_ = false;   // compiling
     s32 defining_ = -1;    // word being defined
+    u32 temp_start_ = 0;   // code of an interpreted control structure being built (0 = none)
     s32 latest_create_ = -1;
     Control ctl_[64] = {};
     u32 ctl_sp_ = 0;

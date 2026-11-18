@@ -28,7 +28,7 @@ enum Prim : u32 {
     P_BETWEEN, P_TRUE, P_FALSE, P_BL, P_CELLADD, P_CELLS, P_CHARADD, P_CHARS, P_ALIGNED,
     // memory
     P_FETCH, P_STORE, P_CFETCH, P_CSTORE, P_WFETCH, P_WSTORE, P_LFETCH, P_LSTORE, P_PSTORE,
-    P_HERE, P_ALLOT, P_COMMA, P_CCOMMA, P_WCOMMA, P_LCOMMA, P_ALIGN, P_MOVE, P_FILL, P_COMP,
+    P_HERE, P_ALLOT, P_COMMA, P_CCOMMA, P_WCOMMA, P_LCOMMA, P_ALIGN, P_MOVE, P_FILL, P_COMP, P_3DROP, P_BOUNDS, P_STREQ, P_DFIND,
     P_COUNT,
     // output
     P_TYPE, P_EMIT, P_CR, P_SPACE, P_SPACES, P_DOT, P_UDOT, P_DOTS, P_DOTR, P_UDOTR, P_DOTD,
@@ -77,7 +77,8 @@ const PrimDef kPrims[] = {
     {"here", P_HERE, false}, {"allot", P_ALLOT, false}, {",", P_COMMA, false},
     {"c,", P_CCOMMA, false}, {"w,", P_WCOMMA, false}, {"l,", P_LCOMMA, false},
     {"align", P_ALIGN, false}, {"move", P_MOVE, false}, {"cmove", P_MOVE, false},
-    {"fill", P_FILL, false}, {"comp", P_COMP, false}, {"count", P_COUNT, false},
+    {"fill", P_FILL, false}, {"comp", P_COMP, false}, {"3drop", P_3DROP, false},
+    {"bounds", P_BOUNDS, false}, {"$=", P_STREQ, false}, {"$find", P_DFIND, false}, {"count", P_COUNT, false},
     {"type", P_TYPE, false}, {"emit", P_EMIT, false}, {"cr", P_CR, false},
     {"space", P_SPACE, false}, {"spaces", P_SPACES, false}, {".", P_DOT, false},
     {"u.", P_UDOT, false}, {".s", P_DOTS, false}, {".r", P_DOTR, false},
@@ -245,6 +246,10 @@ void Forth::reset_after_error()
     rp_ = 0;
     if (state_ && defining_ >= 0 && static_cast<u32>(defining_) == word_count_ - 1)
         --word_count_;  // drop the half-defined word
+    if (temp_start_) {
+        code_used_ = temp_start_;  // drop a half-built interpreted control structure
+        temp_start_ = 0;
+    }
     state_ = false;
     defining_ = -1;
     ctl_sp_ = 0;
@@ -822,10 +827,40 @@ bool Forth::primitive(u32 id)
     };
     auto require_compiling = [&]() {
         if (!state_) {
-            fail(kCompileOnly, "compile-only word");
+            char msg[64] = "compile-only word: ";
+            u32 n = 19;
+            for (const PrimDef& d : kPrims)
+                if (d.id == id)
+                    for (const char* q = d.name; *q && n + 1 < sizeof msg; ++q)
+                        msg[n++] = *q;
+            msg[n] = '\0';
+            fail(kCompileOnly, msg);
             return false;
         }
         return true;
+    };
+    // IEEE 1275 lets control structures be used while interpreting: the
+    // opening word starts a temporary definition, which runs (and is
+    // discarded) when the structure is complete (docs/firmware/forth.md).
+    auto open_structure = [&]() {
+        if (!state_) {
+            temp_start_ = code_used_;
+            state_ = true;
+            ctl_push(Ctl::Temp, code_used_);
+        }
+        return true;
+    };
+    auto close_structure = [&]() {
+        if (error_ || !temp_start_ || ctl_sp_ == 0 || ctl_[ctl_sp_ - 1].kind != Ctl::Temp)
+            return;
+        --ctl_sp_;
+        const u32 start = temp_start_;
+        temp_start_ = 0;
+        state_ = false;
+        if (emit_cell(OP_EXIT))
+            run_code(start);
+        if (!temp_start_)
+            code_used_ = start;
     };
     auto define = [&](Kind kind, u32 param) {
         const char* w;
@@ -980,6 +1015,40 @@ bool Forth::primitive(u32 id)
         push(static_cast<Cell>(r));
         break;
     }
+    case P_3DROP: pop(); pop(); pop(); break;
+    case P_BOUNDS:  // ( addr len -- addr+len addr )
+        b = pop(); a = pop(); push(a + b); push(a); break;
+    case P_STREQ: {  // ( str1 len1 str2 len2 -- flag ): same length and bytes
+        const Cell l2 = pop(), a2 = pop(), l1 = pop(), a1 = pop();
+        bool eq = l1 == l2;
+        for (u32 i = 0; eq && i < l1 && !error_; ++i) {
+            Cell x, y;
+            eq = rd(a1 + i, 1, x) && rd(a2 + i, 1, y) && x == y;
+        }
+        if (!error_)
+            push(flag(eq));
+        break;
+    }
+    case P_DFIND: {  // ( name len -- xt true | name len false ) (IEEE 1275)
+        b = pop(); a = pop();
+        char name[64];
+        bool ok = b < sizeof name;
+        for (u32 i = 0; ok && i < b; ++i) {
+            Cell ch;
+            ok = rd(a + i, 1, ch);
+            name[i] = static_cast<char>(ch);
+        }
+        const s32 idx = ok ? find(name, b) : -1;
+        if (error_)
+            break;
+        if (idx >= 0) {
+            push(kXtBase + static_cast<u32>(idx));
+            push(0xFFFFFFFFu);
+        } else {
+            push(a); push(b); push(0);
+        }
+        break;
+    }
     case P_COUNT: a = pop(); if (rd(a, 1, b)) { push(a + 1); push(b); } break;
     // --- output
     case P_TYPE: {
@@ -1095,7 +1164,7 @@ bool Forth::primitive(u32 id)
         state_ = false;
         break;
     }
-    case P_IF: if (!require_compiling()) break; emit_cell(OP_0BRANCH); ctl_push(Ctl::Orig, code_used_); emit_cell(0); break;
+    case P_IF: open_structure(); emit_cell(OP_0BRANCH); ctl_push(Ctl::Orig, code_used_); emit_cell(0); break;
     case P_ELSE: {
         if (!require_compiling()) break;
         u32 orig;
@@ -1106,10 +1175,10 @@ bool Forth::primitive(u32 id)
         code_[orig] = code_used_;
         break;
     }
-    case P_THEN: { if (!require_compiling()) break; u32 orig; if (ctl_pop(Ctl::Orig, orig)) code_[orig] = code_used_; break; }
-    case P_BEGIN: if (!require_compiling()) break; ctl_push(Ctl::Dest, code_used_); break;
-    case P_UNTIL: { if (!require_compiling()) break; u32 dest; if (ctl_pop(Ctl::Dest, dest)) { emit_cell(OP_0BRANCH); emit_cell(dest); } break; }
-    case P_AGAIN: { if (!require_compiling()) break; u32 dest; if (ctl_pop(Ctl::Dest, dest)) { emit_cell(OP_BRANCH); emit_cell(dest); } break; }
+    case P_THEN: { if (!require_compiling()) break; u32 orig; if (ctl_pop(Ctl::Orig, orig)) code_[orig] = code_used_; close_structure(); break; }
+    case P_BEGIN: open_structure(); ctl_push(Ctl::Dest, code_used_); break;
+    case P_UNTIL: { if (!require_compiling()) break; u32 dest; if (ctl_pop(Ctl::Dest, dest)) { emit_cell(OP_0BRANCH); emit_cell(dest); } close_structure(); break; }
+    case P_AGAIN: { if (!require_compiling()) break; u32 dest; if (ctl_pop(Ctl::Dest, dest)) { emit_cell(OP_BRANCH); emit_cell(dest); } close_structure(); break; }
     case P_WHILE: {
         if (!require_compiling()) break;
         u32 dest;
@@ -1127,11 +1196,12 @@ bool Forth::primitive(u32 id)
         emit_cell(OP_BRANCH);
         emit_cell(dest);
         code_[orig] = code_used_;
+        close_structure();
         break;
     }
     case P_DO:
     case P_QDO: {
-        if (!require_compiling()) break;
+        open_structure();
         const u32 leave_base = leave_sp_;
         if (id == P_QDO) {
             emit_cell(OP_QDO);
@@ -1154,6 +1224,7 @@ bool Forth::primitive(u32 id)
         emit_cell(dest);
         while (leave_sp_ > leave_base)
             code_[leave_[--leave_sp_]] = code_used_;
+        close_structure();
         break;
     }
     case P_LEAVE: {
@@ -1194,8 +1265,16 @@ bool Forth::primitive(u32 id)
         parse_until('"', s, len);
         if (len > kStringBuffer) { fail(-18, "string too long"); break; }
         if (id == P_ABORTQ) {
-            if (!require_compiling()) break;
-            compile_string(OP_ABORTQ, s, len);
+            if (state_) {
+                compile_string(OP_ABORTQ, s, len);
+            } else if (pop() != 0 && !error_) {  // interpreted, as Open Firmware allows
+                char buf[kStringBuffer + 1];
+                for (u32 i = 0; i < len; ++i)
+                    buf[i] = s[i];
+                buf[len] = '\0';
+                emit_text(buf, len);
+                fail(kAbortQuote, buf);
+            }
         } else if (state_) {
             compile_string(id == P_DOTQUOTE ? OP_PRINT : OP_STR, s, len);
         } else if (id == P_DOTQUOTE) {
@@ -1278,7 +1357,7 @@ bool Forth::primitive(u32 id)
     }
     case P_DOES: if (require_compiling()) emit_cell(OP_DOES); break;
     case P_IMMEDIATE: if (word_count_) words_[word_count_ - 1].immediate = true; break;
-    case P_CASE: if (require_compiling()) ctl_push(Ctl::Case, 0); break;
+    case P_CASE: open_structure(); ctl_push(Ctl::Case, 0); break;
     case P_OF: if (!require_compiling()) break; emit_cell(OP_OF); ctl_push(Ctl::Of, code_used_); emit_cell(0); break;
     case P_ENDOF: {
         if (!require_compiling()) break;
@@ -1296,7 +1375,8 @@ bool Forth::primitive(u32 id)
         while (ctl_sp_ > 0 && ctl_[ctl_sp_ - 1].kind == Ctl::Orig)
             code_[ctl_[--ctl_sp_].at] = code_used_;
         u32 dummy;
-        ctl_pop(Ctl::Case, dummy);
+        if (ctl_pop(Ctl::Case, dummy))
+            close_structure();
         break;
     }
     case P_DNUM: number_in(10); break;

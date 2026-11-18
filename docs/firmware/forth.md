@@ -49,6 +49,24 @@ existing Forth's code was used.
   span several lines of a boot script.
 - Firmware words are added with `define_native()` and
   `define_constant()`.
+- **Control structures while interpreting.** Open Firmware lets `if`,
+  `begin`, `do`, `?do` and `case` be typed outside a definition. Apple's
+  Mac OS ROM boot script does this throughout, including a
+  `begin … while … repeat` spread over several lines.
+  - The opening word starts a temporary definition, compiled as usual.
+  - When the outermost structure closes (`then`, `repeat`, `until`,
+    `again`, `loop`, `+loop`, `endcase`), the code runs once and is then
+    discarded. Many such structures don't use up the code space; a test
+    checks this.
+  - An error in a half-typed structure discards it.
+- `abort"` works while interpreting too (flag, then the message), as the
+  boot script uses it.
+- Added for the boot script:
+  - `$=` ( str1 len1 str2 len2 -- flag ): same length and bytes;
+  - `bounds` ( addr len -- addr+len addr );
+  - `3drop`;
+  - `$find` ( name len -- xt true | name len false ), from IEEE 1275.
+- A compile-only error names the word ("compile-only word: exit").
 
 Implementation choices where the standards allow several:
 - `/` and `mod` truncate toward zero (as in C), so `-7 2 /` gives −3.
@@ -66,5 +84,6 @@ Limits: 1024 words, 32 K compiled cells, 16 KB of names, 256-cell stacks,
 
 Firmware words (device tree, packages, `load`, `boot`, `init-program`,
 `go`), number output with `<# # #>`, `postpone`, double-cell words,
-`key`/`accept`. Which of these the Mac OS boot script needs will be
-decided from the script itself.
+`key`/`accept`. The Mac OS ROM 1.6 boot script needs none of these;
+`g3_rom_probe BOOTFILE 0 --words` lists any word a boot script uses that
+our Forth lacks.

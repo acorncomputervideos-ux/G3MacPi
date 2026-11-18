@@ -62,6 +62,9 @@ public:
     // (then forth().error_text() says why).
     bool command(const char* text);
 
+    // Puts a file at load-base as `load` would (see FirmwareWords::place_file).
+    bool place_file(const u8* data, u32 len, const char* path) { return words_.place_file(data, len, path); }
+
     bool client_started() const { return started_; }
     u32 client_entry() const { return entry_; }
     const Layout& layout() const { return layout_; }

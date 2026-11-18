@@ -65,6 +65,10 @@ public:
     using Go = void (*)(void* context, u32 entry);
     void set_go(Go g, void* ctx) { go_ = g; go_ctx_ = ctx; }
 
+    // Puts a file at load-base as `load` would (for tools and tests that
+    // have the file in hand); false if it doesn't fit below the load limit.
+    bool place_file(const u8* data, u32 len, const char* path);
+
     Phandle active_package() const { return active_; }
     u32 load_size() const { return load_size_; }
     const char* load_path() const { return load_path_; }
@@ -104,6 +108,7 @@ private:
     static void w_close_dev(forth::Forth&, void*);
     static void w_call_method(forth::Forth&, void*);
     static void w_load_base(forth::Forth&, void*);
+    static void w_dot_registers(forth::Forth&, void*);
     static void w_load_size(forth::Forth&, void*);
     static void w_load(forth::Forth&, void*);
     static void w_ms(forth::Forth&, void*);

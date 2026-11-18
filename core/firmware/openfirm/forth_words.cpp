@@ -36,7 +36,7 @@ FirmwareWords::FirmwareWords(Forth& f, DeviceTree& tree, InstanceTable& inst, u3
         {"open-dev", w_open_dev}, {"close-dev", w_close_dev}, {"$call-method", w_call_method},
         {"load-base", w_load_base}, {"load-size", w_load_size}, {"load", w_load},
         {"ms", w_ms}, {"get-msecs", w_get_msecs}, {"init-program", w_init_program},
-        {"go", w_go}, {"boot", w_boot}, {"reg", w_reg}, {"my-self", w_my_self},
+        {"go", w_go}, {".registers", w_dot_registers}, {"boot", w_boot}, {"reg", w_reg}, {"my-self", w_my_self},
         {"ihandle>phandle", w_ihandle_to_phandle},
     };
     for (const Def& d : defs)
@@ -592,6 +592,23 @@ bool FirmwareWords::load_file(const char* path)
     return true;
 }
 
+bool FirmwareWords::place_file(const u8* data, u32 len, const char* path)
+{
+    if (len > load_limit_ - load_base_)
+        return false;
+    ppc::MemoryInterface& m = f_.memory();
+    for (u32 i = 0; i < len; ++i)
+        if (!m.write8(load_base_ + i, data[i]))
+            return false;
+    load_size_ = len;
+    program_ready_ = false;
+    u32 n = 0;
+    for (; path[n] && n + 1 < sizeof load_path_; ++n)
+        load_path_[n] = path[n];
+    load_path_[n] = '\0';
+    return true;
+}
+
 namespace {
 bool line_path(Forth& f, char* path, u32 max)
 {
@@ -722,6 +739,22 @@ void FirmwareWords::w_go(Forth& f, void* ctx)
         return;
     }
     s.go_(s.go_ctx_, s.program_.entry);
+}
+
+// .registers: Open Firmware shows the client program's saved registers.
+// Ours has none saved before `go`; it shows the prepared entry point.
+void FirmwareWords::w_dot_registers(Forth& f, void* ctx)
+{
+    FirmwareWords& s = self(ctx);
+    char buf[48];
+    const char hex[] = "0123456789abcdef";
+    u32 n = 0;
+    for (const char* t = "pc: "; *t; ++t)
+        buf[n++] = *t;
+    for (int i = 7; i >= 0; --i)
+        buf[n++] = hex[(s.program_.entry >> (4 * i)) & 15];
+    buf[n++] = ' ';
+    f.emit_text(buf, n);
 }
 
 void FirmwareWords::w_boot(Forth& f, void* ctx)

@@ -217,7 +217,7 @@ TEST_CASE("forth/errors_catch_throw")
     CHECK(r.out == "boom");
     CHECK(!r.run(": m if ;"));                               // unresolved if
     CHECK_EQ(r.f->error_code(), Forth::kControlMismatch);
-    CHECK(!r.run("if"));
+    CHECK(!r.run("leave"));                                  // compile-only (if is not: IEEE 1275)
     CHECK_EQ(r.f->error_code(), Forth::kCompileOnly);
     CHECK(!r.run(": r recurse ; r"));                        // runaway recursion is caught
     CHECK(!r.run("abort"));
@@ -241,4 +241,60 @@ TEST_CASE("forth/native_words")
     CHECK(r.stack("load-base") == V({0x4000}));
     r.f->define_native("fails", [](Forth& f, void*) { f.fail(-21, "unsupported"); }, nullptr);
     CHECK(r.stack("' fails catch") == V({-21}));
+}
+
+TEST_CASE("forth/interpreted_control_structures")
+{
+    // IEEE 1275 lets control structures be typed outside definitions (Apple's
+    // Mac OS ROM boot script relies on it): they run once complete.
+    Rig r;
+    CHECK(r.stack("1 if 11 else 22 then") == V({0x11}));
+    CHECK(r.stack("0 if 11 else 22 then") == V({0x22}));
+    CHECK(r.stack("0 5 0 do i + loop") == V({0 + 1 + 2 + 3 + 4}));
+    CHECK(r.stack("0 0 0 ?do 99 loop") == V({0}));                 // ?do with an empty range
+    CHECK(r.stack("3 begin dup while 1- repeat") == V({0}));
+    CHECK(r.stack("0 begin 1+ dup 4 = until") == V({4}));
+    CHECK(r.stack("2 case 1 of 10 endof 2 of 20 endof 30 swap endcase") == V({0x20}));
+    // Nested structures run once, when the outermost one closes.
+    CHECK(r.stack("1 if 0 3 0 do i 1 = if 1+ then loop then") == V({1}));
+    // A structure may span several lines (separate interpret calls), as in a boot script.
+    REQUIRE(r.run("5 0"));
+    REQUIRE(r.run("begin"));
+    REQUIRE(r.run(" over while"));
+    REQUIRE(r.run(" 1+ swap 1- swap"));
+    REQUIRE(r.run("repeat"));
+    CHECK(r.stack("nip") == V({5}));
+    // The temporary code is discarded: a boot script's many structures don't
+    // fill the code space (32768 cells; each of these takes about 8).
+    bool all_ran = true;
+    for (int i = 0; i < 6000 && all_ran; ++i)
+        all_ran = r.run("1 if 2 drop then");
+    CHECK(all_ran);
+    // Nothing is left behind: a definition made afterwards works normally.
+    CHECK(r.stack(": t 1 if 7 then ; t") == V({7}));
+    // An error inside a half-typed structure discards it; later input is fine.
+    CHECK(!r.run("1 if undefined-word-xyz"));
+    CHECK(r.stack("1 if 3 then") == V({3}));
+    // Words that only make sense inside a definition still say so, by name.
+    CHECK(!r.run("exit"));
+    CHECK(std::string(r.f->error_text()).find("exit") != std::string::npos);
+}
+
+TEST_CASE("forth/interpreted_abort_quote_and_string_words")
+{
+    Rig r;
+    CHECK(r.stack("0 abort\" not shown\" 5") == V({5}));
+    CHECK(r.output("1 abort\" stop here\" 5") == "stop here");
+    CHECK(!r.run("1 abort\" again\""));
+    CHECK(r.stack("\" abc\" \" abc\" $=") == V({-1}));
+    CHECK(r.stack("\" abc\" \" abd\" $=") == V({0}));
+    CHECK(r.stack("\" abc\" \" ab\" $=") == V({0}));
+    CHECK(r.stack("100 20 bounds") == V({0x120, 0x100}));
+    CHECK(r.stack("1 2 3 4 3drop") == V({1}));
+    // $find: ( name len -- xt true | name len false )
+    CHECK(r.stack(": sq dup * ; \" sq\" $find swap 7 swap execute") == V({-1, 0x31}));
+    const V miss = r.stack("\" no-such-word\" $find");
+    REQUIRE(miss.size() == 3);
+    CHECK_EQ(miss[1], 12);
+    CHECK_EQ(miss[2], 0);
 }
