@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// core/firmware/openfirm/bw_device_tree.h — the device tree our firmware
+// presents for the Blue & White G3 (PowerMac1,1), built from the emulated
+// machine's configuration.
+//
+// Each property's source is listed in docs/firmware/bw-device-tree.md:
+// what Linux needs to find this hardware (read from its source, facts
+// only), the PowerPC 750 manual, the IEEE 1275 PCI binding, and the
+// emulator's own layout. Values only a real B&W would show are marked
+// "to verify" there — a device-tree dump of a real machine replaces them.
+
+#ifndef G3_CORE_FIRMWARE_OPENFIRM_BW_DEVICE_TREE_H
+#define G3_CORE_FIRMWARE_OPENFIRM_BW_DEVICE_TREE_H
+
+#include "core/common/types.h"
+#include "core/firmware/openfirm/device_tree.h"
+
+namespace g3::of {
+
+struct BwMachine {
+    u32 ram_size = 0;
+    u32 cpu_hz = 350000000;
+    u32 bus_hz = 100000000;
+    u32 pvr = 0;
+    u32 macio_base = 0x80800000u;   // mac-io BAR as the firmware assigns it
+    u32 bridge_device = 0x0D;       // DEC 21154 on bus 0
+    u32 macio_device = 0x05;        // mac-io on bus 1 (behind the bridge)
+};
+
+struct BwNodes {
+    Phandle root, cpus, cpu, memory, chosen, aliases, options, openprom, packages, console;
+    Phandle pci, bridge, macio, cuda, nvram;
+    Phandle ata[2], disk[2];
+};
+
+// Builds the whole tree into `t` (which must be empty). False if the tree
+// ran out of space.
+bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& out);
+
+} // namespace g3::of
+
+#endif // G3_CORE_FIRMWARE_OPENFIRM_BW_DEVICE_TREE_H

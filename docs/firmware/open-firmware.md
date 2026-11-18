@@ -24,13 +24,14 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | CHRP bootinfo parser (the boot file's text header; see bootinfo.md) | ✅ step 7 |
 | call-method and disk methods (block-size, read-blocks, ...) | to do |
 | Virtual-memory services (translations, map) | to do, if Mac OS needs them |
-| B&W device tree contents (needs a real device-tree dump) | to do |
+| B&W device tree contents | ✅ first version; a real dump will verify it |
 | Forth interpreter: language core (forth.md) | ✅ step 8 |
 | Firmware words: device tree, encoding, packages, `load` (forth-words.md) | ✅ step 9 |
 | ELF init-program and `go` (elf-loader.md) | ✅ step 10 |
 | `boot`, `init-program`, `go`: bootinfo scripts and ELF programs | ✅ step 11 |
 | `interpret` and `call-method` client services (through the Forth interpreter) | ✅ step 12 |
-| The B&W device tree; wiring into the machine | to do |
+| The B&W device tree (bw-device-tree.md) | ✅ step 13 |
+| Wiring the firmware into the machine (boot from a disk image) | to do |
 
 ## Facts used
 
