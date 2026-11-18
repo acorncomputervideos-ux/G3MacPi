@@ -82,6 +82,7 @@ private:
     bool ok_ = false;
     bool started_ = false;
     u32 entry_ = 0;
+    of::Ihandle stdout_ = 0;
     of::DeviceTree tree_;
     of::BwNodes nodes_{};
     of::MemoryMap memory_;

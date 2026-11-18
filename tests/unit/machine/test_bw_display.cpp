@@ -295,3 +295,15 @@ TEST_CASE("machine/bw-display/stdout_is_the_screen")
     CHECK_EQ(t.vram[px + 3], 0xFFu);
     CHECK_EQ(t.vram[0 + 1], 0u);                              // pixel (0, 0): background
 }
+
+TEST_CASE("machine/bw-display/forth_output_goes_to_stdout")
+{
+    TermRig r;
+    REQUIRE(r.fw->ok());
+    r.echo.clear();
+    CHECK(r.fw->command(".\" Hi\" decimal 42 ."));
+    CHECK(r.echo == "Hi42 ");
+    TermRig ref;
+    ref.write("H");
+    CHECK(r.cell(0, 0) == ref.cell(0, 0));                    // on the screen too
+}

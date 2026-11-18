@@ -85,6 +85,13 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     }
     tree_.set_int(nodes_.chosen, "stdout", con);
     tree_.set_int(nodes_.chosen, "stdin", con);
+    stdout_ = con;
+    // Forth output (." type . cr ...) goes to stdout, as on real firmware.
+    forth_.set_output([](void* ctx, const char* t, u32 len) {
+        auto* self = static_cast<BwFirmware*>(ctx);
+        if (of::PackageDriver* d = self->inst_.driver(self->stdout_))
+            d->write(self->inst_.slot(self->stdout_), reinterpret_cast<const u8*>(t), len);
+    }, this);
 
     // Client interface and Forth words.
     if (!fw_.install(layout_.ci_entry))

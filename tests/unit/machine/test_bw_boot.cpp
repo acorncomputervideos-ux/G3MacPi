@@ -176,7 +176,7 @@ TEST_CASE("machine/bw-boot/boots_a_client_from_disk")
     CHECK_EQ(mc.m->cpu().state().pc, Client::kCode);
     // Run the machine: the client calls finddevice, getprop and write.
     mc.m->run_for(1000000000ull);                                 // 1 ms of guest time
-    CHECK(mc.console == client.msg);
+    CHECK(mc.console == "booting\n" + client.msg);          // the script's output, then the client's
     CHECK_EQ(mc.rd(0x7180), 0u);                                  // r3 = 0 on entry
     CHECK_EQ(mc.rd(0x7184), 0u);                                  // write: service existed
     CHECK_EQ(mc.rd(Client::kArgs3 + 24), static_cast<u32>(client.msg.size()));  // bytes written
