@@ -133,6 +133,24 @@ Phandle DeviceTree::add_node(Phandle parent_h, const char* name, const char* uni
     return h;
 }
 
+bool DeviceTree::set_name(Phandle h, const char* name, const char* unit)
+{
+    if (!valid(h) || index(h) == 0)
+        return false;  // the root has no name of its own
+    const u32 name_off = store_string(name, cstr::length(name));
+    if (name_off == kNil)
+        return false;
+    u32 unit_off = nodes_[index(h)].unit;
+    if (unit) {
+        unit_off = store_string(unit, cstr::length(unit));
+        if (unit_off == kNil)
+            return false;
+    }
+    nodes_[index(h)].name = name_off;
+    nodes_[index(h)].unit = unit_off;
+    return set_string(h, "name", name);
+}
+
 u32 DeviceTree::find_property(u32 node, const char* name) const
 {
     for (u32 p = nodes_[node].first_prop; p != kNil; p = props_[p].next)

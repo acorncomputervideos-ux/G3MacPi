@@ -85,6 +85,12 @@ public:
     // Reads a guest string into host memory (NUL-terminated, truncated to max-1).
     bool read_string(u32 addr, u32 len, char* out, u32 max);
 
+    // For parsing native words: the next blank-delimited word, or the rest
+    // of the current line (leading/trailing blanks removed). False at the
+    // end of input.
+    bool next_word(const char*& w, u32& len) { return src_depth_ && parse_word(w, len); }
+    bool rest_of_line(const char*& s, u32& len);
+
     ppc::MemoryInterface& memory() { return mem_; }
     void emit_text(const char* s, u32 len);
 

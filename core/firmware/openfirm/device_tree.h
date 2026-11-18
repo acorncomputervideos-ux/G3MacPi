@@ -48,6 +48,9 @@ public:
     // Builds a node; also sets its "name" property. unit may be nullptr.
     Phandle add_node(Phandle parent, const char* name, const char* unit = nullptr);
 
+    // Renames a node (and its "name" property); unit may be nullptr = keep.
+    bool set_name(Phandle h, const char* name, const char* unit = nullptr);
+
     // Properties (replacing an existing one of the same name).
     bool set_property(Phandle h, const char* name, const u8* data, u32 len);
     bool set_string(Phandle h, const char* name, const char* value);  // stored with its NUL

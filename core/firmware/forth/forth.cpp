@@ -362,6 +362,26 @@ bool Forth::parse_until(char delim, const char*& str, u32& len)
     return found;
 }
 
+bool Forth::rest_of_line(const char*& str, u32& len)
+{
+    if (!src_depth_)
+        return false;
+    Source& s = src_[src_depth_ - 1];
+    while (s.pos < s.len && (s.text[s.pos] == ' ' || s.text[s.pos] == '\t'))
+        ++s.pos;
+    const u32 start = s.pos;
+    while (s.pos < s.len && s.text[s.pos] != '\n')
+        ++s.pos;
+    u32 end = s.pos;
+    if (s.pos < s.len)
+        ++s.pos;  // the newline
+    while (end > start && is_space(s.text[end - 1]))
+        --end;
+    str = s.text + start;
+    len = end - start;
+    return len > 0;
+}
+
 // IEEE 1275 " : text up to a '"'. After a '"', '(' starts hex byte pairs
 // up to ')' and the string continues; white space or the end of input ends
 // the string; any other character is taken literally (so "" gives ").
