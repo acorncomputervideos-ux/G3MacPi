@@ -146,7 +146,13 @@ TEST_CASE("machine/bw-boot/power_on_state")
     BwFirmware& fw = *mc.fw;
     CHECK_EQ(mc.m->macio().mapped_base(), 0x80800000u);            // BAR assigned and enabled
     CHECK_EQ(fw.layout().base, kRam - BwFirmware::kFirmwareSize);
-    CHECK(fw.memory().is_free(BwFirmware::kVectorsEnd, fw.layout().base - BwFirmware::kVectorsEnd));
+    // Free: from the vectors up to the page table, which sits just below the
+    // firmware region (sized RAM / 128: 128 KB for 16 MB).
+    CHECK(fw.memory().is_free(BwFirmware::kVectorsEnd, fw.layout().htab - BwFirmware::kVectorsEnd));
+    CHECK(!fw.memory().is_free(fw.layout().htab, 1));
+    CHECK_EQ(fw.layout().htab_size, 0x20000u);
+    CHECK_EQ(fw.layout().htab % fw.layout().htab_size, 0u);
+    CHECK(fw.layout().htab + fw.layout().htab_size <= fw.layout().base);
     CHECK(!fw.memory().is_free(0, BwFirmware::kVectorsEnd));       // exception vectors stay out
     CHECK(!fw.memory().is_free(fw.layout().base, 1));
     CHECK_EQ(mc.rd(fw.layout().ci_entry), of::Firmware::kTrapClientInterface);
@@ -177,6 +183,9 @@ TEST_CASE("machine/bw-boot/boots_a_client_from_disk")
     CHECK_EQ(mc.m->cpu().state().pc, Client::kCode);
     // Virtual-Mode: the client starts with translation on (PowerPC binding §4.2).
     CHECK((mc.m->cpu().state().msr & (ppc::msr::IR | ppc::msr::DR)) == (ppc::msr::IR | ppc::msr::DR));
+    // FP and machine checks enabled, vectors at 0 (Apple's loader runs FP code at once).
+    CHECK((mc.m->cpu().state().msr & (ppc::msr::FP | ppc::msr::ME)) == (ppc::msr::FP | ppc::msr::ME));
+    CHECK((mc.m->cpu().state().msr & (ppc::msr::IP | ppc::msr::EE)) == 0u);
     // Run the machine: the client calls finddevice, getprop and write.
     mc.m->run_for(1000000000ull);                                 // 1 ms of guest time
     CHECK(mc.console == "booting\n" + client.msg);          // the script's output, then the client's

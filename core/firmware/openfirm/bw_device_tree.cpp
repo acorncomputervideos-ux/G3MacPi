@@ -5,6 +5,9 @@
 
 #include "core/firmware/openfirm/bw_device_tree.h"
 
+#include "core/devices/macio/heathrow_pic.h"
+#include "core/devices/macio/paddington.h"
+
 namespace g3::of {
 
 namespace {
@@ -62,8 +65,8 @@ Phandle pci_node(DeviceTree& t, Phandle parent, const char* name, u32 bus, u32 d
 }
 
 // A mac-io cell: reg (offset/size pairs) and interrupts.
-Phandle cell(DeviceTree& t, Phandle macio, const char* name, const char* type, const u32* reg, u32 nreg,
-             const u32* irqs, u32 nirqs)
+Phandle cell(DeviceTree& t, Phandle macio, Phandle pic, const char* name, const char* type, const u32* reg,
+             u32 nreg, const u32* irqs, u32 nirqs)
 {
     char unit[9];
     hex_unit(unit, reg[0]);
@@ -71,8 +74,12 @@ Phandle cell(DeviceTree& t, Phandle macio, const char* name, const char* type, c
     if (type)
         t.set_string(h, "device_type", type);
     t.set_ints(h, "reg", reg, nreg);
-    if (nirqs)
+    if (nirqs) {
         t.set_ints(h, "interrupts", irqs, nirqs);
+        // IEEE 1275 interrupt binding: the controller these numbers belong
+        // to. Apple's Mac OS ROM loader asks for it.
+        t.set_int(h, "interrupt-parent", pic);
+    }
     return h;
 }
 
@@ -115,6 +122,20 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     t.set_int(n.cpu, "i-cache-block-size", 32);
     t.set_int(n.cpu, "d-cache-sets", 128);
     t.set_int(n.cpu, "i-cache-sets", 128);
+    // PowerPC binding §5.1.4-5.1.5 properties, with the 750's values (750 UM:
+    // lwarx/stwcx. reservations are per 32-byte cache block; separate
+    // instruction and data TLBs of 128 entries each, two-way, so 64 sets).
+    // Apple's Mac OS ROM loader requires reservation-granule-size.
+    t.set_int(n.cpu, "reservation-granule-size", 32);
+    t.set_property(n.cpu, "tlb-split", nullptr, 0);
+    t.set_int(n.cpu, "tlb-size", 256);
+    t.set_int(n.cpu, "tlb-sets", 64);
+    t.set_int(n.cpu, "d-tlb-size", 128);
+    t.set_int(n.cpu, "d-tlb-sets", 64);
+    t.set_int(n.cpu, "i-tlb-size", 128);
+    t.set_int(n.cpu, "i-tlb-sets", 64);
+    t.set_property(n.cpu, "graphics", nullptr, 0);         // fres, frsqrte, fsel (750 UM)
+    t.set_property(n.cpu, "performance-monitor", nullptr, 0);
 
     // --- memory
     n.memory = t.add_node(n.root, "memory", "0");
@@ -171,16 +192,28 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     t.set_int(n.macio, "#size-cells", 1);
     const u32 macio_ranges[5] = {0, bar, 0, m.macio_base, 0x80000};
     t.set_ints(n.macio, "ranges", macio_ranges, 5);
-    t.set_property(n.macio, "interrupt-controller", nullptr, 0);
-    t.set_int(n.macio, "#interrupt-cells", 1);
+
+    // Paddington's interrupt controller (registers at mac-io + 0, a 0x40-byte
+    // window: heathrow_pic.h) as its own node, which is how Apple's Mac OS
+    // ROM loader finds it: a node of device_type "interrupt-controller"
+    // whose compatible is "heathrow" or "paddington" (the loader's table of
+    // special nodes; it also looks up /pci/mac-io/interrupt-controller).
+    // docs/firmware/bw-device-tree.md.
+    const u32 pic_reg[2] = {Paddington::kPicOffset, HeathrowPic::kWindowSize};
+    n.pic = t.add_node(n.macio, "interrupt-controller", "0");
+    t.set_string(n.pic, "device_type", "interrupt-controller");
+    t.set_string(n.pic, "compatible", "paddington");
+    t.set_ints(n.pic, "reg", pic_reg, 2);
+    t.set_property(n.pic, "interrupt-controller", nullptr, 0);
+    t.set_int(n.pic, "#interrupt-cells", 1);
 
     // --- mac-io cells (offsets and interrupts as emulated: Paddington)
     const u32 cuda_reg[2] = {0x16000, 0x2000}, cuda_irq[1] = {18};
-    n.cuda = cell(t, n.macio, "via-cuda", "via-cuda", cuda_reg, 2, cuda_irq, 1);
+    n.cuda = cell(t, n.macio, n.pic, "via-cuda", "via-cuda", cuda_reg, 2, cuda_irq, 1);
     const u32 ata_reg[2][4] = {{0x20000, 0x1000, 0x8B00, 0x100}, {0x21000, 0x1000, 0x8D00, 0x100}};
     const u32 ata_irq[2][2] = {{13, 2}, {14, 3}};
     for (u32 i = 0; i < 2; ++i) {
-        n.ata[i] = cell(t, n.macio, "ata", "ata", ata_reg[i], 4, ata_irq[i], 2);
+        n.ata[i] = cell(t, n.macio, n.pic, "ata", "ata", ata_reg[i], 4, ata_irq[i], 2);
         t.set_string(n.ata[i], "compatible", "heathrow-ata");
         t.set_int(n.ata[i], "#address-cells", 1);
         t.set_int(n.ata[i], "#size-cells", 0);
@@ -189,7 +222,7 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_int(n.disk[i], "reg", 0);
     }
     const u32 nvram_reg[2] = {0x60000, 0x20000};
-    n.nvram = cell(t, n.macio, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
+    n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
 
     // --- display (our framebuffer device; properties as Linux offb reads them)
     if (m.vram_size) {

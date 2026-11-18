@@ -93,6 +93,9 @@ TEST_CASE("firmware/devtree/paths_units_and_aliases")
     CHECK_EQ(t.find("/"), t.root());
     CHECK_EQ(t.find("/cpus/PowerPC,750@0"), f.cpu);
     CHECK_EQ(t.find("/cpus/PowerPC,750"), f.cpu);            // no unit: first by name
+    CHECK_EQ(t.find("/cpus/@0"), f.cpu);                     // no name: by unit address
+    CHECK_EQ(t.find("/cpus/@1"), kNone);
+    CHECK_EQ(t.find("/cpus/@"), kNone);
     CHECK_EQ(t.find("/pci@80000000/mac-io@10/ata@20000"), f.ata);
     CHECK_EQ(t.find("/pci/mac-io/ata"), f.ata);              // first "ata"
     CHECK(t.find("/pci/mac-io/ata@21000") != f.ata);
@@ -283,6 +286,10 @@ TEST_CASE("firmware/client/paths_test_clock_and_unknown")
     r.ci.set_exit([](void* c) { ++*static_cast<int*>(c); }, &exits);
     r.call("exit", {}, 0);
     CHECK_EQ(exits, 1);
+    CHECK_EQ(r.status, 0u);
+    // quiesce (Apple; Mac OS ROM's loader calls it before handing over): no arguments.
+    CHECK_EQ(r.call("test", {r.put_string("quiesce")}, 1)[0], 0u);
+    r.call("quiesce", {}, 0);
     CHECK_EQ(r.status, 0u);
     // Too few return cells for a service: rejected as an invalid call.
     r.call("getproplen", {r.f.ata, r.put_string("reg")}, 0);

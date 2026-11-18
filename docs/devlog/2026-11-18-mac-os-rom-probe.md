@@ -88,3 +88,49 @@ memory and looks for `/rtas`. Ours is absent, so it writes
 
 Next: RTAS (CHRP Run-Time Abstraction Services), meaning a `/rtas` node,
 `rtas-size`, `instantiate-rtas` and the RTAS calls Mac OS makes.
+
+## RTAS, the device tree, and Mac OS's NanoKernel starts
+
+Each stop the loader made, and the fix:
+1. **`/rtas` not found.** Added RTAS (docs/firmware/rtas.md).
+2. **read-pci-config token not found.** Added PCI configuration through
+   RTAS.
+3. **`/cpus/@0` not found.** Path components with only a unit address
+   now resolve.
+4. **Missing "reservation-granule-size".** Added, with the binding's TLB
+   properties.
+5. **The probe's time unit was wrong** (ns, where ps was needed). Fixed.
+   The loader then decompressed the 1.8 MB toolbox image (about 54
+   million instructions).
+6. **Floating-point-unavailable exception** (vector 0x800, with MSR[IP]
+   set). Clients now start with MSR FP and ME on and IP off. Every
+   exception vector holds a firmware trap that reports unexpected
+   exceptions.
+7. **"unable to find an interrupt controller node".**
+   - Turning on the loader's own debug output (root `AAPL,debug` = −1,
+     probe only) showed what it wants.
+   - `/chosen` "interrupt-controller" is a phandle.
+   - Interrupting devices need `interrupt-parent`.
+   - The controller is a node of device_type "interrupt-controller"
+     with compatible "paddington". Added.
+8. The loader built Mac OS's tables (ProductInfo, DecoderInfo, interrupt
+   masks and vectors), mapped the interrupt controller and the ROM, and
+   called **`quiesce`** (Apple's client-interface service). Added, as a
+   no-op.
+9. **DSI on its work area at 0x0FE4000C.** The hardware-init code had set
+   DBAT0 to 0-16 MB and relied on the page table. Every translation now
+   goes into the page table, sized for the RAM.
+
+**Result.** Apple's NanoKernel runs and sets up its own page table and
+BATs (ROM at 0xFFC00000, the 68K emulator at 0x68000000). Over a billion
+instructions in, the CPU is inside the 68K emulator.
+
+The program exceptions on the way are the NanoKernel probing CPU models:
+`mfspr` of SPR 0 (the 601's MQ) and SPR 959 (604), both illegal on the
+750, as the CPU must report. The data faults are its own page-fault
+handling. `G3_STEP=1 g3_rom_probe …` lists the exceptions, with the
+instruction behind each program exception.
+
+Speed is now the limit. The interpreter runs about 7-8 million
+instructions per second on this host, so a full Mac OS boot will need
+many seconds to minutes of host time.

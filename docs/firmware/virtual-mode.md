@@ -63,12 +63,18 @@ these shapes.
   - mac-io's BAR;
   - the display's video memory and registers (the binding's I/O
     default).
-- **Hardware**, rebuilt from the list after every change (`apply_mmu`):
+- **Hardware**, rebuilt from the list after every change (`apply_mmu`).
+  Every translation goes into the page table, BAT-covered ones included.
+  Mac OS's hardware-init code reprograms DBAT0 to the first 16 MB, clears
+  the other BATs, and then relies on the page table for the rest of RAM.
+  When RAM was BAT-only, it faulted on its work area at the top of RAM.
+  The table is sized RAM / 128, the PowerPC manual's 64 KB per 8 MB, so
+  2 MB for 256 MB. It sits just below the firmware region.
   - BATs map four 1:1 windows: RAM (one BAT up to 256 MB, two up to
     512 MB), 0x80000000 (256 MB, PCI and mac-io), and 0x90000000 (32 MB,
     the display).
-  - Every other translated page gets a PTE in a 64 KB hashed page table
-    (8192 entries) in firmware memory, with SDR1 pointing at it.
+  - Every translated page gets a PTE in the hashed page table, with SDR1
+    pointing at it.
   - Segment register n holds VSID n, with keys 0, so PP 00 to 10 are
     read/write.
   - A non-1:1 mapping inside a BAT window is refused, since the BAT
@@ -95,8 +101,8 @@ these shapes.
 ## Limits
 
 - At most 512 MB of RAM in Virtual-Mode (two RAM BATs).
-- At most 128 translations, and the page table's 8192 entries. Apple's
-  boot script needs about 950 pages outside the BAT windows.
+- At most 128 translations. The page table is rebuilt in full on every
+  change, which is slow for large RAM but rare.
 - No `set-callback` translate callbacks (§4.2.6), and no lazy handling
   of page-table overflow.
 - The firmware's user interface doesn't handle DSI/ISI itself. An

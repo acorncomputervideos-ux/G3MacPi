@@ -23,6 +23,7 @@
 #include "core/firmware/openfirm/firmware.h"
 #include "core/firmware/openfirm/guest_view.h"
 #include "core/firmware/openfirm/mmu.h"
+#include "core/firmware/openfirm/rtas.h"
 #include "core/firmware/openfirm/forth_words.h"
 #include "core/firmware/openfirm/instances.h"
 #include "core/firmware/openfirm/memory_map.h"
@@ -37,6 +38,9 @@ public:
         BlockDevice* disk[2] = {nullptr, nullptr};  // IDE0 and IDE1 master disks
         u32 macio_base = 0x80800000u;
         u32 load_base = 0x00400000u;
+        // The real-time clock at power-on (RTAS get-time-of-day): seconds
+        // since 1970-01-01 UTC. The Pi side will supply the real time.
+        u64 rtc_seconds = 978307200ull;  // 2001-01-01 00:00:00
         // Power-on display mode (if the machine has a display).
         u32 width = 640, height = 480, depth = 8;
     };
@@ -49,11 +53,11 @@ public:
         u32 scratch;       // property values handed to Forth
         u32 scratch_size;
         u32 stack_top;     // client stack (grows down)
-        u32 htab;          // hashed page table (kHtabSize, aligned to it)
+        u32 htab;          // hashed page table, just below the firmware region
+        u32 htab_size;     // RAM / 128 (PEM 7.6.1.1's guideline), 64 KB .. 32 MB, aligned to it
         static Layout for_ram(u32 ram_size);
     };
     static constexpr u32 kFirmwareSize = 0x00100000u;  // 1 MB
-    static constexpr u32 kHtabSize = 0x00010000u;      // 64 KB: 8192 PTEs
     static constexpr u32 kVectorsEnd = 0x4000u;         // exception vectors, never handed out
     static constexpr u32 kMaxRam = 512u << 20;          // two BATs (docs/firmware/virtual-mode.md)
     static constexpr u32 kMinRam = 8u << 20;
@@ -73,6 +77,11 @@ public:
 
     bool client_started() const { return started_; }
     bool client_exited() const { return fw_.client_exited(); }
+    const of::Firmware& firmware() const { return fw_; }
+    // RTAS power-off / system-reboot was called.
+    bool powered_off() const { return powered_off_; }
+    bool reboot_requested() const { return reboot_; }
+    of::Rtas& rtas() { return rtas_; }
     u32 client_entry() const { return entry_; }
     const Layout& layout() const { return layout_; }
 
@@ -86,6 +95,7 @@ public:
 private:
     static void go(void* ctx, u32 entry);
     static bool sync_mmu(void* ctx);
+    static of::Rtas::Hooks rtas_hooks(BwFirmware* self);
     bool apply_mmu();                   // BATs + page table from translations_
     bool in_bat_window(u32 va) const;
     static u32 clock_ms(void* ctx);
@@ -106,6 +116,9 @@ private:
     of::MmuDriver mmu_;
     of::MemoryDriver memdrv_;
     u32 ram_window_ = 0;              // size of the RAM BAT window(s)
+    of::Rtas rtas_;
+    u64 rtc_base_ = 0;                // seconds at machine time 0
+    bool powered_off_ = false, reboot_ = false;
     forth::Forth forth_;
     of::FirmwareWords words_;
     of::Firmware fw_;

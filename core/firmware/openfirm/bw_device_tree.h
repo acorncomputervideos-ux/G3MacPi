@@ -37,7 +37,7 @@ struct BwMachine {
 
 struct BwNodes {
     Phandle root, cpus, cpu, memory, chosen, aliases, options, openprom, packages, console, rom;
-    Phandle pci, bridge, macio, cuda, nvram;
+    Phandle pci, bridge, macio, pic, cuda, nvram;
     Phandle ata[2], disk[2];
     Phandle display;  // kNone without a display
 };

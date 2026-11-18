@@ -40,6 +40,11 @@ public:
     void clear_dirty() { dirty_ = false; }
 
     u8 byte(u32 index) const { return data_[index & (kSize - 1)]; }
+    void set_byte(u32 index, u8 v)  // firmware access (RTAS nvram-store)
+    {
+        data_[index & (kSize - 1)] = v;
+        dirty_ = true;
+    }
 
     // MmioDevice
     u32 mmio_read(u32 offset, u32 size) override;

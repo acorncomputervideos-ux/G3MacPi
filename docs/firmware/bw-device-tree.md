@@ -67,3 +67,25 @@ an interoperability requirement only. Apple's Mac OS ROM loader
 the root's "copyright" starts with "Copyright " and contains " Apple
 Computer, Inc.", the two strings it holds. The project owner agreed to
 add it, as other emulators' firmware does. Our firmware is not Apple's.
+
+## Additions for Apple's Mac OS ROM loader
+
+Each item was required by the loader, as seen in its client-interface
+calls and its own debug output (root `AAPL,debug`):
+- **CPU node**: `reservation-granule-size` 32, plus the PowerPC binding's
+  TLB properties with the 750's values: `tlb-split`, 256/64 overall,
+  128/64 each for I and D. Also `graphics` and `performance-monitor`.
+- **Interrupt controller node**: `/pci/pci-bridge/mac-io/interrupt-controller@0`.
+  - device_type "interrupt-controller", compatible "paddington", reg
+    0 0x40 (Paddington's PIC window), "interrupt-controller", and
+    `#interrupt-cells` 1.
+  - The loader's table of special nodes recognises an interrupt
+    controller by that device_type plus compatible "heathrow" or
+    "paddington".
+  - mac-io's children name it in `interrupt-parent` (IEEE 1275 interrupt
+    binding), and `/chosen` `interrupt-controller` holds its phandle.
+  - Linux skips `/chosen/interrupt-controller`; the loader passes the
+    value to getprop, hence a phandle.
+- **`/rtas`**: see rtas.md.
+- **Path lookup**: a component may be `@unit` with no name, matching any
+  child at that address (IEEE 1275). The loader looks up `/cpus/@0`.

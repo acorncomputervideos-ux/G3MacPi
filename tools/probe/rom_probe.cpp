@@ -9,6 +9,7 @@
 //
 //   g3_rom_probe "Mac OS ROM" [milliseconds-of-guest-time] ["forth before init-program"]
 
+#include "core/cpu/ppc750/disasm.h"
 #include "core/machine/bw_firmware.h"
 
 #include <cstdio>
@@ -138,12 +139,63 @@ int main(int argc, char** argv)
     if (fw.client_started()) {
         std::printf("[probe] client started at 0x%08X; running %llu ms of guest time\n", fw.client_entry(),
                     static_cast<unsigned long long>(ms));
-        m.run_for(ms * 1000000ull);
-        if (fw.client_exited())
+        if (std::getenv("G3_STEP")) {
+            // Step by step (no device time passes), reporting each exception
+            // entry: the vector, SRR0/SRR1, DAR/DSISR, and the last PCs.
+            const u64 steps = ms * 350000ull;  // ~ms at 350 MHz, one instruction per cycle
+            u32 history[16] = {}, hp = 0, reported = 0;
+            auto& st = m.cpu().state();
+            for (u64 i = 0; i < steps && !m.cpu().checkstopped() && !fw.client_exited(); ++i) {
+                const u32 before = st.pc;
+                history[hp++ % 16] = before;
+                m.cpu().step();
+                const u32 after = st.pc;
+                const bool vector = (after & 0xFF) == 0 && (after & ~0xFFF0FF00u) == 0 && after >= 0x100 &&
+                                    (after & 0xFFFF) <= 0x1F00 && after != before + 4;
+                if (vector && reported < 40 && (st.spr[ppc::spr::SRR0] == before || st.spr[ppc::spr::SRR0] == before + 4)) {
+                    ++reported;
+                    std::printf("[probe] exception -> 0x%08X at step %llu: srr0=0x%08X srr1=0x%08X dar=0x%08X "
+                                "dsisr=0x%08X msr=0x%08X\n[probe]   last pcs:", after,
+                                static_cast<unsigned long long>(i), st.spr[ppc::spr::SRR0], st.spr[ppc::spr::SRR1],
+                                st.spr[ppc::spr::DAR], st.spr[ppc::spr::DSISR], st.msr);
+                    for (u32 k = 0; k < 16; ++k)
+                        std::printf(" %08X", history[(hp + k) % 16]);
+                    if (after == 0x700 || after == 0x00000700) {
+                        // The instruction that raised it (SRR0 is physical while the handler
+                        // runs with translation off; read through the CPU's current view).
+                        u32 word = 0;
+                        fw.client().memory().read32(st.spr[ppc::spr::SRR0], word);
+                        char text[96];
+                        ppc::disassemble(st.spr[ppc::spr::SRR0], word, text, sizeof text);
+                        std::printf("[probe]   instruction %08X  %s\n", word, text);
+                    }
+                    std::printf("[probe]   sdr1=%08X sr0=%08X sr15=%08X", st.spr[ppc::spr::SDR1], st.sr[0], st.sr[15]);
+                    for (u32 b = 0; b < 4; ++b)
+                        std::printf(" dbat%u=%08X/%08X", b, st.spr[ppc::spr::DBAT0U + 2 * b],
+                                    st.spr[ppc::spr::DBAT0U + 2 * b + 1]);
+                    std::printf("\n");
+                }
+            }
+        } else {
+            m.run_for(ms * 1000000000ull);  // picoseconds
+        }
+        if (fw.firmware().exception_vector())
+            std::printf("\n[probe] unexpected exception 0x%X: srr0=0x%08X srr1=0x%08X\n",
+                        fw.firmware().exception_vector(), fw.firmware().exception_srr0(),
+                        fw.firmware().exception_srr1());
+        else if (fw.client_exited())
             std::printf("\n[probe] the client called exit\n");
+        if (fw.powered_off() || fw.reboot_requested())
+            std::printf("[probe] RTAS %s\n", fw.powered_off() ? "power-off" : "system-reboot");
         const auto& s = m.cpu().state();
         std::printf("\n[probe] pc=0x%08X lr=0x%08X msr=0x%08X r1=0x%08X r3=0x%08X%s\n", s.pc, s.lr(), s.msr,
                     s.gpr[1], s.gpr[3], m.cpu().checkstopped() ? " CHECKSTOP" : "");
+        std::printf("[probe] %llu instructions executed; srr0=0x%08X srr1=0x%08X dar=0x%08X dsisr=0x%08X\n",
+                    static_cast<unsigned long long>(m.cpu().instructions_executed()), s.spr[ppc::spr::SRR0],
+                    s.spr[ppc::spr::SRR1], s.spr[ppc::spr::DAR], s.spr[ppc::spr::DSISR]);
+        for (u32 i = 0; i < 32; i += 8)
+            std::printf("[probe] r%-2u %08X %08X %08X %08X %08X %08X %08X %08X\n", i, s.gpr[i], s.gpr[i + 1],
+                        s.gpr[i + 2], s.gpr[i + 3], s.gpr[i + 4], s.gpr[i + 5], s.gpr[i + 6], s.gpr[i + 7]);
     }
     // G3_SCREEN=file.ppm: the emulated display at the end (binary PPM).
     if (const char* shot = std::getenv("G3_SCREEN"); shot && m.has_display()) {

@@ -64,7 +64,7 @@ bool ClientInterface::provides(const char* n) const
     static const char* const core[] = {
         "test", "peer", "child", "parent", "getproplen", "getprop", "nextprop",
         "setprop", "finddevice", "canon", "package-to-path", "milliseconds", "exit",
-        "enter",
+        "enter", "quiesce",
     };
     static const char* const memory[] = {"claim", "release"};
     static const char* const inst[] = {
@@ -414,6 +414,9 @@ bool ClientInterface::dispatch()
             return false;
         ret(0, clock_cb_ ? clock_cb_(clock_ctx_) : 0);
         return true;
+    }
+    if (is("quiesce")) {  // ( -- ): Apple: stop firmware activity before the OS takes over.
+        return true;      // ours has none (no DMA or timers of its own) — docs/firmware/open-firmware.md
     }
     if (is("exit")) {
         if (exit_cb_)

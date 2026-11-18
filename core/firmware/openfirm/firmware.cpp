@@ -4,6 +4,8 @@
 
 #include "core/firmware/openfirm/firmware.h"
 
+#include "core/firmware/openfirm/rtas.h"
+
 namespace g3::of {
 
 bool Firmware::install(u32 addr)
@@ -14,6 +16,14 @@ bool Firmware::install(u32 addr)
     return true;
 }
 
+bool Firmware::install_vectors()
+{
+    for (u32 v = 0x100; v <= 0x1700; v += 0x100)
+        if (!mem_.write32(v, kTrapVector | (v >> 8)))
+            return false;
+    return true;
+}
+
 void Firmware::start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const
 {
     s.pc = entry;
@@ -21,7 +31,8 @@ void Firmware::start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const
     s.gpr[3] = 0;
     s.gpr[4] = 0;
     s.gpr[5] = entry_;
-    s.msr &= ~(ppc::msr::IR | ppc::msr::DR | ppc::msr::EE);
+    s.msr &= ~(ppc::msr::IR | ppc::msr::DR | ppc::msr::EE | ppc::msr::IP);
+    s.msr |= ppc::msr::FP | ppc::msr::ME;
     if (virtual_mode_)
         s.msr |= ppc::msr::IR | ppc::msr::DR;
 }
@@ -31,6 +42,24 @@ bool Firmware::hle_trap(void* context, u32 insn, ppc::CpuState& s, u32& next_pc)
     auto* fw = static_cast<Firmware*>(context);
     if (insn == kTrapIdle) {
         next_pc = s.pc;  // a client that exited stays here
+        return true;
+    }
+    if ((insn & ~0x1Fu) == kTrapVector) {
+        fw->vector_ = (insn & 0x1F) << 8;
+        fw->vector_srr0_ = s.spr[ppc::spr::SRR0];
+        fw->vector_srr1_ = s.spr[ppc::spr::SRR1];
+        fw->exited_ = true;
+        next_pc = fw->entry_ + 4;  // parked
+        return true;
+    }
+    if (insn == kTrapRtas && fw->rtas_) {
+        // r3 = argument buffer, LR = return address (rtas.h).
+        fw->rtas_->call(fw->mem_, s.gpr[3]);
+        next_pc = s.lr();
+        if (fw->exit_pending_) {
+            fw->exit_pending_ = false;
+            next_pc = fw->entry_ + 4;
+        }
         return true;
     }
     if (insn != kTrapClientInterface)

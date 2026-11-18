@@ -18,7 +18,13 @@ BwFirmware::Layout BwFirmware::Layout::for_ram(u32 ram)
     l.scratch = l.base + 0x11000;
     l.scratch_size = 0x4000;
     l.stack_top = l.base + 0x40000;            // 0x2B000 bytes of client stack below
-    l.htab = l.base + 0x40000;                 // 64 KB, aligned (base is 1 MB aligned)
+    // The page table maps every translation, RAM included, so it is sized
+    // for the RAM: one 8-PTE group per 2 pages... the PowerPC manual's
+    // guideline of 64 KB per 8 MB (RAM / 128), within SDR1's 64 KB-32 MB.
+    l.htab_size = 0x10000;
+    while (l.htab_size < ram / 128 && l.htab_size < (32u << 20))
+        l.htab_size <<= 1;
+    l.htab = l.base > l.htab_size ? (l.base - l.htab_size) & ~(l.htab_size - 1) : 0;
     return l;
 }
 
@@ -27,6 +33,7 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
       view_(m.bus(), m.cpu()),
       mmu_(tree_, translations_, virt_free_),
       memdrv_(memory_),
+      rtas_(rtas_hooks(this)),
       forth_(view_, layout_.forth_data, layout_.forth_size),
       words_(forth_, tree_, inst_, layout_.scratch, layout_.scratch_size, c.load_base, layout_.base),
       fw_(tree_, view_),
@@ -34,7 +41,7 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
       display_(m.display())
 {
     if (!m.ok() || m.ram_size() < kMinRam || m.ram_size() > kMaxRam || c.load_base >= layout_.base ||
-        (layout_.htab & (kHtabSize - 1)) != 0)
+        layout_.htab < kVectorsEnd + (1u << 20))
         return;
 
     // PCI resources, as firmware assigns them at power-on.
@@ -70,11 +77,11 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     if (!of::build_bw_device_tree(tree_, desc, nodes_))
         return;
 
-    // Free memory: everything below the firmware region, except the
+    // Free memory: everything below the page table and firmware region, except the
     // exception vectors (0 - 0x3FFF; PowerPC binding §4.1: memory that can't
     // be used for general purposes isn't available). Aligned claims come
     // from the top.
-    memory_.add_free(kVectorsEnd, layout_.base - kVectorsEnd);
+    memory_.add_free(kVectorsEnd, layout_.htab - kVectorsEnd);
     memory_.set_top_down(true);
 
     // Virtual-Mode (docs/firmware/virtual-mode.md). Translations at power-on:
@@ -107,7 +114,21 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         return;
     tree_.set_int(nodes_.chosen, "mmu", mmu_ih);
     tree_.set_int(nodes_.chosen, "memory", mem_ih);
+    // The interrupt controller (Paddington's PIC node). NewWorld firmware
+    // names it in /chosen (Linux skips "/chosen/interrupt-controller" when
+    // looking for one). The value is a phandle: Apple's Mac OS ROM loader
+    // passes it straight to getprop (seen in its client interface calls).
+    tree_.set_int(nodes_.chosen, "interrupt-controller", nodes_.pic);
     fw_.set_virtual_mode(true);
+
+    // RTAS (docs/firmware/rtas.md).
+    rtc_base_ = c.rtc_seconds;
+    const of::Phandle rtas_node = rtas_.add_node(tree_, tree_.root());
+    if (rtas_node == of::kNone)
+        return;
+    rtas_.set_trap_word(of::Firmware::kTrapRtas);
+    inst_.bind(rtas_node, &rtas_);
+    fw_.set_rtas(&rtas_);
 
     // Devices.
     for (u32 i = 0; i < 2; ++i)
@@ -137,7 +158,7 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     }, this);
 
     // Client interface and Forth words.
-    if (!fw_.install(layout_.ci_entry))
+    if (!fw_.install(layout_.ci_entry) || !fw_.install_vectors())
         return;
     fw_.attach(m.cpu());
     of::ClientInterface& ci = fw_.client();
@@ -167,18 +188,18 @@ bool BwFirmware::sync_mmu(void* ctx) { return static_cast<BwFirmware*>(ctx)->app
 // register n holds VSID n (Ks = Kp = 0: PP 00-10 read/write).
 bool BwFirmware::apply_mmu()
 {
-    of::PageTable pt(m_.bus(), layout_.htab, kHtabSize);
+    of::PageTable pt(m_.bus(), layout_.htab, layout_.htab_size);
     if (!pt.clear())
         return false;
+    // Every translation gets PTEs, also inside the BAT windows: a client may
+    // reprogram the BATs and rely on the page table for the firmware's
+    // translations (Mac OS does: docs/firmware/virtual-mode.md).
     for (u32 i = 0; i < translations_.count(); ++i) {
         const of::Translation& t = translations_[i];
         for (u64 off = 0; off < t.size; off += of::Translations::kPage) {
             const u32 va = static_cast<u32>(t.virt + off), pa = static_cast<u32>(t.phys + off);
-            if (in_bat_window(va)) {
-                if (va != pa)
-                    return false;               // a BAT window is 1:1; it would hide this mapping
-                continue;
-            }
+            if (in_bat_window(va) && va != pa)
+                return false;                   // a BAT window is 1:1; it would hide this mapping
             if (!pt.insert(va >> 28, va, pa, t.mode))
                 return false;                   // both PTE groups full
         }
@@ -214,6 +235,42 @@ bool BwFirmware::apply_mmu()
     s.msr |= ppc::msr::IR | ppc::msr::DR;
     m_.cpu().flush_tlb();
     return true;
+}
+
+of::Rtas::Hooks BwFirmware::rtas_hooks(BwFirmware* self)
+{
+    of::Rtas::Hooks h;
+    h.ctx = self;
+    h.nvram_size = MacioNvram::kSize;
+    h.nvram_read = [](void* c, u32 i) { return static_cast<BwFirmware*>(c)->m_.macio().nvram().byte(i); };
+    h.nvram_write = [](void* c, u32 i, u8 v) { static_cast<BwFirmware*>(c)->m_.macio().nvram().set_byte(i, v); };
+    h.seconds = [](void* c) {
+        auto* f = static_cast<BwFirmware*>(c);
+        return static_cast<u64>(f->rtc_base_ + f->m_.scheduler().now() / 1000000000000ull);  // ps -> s
+    };
+    h.set_seconds = [](void* c, u64 s) {
+        auto* f = static_cast<BwFirmware*>(c);
+        f->rtc_base_ = s - f->m_.scheduler().now() / 1000000000000ull;
+    };
+    h.put_char = [](void* c, char ch) {
+        auto* f = static_cast<BwFirmware*>(c);
+        if (of::PackageDriver* d = f->inst_.driver(f->stdout_))
+            d->write(f->inst_.slot(f->stdout_), reinterpret_cast<const u8*>(&ch), 1);
+    };
+    // Configuration cycles go through Grackle's bus 0 (and the bridge to bus 1),
+    // as the CPU's own configuration accesses do.
+    h.pci_read = [](void* c, u32 bus, u32 devfn, u32 reg) {
+        return static_cast<BwFirmware*>(c)->m_.grackle().pci_bus().config_read_routed(0, bus, devfn, reg);
+    };
+    h.pci_write = [](void* c, u32 bus, u32 devfn, u32 reg, u32 v, u32 be) {
+        static_cast<BwFirmware*>(c)->m_.grackle().pci_bus().config_write_routed(0, bus, devfn, reg, v, be);
+    };
+    h.power = [](void* c, bool reboot) {
+        auto* f = static_cast<BwFirmware*>(c);
+        (reboot ? f->reboot_ : f->powered_off_) = true;
+        f->fw_.park_after_trap();
+    };
+    return h;
 }
 
 u32 BwFirmware::clock_ms(void* ctx)

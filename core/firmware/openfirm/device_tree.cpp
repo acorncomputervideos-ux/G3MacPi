@@ -282,8 +282,12 @@ const char* DeviceTree::unit(Phandle h) const { return valid(h) ? str(nodes_[ind
 u32 DeviceTree::find_child(u32 node, const char* name, u32 name_len, const char* unit,
                            u32 unit_len) const
 {
+    // "@unit" alone (no node name) matches any child at that unit address
+    // (IEEE 1275 path resolution; Apple's Mac OS ROM loader looks up "/cpus/@0").
+    if (name_len == 0 && unit == nullptr)
+        return kNil;
     for (u32 c = nodes_[node].first_child; c != kNil; c = nodes_[c].next_sibling) {
-        if (!cstr::equal_n(name, name_len, str(nodes_[c].name)))
+        if (name_len != 0 && !cstr::equal_n(name, name_len, str(nodes_[c].name)))
             continue;
         if (unit == nullptr)
             return c;  // no unit address in the path: first match by name

@@ -3,6 +3,7 @@
 // emulator's own hardware constants.
 
 #include "core/devices/macio/dbdma.h"
+#include "core/devices/macio/heathrow_pic.h"
 #include "core/devices/macio/nvram.h"
 #include "core/devices/macio/paddington.h"
 #include "core/firmware/openfirm/bw_device_tree.h"
@@ -152,8 +153,9 @@ TEST_CASE("firmware/bw-tree/machine_identity_and_cpu")
     const std::string c = str(t, t.root(), "copyright");
     CHECK(c.rfind("Copyright ", 0) == 0);
     CHECK(c.find(" Apple Computer, Inc.") != std::string::npos);
-    // NewWorld: some node has an "interrupt-controller" property (Linux setup.c).
-    CHECK(t.has_property(find_by_name(t, t.root(), "mac-io"), "interrupt-controller"));
+    // NewWorld: some node has an "interrupt-controller" property (Linux setup.c):
+    // Paddington's PIC, a child of mac-io.
+    CHECK(t.has_property(find_by_name(t, t.root(), "interrupt-controller"), "interrupt-controller"));
     const Phandle cpu = b.n.cpu;
     CHECK(str(t, cpu, "device_type") == "cpu");
     CHECK_EQ(cell_or(t, cpu, "clock-frequency", 0), 350000000u);
@@ -203,6 +205,7 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
     REQUIRE(find_by_name(t, t.root(), "via-cuda") == b.n.cuda);
     CHECK_EQ(cell_addr(b.n.cuda, 0), base + Paddington::kViaOffset);
     CHECK(cells(t, b.n.cuda, "interrupts") == std::vector<u32>({Paddington::kViaIrq}));
+    CHECK(cells(t, b.n.cuda, "interrupt-parent") == std::vector<u32>({b.n.pic}));
     // ATA: registers, then the DBDMA channel; interrupts IDE then DMA.
     for (u32 i = 0; i < 2; ++i) {
         const Phandle ata = b.n.ata[i];
@@ -216,6 +219,7 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
                                         Paddington::kIdeDmaChannel[i] * DbdmaController::kChannelStride);
         CHECK(cells(t, ata, "interrupts") ==
               std::vector<u32>({Paddington::kIdeIrq[i], Paddington::kIdeDmaIrq[i]}));
+        CHECK(cells(t, ata, "interrupt-parent") == std::vector<u32>({b.n.pic}));
     }
     // NVRAM: Linux direct mode uses mult = size / 8 KB.
     const auto nv = cells(t, b.n.nvram, "reg");
@@ -223,8 +227,18 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
     CHECK_EQ(cell_addr(b.n.nvram, 0), base + Paddington::kNvramOffset);
     CHECK_EQ(nv[1] / 0x2000u, MacioNvram::kStride);
     CHECK_EQ(nv[1], MacioNvram::kWindowSize);
-    // The interrupt controller is mac-io itself, one cell per interrupt.
-    CHECK_EQ(cell_or(t, mio, "#interrupt-cells", 0), 1u);
+    // The interrupt controller: Paddington's PIC registers at mac-io + 0, one
+    // cell per interrupt; recognisable as Apple's Mac OS ROM loader expects
+    // (device_type "interrupt-controller", compatible "paddington").
+    REQUIRE(b.n.pic != kNone);
+    CHECK_EQ(t.parent(b.n.pic), mio);
+    CHECK_EQ(cell_addr(b.n.pic, 0), base + Paddington::kPicOffset);
+    CHECK(cells(t, b.n.pic, "reg") == std::vector<u32>({Paddington::kPicOffset, HeathrowPic::kWindowSize}));
+    CHECK_EQ(cell_or(t, b.n.pic, "#interrupt-cells", 0), 1u);
+    CHECK(str(t, b.n.pic, "device_type") == "interrupt-controller");
+    CHECK(compatible_with(t, b.n.pic, "paddington"));
+    CHECK(t.has_property(b.n.pic, "interrupt-controller"));
+    CHECK_EQ(t.find("/pci/pci-bridge/mac-io/interrupt-controller"), b.n.pic);
 }
 
 TEST_CASE("firmware/bw-tree/pci_nodes_follow_the_pci_binding")

@@ -33,6 +33,13 @@ public:
     // Where a client that called `exit` is parked (the word after the entry):
     // it spins there. Real firmware would return to its user interface.
     static constexpr u32 kTrapIdle = kTrapBase | 0x02;
+    // The RTAS entry point that instantiate-rtas writes (rtas.h).
+    static constexpr u32 kTrapRtas = kTrapBase | 0x10;
+    // Placed at each exception vector until the client installs its own:
+    // kTrapVector | (vector >> 8). An exception the client didn't expect is
+    // reported (exception_vector()) and the CPU parked, instead of running
+    // zeroed memory.
+    static constexpr u32 kTrapVector = kTrapBase | 0x40;
 
     Firmware(DeviceTree& tree, ppc::MemoryInterface& mem) : mem_(mem), ci_(tree, mem)
     {
@@ -40,6 +47,18 @@ public:
     }
     // True once the client has called `exit`.
     bool client_exited() const { return exited_; }
+    // Writes kTrapVector words at the 750's exception vectors (0x100-0x1700).
+    bool install_vectors();
+    // The vector of an exception that reached a firmware vector trap (0 = none),
+    // and SRR0/SRR1 at that moment.
+    u32 exception_vector() const { return vector_; }
+    u32 exception_srr0() const { return vector_srr0_; }
+    u32 exception_srr1() const { return vector_srr1_; }
+    // RTAS calls (trap kTrapRtas) go to `rtas`.
+    void set_rtas(class Rtas* rtas) { rtas_ = rtas; }
+    // Parks the CPU on the idle trap when the current trap returns (RTAS
+    // power-off / system-reboot: the machine has stopped).
+    void park_after_trap() { exit_pending_ = true; }
 
     // Writes the entry stub at 'addr' (4 bytes, big-endian). False if the
     // memory isn't writable there.
@@ -55,6 +74,9 @@ public:
     // the bindings specify (docs/firmware/elf-loader.md): r1 = a stack
     // given by the firmware, r3 = r4 = 0 (CHRP 10.2), r5 = the client
     // interface entry (PowerPC binding; to verify), MSR IR/DR/EE clear.
+    // Also MSR FP and ME set and IP clear (vectors at 0): our choice of an
+    // environment a client can use at once (Apple's Mac OS ROM loader runs
+    // floating-point code without enabling FP itself).
     // In Virtual-Mode (set_virtual_mode) the client starts with MSR IR/DR
     // set instead, under the firmware's translations (PowerPC binding §4.2).
     void start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const;
@@ -72,6 +94,8 @@ private:
     bool virtual_mode_ = false;
     bool exited_ = false;
     bool exit_pending_ = false;
+    class Rtas* rtas_ = nullptr;
+    u32 vector_ = 0, vector_srr0_ = 0, vector_srr1_ = 0;
 };
 
 } // namespace g3::of

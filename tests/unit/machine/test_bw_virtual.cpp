@@ -83,6 +83,17 @@ TEST_CASE("machine/bw-virtual/power_on")
     const auto& s = r.m->cpu().state();
     CHECK((s.msr & (ppc::msr::IR | ppc::msr::DR)) == (ppc::msr::IR | ppc::msr::DR));
     CHECK_EQ(s.spr[ppc::spr::SDR1] & 0xFFFF0000u, r.fw->layout().htab);
+    // The page table holds every translation, RAM included: with the BATs
+    // cleared (as Mac OS does when it takes over), RAM still translates.
+    ppc::CpuState& w = r.m->cpu().state();
+    for (u32 b = 0; b < 4; ++b)
+        w.spr[ppc::spr::DBAT0U + 2 * b] = w.spr[ppc::spr::IBAT0U + 2 * b] = 0;
+    r.m->cpu().flush_tlb();
+    u32 pa = 0;
+    REQUIRE(r.m->cpu().probe_translate(kRam - 0x200000u + 0x123, false, pa));
+    CHECK_EQ(pa, kRam - 0x200000u + 0x123);
+    REQUIRE(r.m->cpu().probe_translate(0x80816000u, false, pa));     // mac-io (VIA)
+    CHECK_EQ(pa, 0x80816000u);
 }
 
 TEST_CASE("machine/bw-virtual/forth_maps_and_writes_through_a_virtual_address")
