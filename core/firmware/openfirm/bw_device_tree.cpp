@@ -210,6 +210,14 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     // --- mac-io cells (offsets and interrupts as emulated: Paddington)
     const u32 cuda_reg[2] = {0x16000, 0x2000}, cuda_irq[1] = {18};
     n.cuda = cell(t, n.macio, n.pic, "via-cuda", "via-cuda", cuda_reg, 2, cuda_irq, 1);
+    // The ADB bus behind Cuda. Apple's Mac OS ROM loader only reports "Cuda
+    // ADB detected" for a child named "adb" with compatible "adb" (seen with
+    // AAPL,debug); without it the Mac OS ROM drives the VIA with the Egret
+    // protocol (TIP/TACK active high, cf. Linux via-cuda.c mcu_is_egret) and
+    // waits forever for the first byte. docs/firmware/bw-device-tree.md.
+    n.adb = t.add_node(n.cuda, "adb", nullptr);
+    t.set_string(n.adb, "device_type", "adb");
+    t.set_string(n.adb, "compatible", "adb");
     const u32 ata_reg[2][4] = {{0x20000, 0x1000, 0x8B00, 0x100}, {0x21000, 0x1000, 0x8D00, 0x100}};
     const u32 ata_irq[2][2] = {{13, 2}, {14, 3}};
     for (u32 i = 0; i < 2; ++i) {

@@ -206,6 +206,11 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
     CHECK_EQ(cell_addr(b.n.cuda, 0), base + Paddington::kViaOffset);
     CHECK(cells(t, b.n.cuda, "interrupts") == std::vector<u32>({Paddington::kViaIrq}));
     CHECK(cells(t, b.n.cuda, "interrupt-parent") == std::vector<u32>({b.n.pic}));
+    // Its ADB child: what the Mac OS ROM loader takes for "Cuda ADB".
+    REQUIRE(find_by_name(t, b.n.cuda, "adb") == b.n.adb);
+    CHECK(t.parent(b.n.adb) == b.n.cuda);
+    CHECK(str(t, b.n.adb, "device_type") == "adb");
+    CHECK(str(t, b.n.adb, "compatible") == "adb");
     // ATA: registers, then the DBDMA channel; interrupts IDE then DMA.
     for (u32 i = 0; i < 2; ++i) {
         const Phandle ata = b.n.ata[i];

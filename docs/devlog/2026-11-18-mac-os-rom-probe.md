@@ -202,8 +202,13 @@ many seconds to minutes of host time.
 3. **Continuous time.** A VIA trace (`G3_VIA` in the probe) showed the
    ROM writing timer 2 and reading back exactly the same value: time stood
    still inside a CPU slice. Fixed (hardware/timing.md).
-4. **Now.** The 68K code waits at 0xFFC0F09C for the VIA shift-register
-   flag. Before that it wrote SR = 0x01 (Cuda packet type) with ACR 0x1C,
-   without asserting TIP. It then means to check TREQ and assert TIP. Our
-   Cuda, like QEMU's, clocks bytes only on TIP/TACK changes. Under
-   investigation.
+4. **Egret, not Cuda.** The 68K code waited at 0xFFC0F09C for the VIA
+   shift-register flag. With the 68K program counter (PPC r24 in Apple's
+   68K emulator) added to the VIA trace, the routine turned out to be the
+   ROM's Egret driver: it writes SR and then drives TIP and TACK *high*
+   (Linux via-cuda.c, `mcu_is_egret`). The loader's `AAPL,debug` output
+   showed why: it printed "Cuda detected" for via-cuda but never "Cuda
+   ADB detected". An `adb` child (device_type and compatible "adb") under
+   via-cuda fixes it: the ROM then uses its Cuda driver (0xFFC0E4xx), and
+   complete Cuda packets go back and forth. The 68K code continues to
+   0xFFC31B6A. Under investigation.

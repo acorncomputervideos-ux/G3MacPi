@@ -37,6 +37,7 @@ value has one of these sources:
 | …/mac-io@5 | `compatible` `paddington`; `assigned-addresses` = BAR 0 (32-bit memory, 512 KB); `ranges` child 0 → the BAR | Linux `probe_one_macio` (`assigned-addresses`) and `macio_asic` (`of_address_to_resource` needs `ranges`) |
 | … `interrupt-controller`, `#interrupt-cells` 1 | | Linux: NewWorld detection; the PIC is the mac-io node with one-cell specifiers (`irq_domain_xlate_onecell`) |
 | …/via-cuda@16000 | `reg` 0x16000 0x2000, `interrupts` 18 | Linux `find_via_cuda` (by name, `reg`); offset and IRQ: emulator |
+| …/via-cuda@16000/adb | `device_type` "adb", `compatible` "adb" | Mac OS ROM loader ("HandleSpecialNode: Cuda ADB detected", AAPL,debug). Without it the Mac OS ROM uses its Egret driver (TIP/TACK active high) and hangs waiting for the first shift-register interrupt |
 | …/ata@20000, @21000 | `compatible` `heathrow-ata`, `reg` registers (≤ 0x1000) then the DBDMA channel (≤ 0x100), `interrupts` IDE then DMA | Linux `pata_macio` and the macio resource quirks; values: emulator |
 | …/ata/disk@0 | `device_type` `block` | IEEE 1275 |
 | …/nvram@60000 | `reg` 0x60000 0x20000 | Linux nvram direct mode: stride = size / 8 KB = 16 (as emulated) |
