@@ -29,7 +29,8 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | Firmware words: device tree, encoding, packages, `load` (forth-words.md) | ✅ step 9 |
 | ELF init-program and `go` (elf-loader.md) | ✅ step 10 |
 | `boot`, `init-program`, `go`: bootinfo scripts and ELF programs | ✅ step 11 |
-| `interpret` client service; the B&W device tree; wiring into the machine | to do |
+| `interpret` and `call-method` client services (through the Forth interpreter) | ✅ step 12 |
+| The B&W device tree; wiring into the machine | to do |
 
 ## Facts used
 
@@ -113,6 +114,21 @@ look, but the exact grammar Apple's firmware accepts is to verify. File
 instances are read-only; seek is limited to the file size. A file part
 on a partition without HFS Plus, a missing file, a folder, or a file in
 the middle of a path makes `open` fail.
+
+## interpret and call-method (step 12)
+
+`interpret ( cmd arg1..argP -- catch-result ret1..retQ )` and
+`call-method ( method ihandle arg1..argP -- catch-result ret1..retQ )` run
+through the Forth interpreter. Stack order: **arg1 ends up on top of the
+Forth stack** (argP is pushed first), and **ret1 is the top of the stack**
+afterwards. Evidence: Linux's `prom_init.c` calls the `color!` method
+( r g b index -- ) with the arguments `index, b, g, r`, and the memory
+node's `claim` method ( virt size align -- ) with `align, size, virt`.
+Missing results read as 0, leftover stack items are discarded, and an
+error's throw code is the catch-result.
+
+`call-method` runs `$call-method`, so it reaches the same C++ driver
+methods (read, write, seek) as Forth code does.
 
 ## Modelling choices
 

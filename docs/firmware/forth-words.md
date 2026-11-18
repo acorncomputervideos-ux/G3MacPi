@@ -36,6 +36,9 @@ logged when booting).
 | `load-base`, `load-size` | ( -- addr ), ( -- n ) |
 | `load` | ( "device-specifier<eol>" -- ): reads the whole file to load-base; the path runs to the end of the line, since HFS names contain spaces |
 | `ms`, `get-msecs` | ( n -- ), ( -- ms ) |
+| `reg` | ( phys size -- ): the active package's "reg" (1 address cell and 1 size cell assumed: limit) |
+| `my-self` | ( -- ihandle ): between `new-device` and `finish-device`, an instance of the node being built (IEEE 1275 `new-device` makes one current); otherwise 0 |
+| `ihandle>phandle` | ( ihandle -- phandle ) |
 | `init-program` | ( -- ): prepares the image at load-base: an ELF program (see `elf-loader.md`), or a CHRP bootinfo object, whose boot script is then run |
 | `go` | ( -- ): starts the prepared ELF program through the machine's `go` callback |
 | `boot` | ( "device-specifier<eol>" -- ): `load`, `init-program`, then `go` if an ELF program was prepared |

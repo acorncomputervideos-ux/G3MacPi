@@ -78,6 +78,8 @@ bool ClientInterface::provides(const char* n) const
         for (const char* k : inst)
             if (cstr::equal(n, k))
                 return true;
+    if (forth_ && (cstr::equal(n, "interpret") || cstr::equal(n, "call-method")))
+        return true;
     return false;
 }
 
@@ -214,8 +216,58 @@ bool ClientInterface::dispatch_instances()
     return false;
 }
 
+bool ClientInterface::run_forth(const char* text, u32 first, u32 method_addr, u32 method_len, u32 ihandle)
+{
+    forth::Forth& f = *forth_;
+    const u32 base_depth = f.depth();
+    // Stack arguments: the last one first, so arg1 ends up on top.
+    for (u32 i = nargs_; i-- > first;)
+        f.push(arg(i));
+    if (method_len) {
+        f.push(method_addr);
+        f.push(method_len);
+        f.push(ihandle);
+    }
+    const bool ok = f.interpret(text, cstr::length(text));
+    // catch-result, then results with ret1 = top of the stack.
+    ret(0, ok ? 0 : static_cast<u32>(f.error_code()));
+    for (u32 i = 1; i < nrets_; ++i)
+        ret(i, (ok && f.depth() > base_depth) ? f.pop() : 0);
+    while (f.depth() > base_depth)
+        f.pop();  // anything left over is discarded
+    return true;
+}
+
+bool ClientInterface::dispatch_forth()
+{
+    const char* s = service_;
+    if (cstr::equal(s, "interpret")) {
+        if (nargs_ < 1 || nrets_ < 1)
+            return false;
+        if (!read_string(arg(0), command_, sizeof command_)) {
+            ret(0, static_cast<u32>(forth::Forth::kInvalidAddress));
+            return true;
+        }
+        return run_forth(command_, 1);
+    }
+    if (cstr::equal(s, "call-method")) {
+        if (nargs_ < 2 || nrets_ < 1)
+            return false;
+        // The method name stays in client memory; $call-method reads it there.
+        char method[64];
+        if (!read_string(arg(0), method, sizeof method)) {
+            ret(0, static_cast<u32>(forth::Forth::kInvalidAddress));
+            return true;
+        }
+        return run_forth("$call-method", 2, arg(0), cstr::length(method), arg(1));
+    }
+    return false;
+}
+
 bool ClientInterface::dispatch()
 {
+    if (forth_ && dispatch_forth())
+        return true;
     if (memory_ && dispatch_memory())
         return true;
     if (instances_ && dispatch_instances())

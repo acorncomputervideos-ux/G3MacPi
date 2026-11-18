@@ -22,6 +22,12 @@
 //   load-base ( -- addr )   load-size ( -- n )
 //   load ( "device-specifier<eol>" -- ): reads the file at load-base
 //   ms ( n -- )   get-msecs ( -- ms )
+//   reg ( phys size -- ): "reg" of the active package (1 address cell and
+//     1 size cell assumed — documented limit)
+//   my-self ( -- ihandle )   ihandle>phandle ( ihandle -- phandle )
+//     Between new-device and finish-device, my-self is an instance of the
+//     node being built (IEEE 1275 new-device), so `my-self ihandle>phandle`
+//     gives that node; otherwise my-self is 0.
 //   init-program ( -- ): prepares the image at load-base (ELF, or a CHRP
 //     bootinfo object whose script is then run — our choice, see docs)
 //   go ( -- ): starts the prepared ELF program (through the go callback)
@@ -103,6 +109,9 @@ private:
     static void w_ms(forth::Forth&, void*);
     static void w_get_msecs(forth::Forth&, void*);
     static void w_init_program(forth::Forth&, void*);
+    static void w_reg(forth::Forth&, void*);
+    static void w_my_self(forth::Forth&, void*);
+    static void w_ihandle_to_phandle(forth::Forth&, void*);
     static void w_go(forth::Forth&, void*);
     static void w_boot(forth::Forth&, void*);
     bool load_file(const char* path);
@@ -124,7 +133,12 @@ private:
     ElfProgram program_;
     bool program_ready_ = false;
     bool in_script_ = false;
-    bool ran_script_ = false;  // the last init-program ran a bootinfo script
+    bool ran_script_ = false;
+    // Nodes under construction (new-device ... finish-device): their
+    // "instances" for my-self are kSelfBase + depth.
+    static constexpr u32 kSelfBase = 0x30000000u;
+    Phandle building_[16] = {};
+    u32 building_depth_ = 0;  // the last init-program ran a bootinfo script
     BootInfo bootinfo_;
     u8 text_[64 * 1024] = {};  // host copy of a bootinfo object's text
     u8 buf_[4096] = {};  // staging for property bytes and file data

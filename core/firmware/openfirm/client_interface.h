@@ -17,13 +17,18 @@
 // nextprop, setprop, finddevice, canon, package-to-path, milliseconds,
 // exit, enter; with a MemoryMap: claim, release; with an InstanceTable:
 // open, close, read, write, seek, instance-to-package, instance-to-path.
-// call-method and interpret come in later steps.
+// With a Forth interpreter: interpret ( cmd arg1..argP -- catch-result
+// ret1..retQ ) and call-method ( method ihandle arg1..argP -- catch-result
+// ret1..retQ ). Argument order on the Forth stack: arg1 ends up on top
+// (argP is pushed first), and ret1 is the top of the stack afterwards —
+// as Linux's prom_init relies on (its "color!" and "claim" method calls).
 
 #ifndef G3_CORE_FIRMWARE_OPENFIRM_CLIENT_INTERFACE_H
 #define G3_CORE_FIRMWARE_OPENFIRM_CLIENT_INTERFACE_H
 
 #include "core/common/types.h"
 #include "core/cpu/ppc750/memory_interface.h"
+#include "core/firmware/forth/forth.h"
 #include "core/firmware/openfirm/device_tree.h"
 #include "core/firmware/openfirm/instances.h"
 #include "core/firmware/openfirm/memory_map.h"
@@ -47,6 +52,7 @@ public:
     void set_clock(ClockCallback cb, void* ctx) { clock_cb_ = cb; clock_ctx_ = ctx; }
     void set_memory(MemoryMap* m) { memory_ = m; }
     void set_instances(InstanceTable* t) { instances_ = t; }
+    void set_forth(forth::Forth* f) { forth_ = f; }
 
     // True if `service` is implemented with the parts attached now.
     bool provides(const char* service) const;
@@ -70,6 +76,10 @@ private:
     bool dispatch();
     bool dispatch_memory();
     bool dispatch_instances();
+    bool dispatch_forth();
+    // Runs `text` with stack arguments args_[first..nargs_); writes the
+    // catch result and results. False if the call is malformed.
+    bool run_forth(const char* text, u32 first, u32 method_addr = 0, u32 method_len = 0, u32 ihandle = 0);
     u32 copy_out(u32 addr, const char* text, u32 len, u32 buflen);  // path-style result
 
     DeviceTree& tree_;
@@ -90,6 +100,8 @@ private:
     u8 setprop_buf_[4096] = {};
     MemoryMap* memory_ = nullptr;
     InstanceTable* instances_ = nullptr;
+    forth::Forth* forth_ = nullptr;
+    char command_[2048] = {};
     u8 xfer_[512] = {};  // bounce buffer for read/write
 };
 

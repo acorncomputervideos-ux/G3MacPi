@@ -36,7 +36,8 @@ FirmwareWords::FirmwareWords(Forth& f, DeviceTree& tree, InstanceTable& inst, u3
         {"open-dev", w_open_dev}, {"close-dev", w_close_dev}, {"$call-method", w_call_method},
         {"load-base", w_load_base}, {"load-size", w_load_size}, {"load", w_load},
         {"ms", w_ms}, {"get-msecs", w_get_msecs}, {"init-program", w_init_program},
-        {"go", w_go}, {"boot", w_boot},
+        {"go", w_go}, {"boot", w_boot}, {"reg", w_reg}, {"my-self", w_my_self},
+        {"ihandle>phandle", w_ihandle_to_phandle},
     };
     for (const Def& d : defs)
         f_.define_native(d.name, d.fn, this);
@@ -257,6 +258,11 @@ void FirmwareWords::w_new_device(Forth& f, void* ctx)
         f.fail(-8, "new-device: device tree full");
         return;
     }
+    if (s.building_depth_ >= sizeof s.building_ / sizeof s.building_[0]) {
+        f.fail(-8, "new-device: nested too deeply");
+        return;
+    }
+    s.building_[s.building_depth_++] = h;
     s.active_ = h;
 }
 
@@ -267,7 +273,48 @@ void FirmwareWords::w_finish_device(Forth& f, void* ctx)
         f.fail(kErrNoPackage, "finish-device: no device being built");
         return;
     }
+    if (s.building_depth_ > 0 && s.building_[s.building_depth_ - 1] == s.active_)
+        --s.building_depth_;
     s.active_ = s.tree_.parent(s.active_);
+}
+
+void FirmwareWords::w_reg(Forth& f, void* ctx)
+{
+    const Cell size = f.pop(), phys = f.pop();
+    FirmwareWords& s = self(ctx);
+    if (f.failed())
+        return;
+    if (s.active_ == kNone) {
+        f.fail(kErrNoPackage, "reg: no active package");
+        return;
+    }
+    const u32 v[2] = {phys, size};
+    if (!s.tree_.set_ints(s.active_, "reg", v, 2))
+        f.fail(-8, "reg: device tree full");
+}
+
+void FirmwareWords::w_my_self(Forth& f, void* ctx)
+{
+    FirmwareWords& s = self(ctx);
+    f.push(s.building_depth_ ? kSelfBase + s.building_depth_ - 1 : 0);
+}
+
+void FirmwareWords::w_ihandle_to_phandle(Forth& f, void* ctx)
+{
+    const Cell ih = f.pop();
+    FirmwareWords& s = self(ctx);
+    if (f.failed())
+        return;
+    if (ih >= kSelfBase && ih - kSelfBase < s.building_depth_) {
+        f.push(s.building_[ih - kSelfBase]);
+        return;
+    }
+    const Phandle ph = s.inst_.package(ih);
+    if (ph == kNone) {
+        f.fail(kErrNoPackage, "ihandle>phandle: invalid ihandle");
+        return;
+    }
+    f.push(ph);
 }
 
 void FirmwareWords::w_device_name(Forth& f, void* ctx)

@@ -295,3 +295,128 @@ TEST_CASE("forth-words/boot_errors")
     std::memcpy(&plain.image[rom_at()], tiny_elf(0x12000, 0x12000).data(), 0x200);
     CHECK(!plain.run("boot hd:2,\\\\:tbxi"));
 }
+
+// --- client interface: interpret and call-method ------------------------------------------
+
+#include "core/firmware/openfirm/client_interface.h"
+
+namespace {
+
+struct CiForthRig : Rig {
+    ClientInterface ci{*tree, bus};
+    u32 heap = 0xA0000;
+    u32 status = 0;
+    CiForthRig()
+    {
+        ci.set_forth(f.get());
+        ci.set_instances(&inst);
+    }
+    u32 str(const std::string& s)
+    {
+        const u32 a = heap;
+        std::memcpy(&ram[a], s.c_str(), s.size() + 1);
+        heap = (heap + static_cast<u32>(s.size()) + 4) & ~3u;
+        return a;
+    }
+    void w(u32 a, u32 v) { for (u32 k = 0; k < 4; ++k) ram[a + k] = static_cast<u8>(v >> (24 - 8 * k)); }
+    u32 rd(u32 a) const { u32 v = 0; for (u32 k = 0; k < 4; ++k) v = (v << 8) | ram[a + k]; return v; }
+    std::vector<u32> call(const char* service, const std::vector<u32>& args, u32 nret)
+    {
+        const u32 a = 0xB0000;
+        w(a, str(service)); w(a + 4, static_cast<u32>(args.size())); w(a + 8, nret);
+        for (size_t i = 0; i < args.size(); ++i) w(a + 12 + 4 * static_cast<u32>(i), args[i]);
+        status = ci.call(a);
+        std::vector<u32> r;
+        for (u32 i = 0; i < nret; ++i) r.push_back(rd(a + 12 + 4 * static_cast<u32>(args.size() + i)));
+        return r;
+    }
+};
+
+using U = std::vector<u32>;
+
+} // namespace
+
+TEST_CASE("forth-words/client_interpret")
+{
+    CiForthRig r;
+    CHECK(r.call("interpret", {r.str("+"), 3, 4}, 2) == U({0, 7}));
+    // Argument order: arg1 ends up on top, so "-" computes arg2 - arg1.
+    CHECK(r.call("interpret", {r.str("-"), 10, 3}, 2) == U({0, static_cast<u32>(-7)}));
+    // Results: ret1 is the top of the stack.
+    CHECK(r.call("interpret", {r.str("1 2 3")}, 4) == U({0, 3, 2, 1}));
+    // Missing results read as 0; extra stack items are discarded.
+    CHECK(r.call("interpret", {r.str("5")}, 3) == U({0, 5, 0}));
+    CHECK(r.call("interpret", {r.str("6 7 8")}, 2) == U({0, 8}));
+    CHECK_EQ(r.f->depth(), 0u);
+    // An error gives its throw code as catch-result.
+    CHECK(r.call("interpret", {r.str("nonsense")}, 2) == U({static_cast<u32>(forth::Forth::kUndefined), 0}));
+    CHECK_EQ(r.status, 0u);                                   // the service itself exists
+    CHECK(r.call("test", {r.str("interpret")}, 1) == U({0}));
+    CHECK(r.call("test", {r.str("call-method")}, 1) == U({0}));
+}
+
+TEST_CASE("forth-words/client_interpret_linux_style_node_building")
+{
+    // Adapted from Linux prom_init's fixups for firmware without some nodes.
+    CiForthRig r;
+    CHECK(r.call("interpret", {r.str(
+        " s\" /pci\" find-device"
+        " new-device"
+            " 1 encode-int s\" #address-cells\" property"
+            " 0 encode-int s\" #size-cells\" property"
+            " s\" mdio\" device-name"
+            " s\" fsl,mpc5200b-mdio\" encode-string s\" compatible\" property"
+            " f0003000 400 reg"
+            " 2 encode-int 5 encode-int encode+ 3 encode-int encode+ s\" interrupts\" property"
+        " finish-device")}, 1) == U({0}));
+    const Phandle mdio = r.tree->find("/pci/mdio");
+    REQUIRE(mdio != kNone);
+    const u8* d = nullptr;
+    u32 len = 0;
+    REQUIRE(r.tree->get_property(mdio, "reg", d, len));
+    CHECK_EQ(len, 8u);
+    CHECK_EQ(d[0], 0xF0u);
+    CHECK_EQ(d[6], 0x04u);
+    REQUIRE(r.tree->get_property(mdio, "interrupts", d, len));
+    CHECK_EQ(len, 12u);
+    CHECK_EQ(d[7], 5u);
+    // my-self ihandle>phandle inside new-device gives the new node.
+    CHECK(r.call("interpret", {r.str(
+        " s\" /pci/mdio\" find-device"
+        " new-device"
+            " s\" ethernet-phy\" device-name"
+            " 10 encode-int s\" reg\" property"
+            " my-self ihandle>phandle"
+        " finish-device"
+        " s\" /pci\" find-device encode-int s\" phy-handle\" property"
+        " device-end")}, 1) == U({0}));
+    const Phandle phy = r.tree->find("/pci/mdio/ethernet-phy");
+    REQUIRE(phy != kNone);
+    REQUIRE(r.tree->get_property(r.pci, "phy-handle", d, len));
+    REQUIRE(len == 4);
+    CHECK_EQ((static_cast<u32>(d[0]) << 24) | (d[1] << 16) | (d[2] << 8) | d[3], phy);
+    CHECK(r.call("interpret", {r.str("my-self")}, 2) == U({0, 0}));   // outside new-device
+    CHECK(r.call("interpret", {r.str("1234 ihandle>phandle")}, 1) == U({static_cast<u32>(-21)}));
+}
+
+TEST_CASE("forth-words/client_call_method")
+{
+    CiForthRig r;
+    const u32 ih = r.call("open", {r.str("hd:2")}, 1)[0];
+    REQUIRE(ih != 0);
+    // seek ( pos.lo pos.hi -- status ): arg1 = pos.hi (top), arg2 = pos.lo.
+    CHECK(r.call("call-method", {r.str("seek"), ih, 0, 0x400}, 2) == U({0, 0}));
+    // read ( addr len -- actual ): arg1 = len (top), arg2 = addr.
+    CHECK(r.call("call-method", {r.str("read"), ih, 2, 0xC0000}, 2) == U({0, 2}));
+    CHECK_EQ(r.ram[0xC0000], 0x48u);                          // 'H+'
+    CHECK_EQ(r.ram[0xC0001], 0x2Bu);
+    // Unknown method, bad ihandle: catch-result non-zero.
+    CHECK(r.call("call-method", {r.str("frob"), ih}, 1)[0] != 0u);
+    CHECK(r.call("call-method", {r.str("read"), 0x1234, 2, 0xC0000}, 2)[0] != 0u);
+    CHECK_EQ(r.f->depth(), 0u);
+    // Without a Forth interpreter the services don't exist.
+    ClientInterface bare(*r.tree, r.bus);
+    const u32 a = 0xB0000;
+    r.w(a, r.str("interpret")); r.w(a + 4, 1); r.w(a + 8, 1); r.w(a + 12, r.str("1"));
+    CHECK_EQ(bare.call(a), ClientInterface::kFail);
+}
