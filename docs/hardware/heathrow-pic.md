@@ -28,6 +28,22 @@ They agree on everything below.
 Our edge inputs latch only on a 0 -> 1 transition (QEMU latches on every
 assert call); this is how an edge latch behaves.
 
+## Interrupt mode (bit 31)
+
+Source: DingusPPC's MacIoTwo model (`devices/ioctrl/maciotwo.cpp`,
+`maciobase.cpp`; facts only), an emulator that boots Mac OS on these
+machines. Neither Linux nor QEMU uses the bit. To verify on hardware.
+
+- Bit 31 of the IRQ 0-31 enable register (+0x24) is IntMode: 0 = native,
+  1 = "68K-style". It enables no source.
+- It reads back as bit 31 of the IRQ 32-63 enable register (+0x14), which
+  ignores writes to that bit.
+- In 68K mode an edge input latches an event on both transitions, and
+  writing bit 31 to the IRQ 0-31 ack register (+0x28) clears every event.
+- Mac OS 9 sets the mode and acknowledges with bit 31. Before this was
+  modelled the VIA's event stayed latched and the CPU took millions of
+  external interrupts (devlog 2026-11-18).
+
 ## Open points (to verify)
 - **Which inputs are level-triggered on the B&W** — wiring-specific. Linux
   learns it from the device tree; QEMU defaults bank 0 bits 20-28 to level.

@@ -76,10 +76,16 @@ calls and its own debug output (root `AAPL,debug`):
 - **CPU node**: `reservation-granule-size` 32, plus the PowerPC binding's
   TLB properties with the 750's values: `tlb-split`, 256/64 overall,
   128/64 each for I and D. Also `graphics` and `performance-monitor`.
-- **Interrupt controller node**: `/pci/pci-bridge/mac-io/interrupt-controller@0`.
+- **Interrupt controller node**: `/pci/pci-bridge/mac-io/interrupt-controller@10`.
   - device_type "interrupt-controller", compatible "paddington", reg
-    0 0x40 (Paddington's PIC window), "interrupt-controller", and
-    `#interrupt-cells` 1.
+    0x10 0x20, "interrupt-controller", and `#interrupt-cells` 1.
+  - Why reg 0x10. The loader takes its "Heathrow base address" from this
+    reg. A trace of Mac OS's PIC writes shows it programs IRQs 0-31 at
+    base + 0x14 (enable) and + 0x18 (clear), and IRQs 32-63 at base +
+    0x04. Linux (pmac_pic.c, from the mac-io base) has the IRQ 0-31 bank
+    at mac-io + 0x20 and IRQs 32-63 at + 0x10. Both agree only with the
+    base at mac-io + 0x10. With reg 0 Mac OS enabled the VIA's interrupt
+    (18) as IRQ 50 and never received it. A real B&W dump would confirm.
   - The loader's table of special nodes recognises an interrupt
     controller by that device_type plus compatible "heathrow" or
     "paddington".

@@ -260,8 +260,11 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
     // (device_type "interrupt-controller", compatible "paddington").
     REQUIRE(b.n.pic != kNone);
     CHECK_EQ(t.parent(b.n.pic), mio);
-    CHECK_EQ(cell_addr(b.n.pic, 0), base + Paddington::kPicOffset);
-    CHECK(cells(t, b.n.pic, "reg") == std::vector<u32>({Paddington::kPicOffset, HeathrowPic::kWindowSize}));
+    // Mac OS's "Heathrow base": the IRQ 0-31 bank (mac-io + 0x20) at +0x10,
+    // IRQs 32-63 (mac-io + 0x10) at +0x00, inside the emulated window.
+    CHECK_EQ(cell_addr(b.n.pic, 0), base + Paddington::kPicOffset + 0x10);
+    CHECK(cells(t, b.n.pic, "reg") == std::vector<u32>({Paddington::kPicOffset + 0x10, 0x20}));
+    CHECK(of::kPicNodeOffset + of::kPicNodeSize <= HeathrowPic::kWindowSize);
     CHECK_EQ(cell_or(t, b.n.pic, "#interrupt-cells", 0), 1u);
     CHECK(str(t, b.n.pic, "device_type") == "interrupt-controller");
     CHECK(compatible_with(t, b.n.pic, "paddington"));

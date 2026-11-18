@@ -122,3 +122,58 @@ TEST_CASE("devices/heathrow_pic/byte_lanes_and_unused_offsets")
     out_le32(f.bus, kEnable0, 1);
     CHECK_EQ(f.transitions, before + 1);
 }
+
+TEST_CASE("devices/heathrow_pic/mode_bit_is_not_a_source")
+{
+    // Bit 31 of the IRQ 0-31 enable register is IntMode (DingusPPC's model;
+    // Mac OS sets it): enabling it alone never interrupts the CPU.
+    Fixture f;
+    f.pic.set_input(31, true);
+    out_le32(f.bus, kEnable0, 0x80000000u);
+    CHECK(f.pic.mode_68k());
+    CHECK(!f.cpu_irq);
+    // It reads back in both enable registers; the second copy is read-only.
+    CHECK_EQ(in_le32(f.bus, kEnable0), 0x80000000u);
+    CHECK_EQ(in_le32(f.bus, kEnable1), 0x80000000u);
+    out_le32(f.bus, kEnable1, 0x00000004u);
+    CHECK_EQ(in_le32(f.bus, kEnable1), 0x80000004u);
+    out_le32(f.bus, kEnable0, 0);
+    CHECK(!f.pic.mode_68k());
+    CHECK_EQ(in_le32(f.bus, kEnable1), 0x00000004u);
+    // Writing bit 31 there neither sets the mode nor enables IRQ 63.
+    f.pic.set_input(63, true);
+    out_le32(f.bus, kEnable1, 0x80000000u);
+    CHECK_EQ(in_le32(f.bus, kEnable1), 0u);
+    CHECK(!f.pic.mode_68k());
+    CHECK(!f.cpu_irq);
+}
+
+TEST_CASE("devices/heathrow_pic/mode_68k_clear_all_and_both_edges")
+{
+    Fixture f;
+    out_le32(f.bus, kEnable0, 0x80000000u | (1u << 18));
+    out_le32(f.bus, kEnable1, 1u << 2);
+    f.pic.set_input(18, true);
+    f.pic.set_input(34, true);
+    CHECK(f.cpu_irq);
+    // Writing bit 31 to the IRQ 0-31 ack register clears all events, both banks.
+    out_le32(f.bus, kAck0, 0x80000000u);
+    CHECK_EQ(in_le32(f.bus, kEvent0), 0u);
+    CHECK_EQ(in_le32(f.bus, kEvent1), 0u);
+    CHECK(!f.cpu_irq);
+    // In 68K mode the line going low latches an event too.
+    f.pic.set_input(18, false);
+    CHECK_EQ(in_le32(f.bus, kEvent0), 1u << 18);
+    CHECK(f.cpu_irq);
+    out_le32(f.bus, kAck0, 1u << 18);
+    CHECK(!f.cpu_irq);
+    // In native mode a falling edge latches nothing, and bit 31 clears nothing else.
+    out_le32(f.bus, kEnable0, 1u << 18);
+    f.pic.set_input(18, true);
+    out_le32(f.bus, kAck0, 0x80000000u);
+    CHECK_EQ(in_le32(f.bus, kEvent0), 1u << 18);
+    out_le32(f.bus, kAck0, 1u << 18);
+    f.pic.set_input(18, false);
+    CHECK_EQ(in_le32(f.bus, kEvent0), 0u);
+    CHECK(!f.cpu_irq);
+}

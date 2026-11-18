@@ -193,14 +193,20 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     const u32 macio_ranges[5] = {0, bar, 0, m.macio_base, 0x80000};
     t.set_ints(n.macio, "ranges", macio_ranges, 5);
 
-    // Paddington's interrupt controller (registers at mac-io + 0, a 0x40-byte
-    // window: heathrow_pic.h) as its own node, which is how Apple's Mac OS
-    // ROM loader finds it: a node of device_type "interrupt-controller"
+    // Paddington's interrupt controller as its own node, which is how Apple's
+    // Mac OS ROM loader finds it: a node of device_type "interrupt-controller"
     // whose compatible is "heathrow" or "paddington" (the loader's table of
     // special nodes; it also looks up /pci/mac-io/interrupt-controller).
+    // The loader takes its "Heathrow base address" from this reg, and Mac OS
+    // then programs the IRQ 0-31 bank at base + 0x10..0x1F (enable +0x14,
+    // clear +0x18) and IRQs 32-63 at base + 0x00..0x0F (seen in a trace of
+    // its PIC writes). The banks are at mac-io + 0x20 and + 0x10 (Linux
+    // pmac_pic.c, which uses the mac-io base): so reg starts at mac-io + 0x10
+    // and spans 0x20 bytes. With reg at mac-io + 0 Mac OS enabled its
+    // interrupts in the wrong bank and never got the VIA's.
     // docs/firmware/bw-device-tree.md.
-    const u32 pic_reg[2] = {Paddington::kPicOffset, HeathrowPic::kWindowSize};
-    n.pic = t.add_node(n.macio, "interrupt-controller", "0");
+    const u32 pic_reg[2] = {Paddington::kPicOffset + kPicNodeOffset, kPicNodeSize};
+    n.pic = t.add_node(n.macio, "interrupt-controller", "10");
     t.set_string(n.pic, "device_type", "interrupt-controller");
     t.set_string(n.pic, "compatible", "paddington");
     t.set_ints(n.pic, "reg", pic_reg, 2);

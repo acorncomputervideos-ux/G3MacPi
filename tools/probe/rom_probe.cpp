@@ -320,6 +320,9 @@ int main(int argc, char** argv)
                         x & 0xFF, via.pc[k], via.pc68[k], static_cast<unsigned long long>(via.when[k]));
         }
     }
+    // Interrupt controller state at the end.
+    std::printf("[pic] enabled=%016llX output=%d\n",
+                static_cast<unsigned long long>(m.macio().pic().enabled_mask()), m.macio().pic().output() ? 1 : 0);
     // NVRAM partitions at the end.
     for (u32 i = 0;; ++i) {
         NvramPartition p{};

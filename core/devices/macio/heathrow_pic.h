@@ -16,6 +16,14 @@
 //   (event | (level & level_triggered)) & enable
 // is non-zero in either bank.
 //
+// Interrupt mode (from DingusPPC's MacIoTwo model, an emulator that boots
+// Mac OS on these machines; to verify): bit 31 of the IRQ 0-31 enable
+// register is not a source but IntMode, 0 = native, 1 = "68K-style". It
+// reads back as bit 31 of the IRQ 32-63 enable register too (read-only
+// there). In 68K mode an edge input latches on both transitions, and
+// writing bit 31 to the IRQ 0-31 ack register clears every latched event.
+// Mac OS selects 68K mode and acknowledges that way.
+//
 // Which inputs are level- rather than edge-triggered is a property of the
 // machine's wiring; it is configured by the machine model
 // (set_level_triggered) — the Blue & White values are NOT yet verified.
@@ -43,6 +51,8 @@ public:
 
     bool output() const { return output_; }
     u64 enabled_mask() const { return enable_; }
+    bool mode_68k() const { return (enable_ & kModeBit) != 0; }
+    static constexpr u64 kModeBit = 1ull << 31;  // in the IRQ 0-31 enable register
 
     // MmioDevice
     u32 mmio_read(u32 offset, u32 size) override;
