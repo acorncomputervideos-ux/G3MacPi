@@ -151,11 +151,12 @@ int main(int argc, char** argv)
         std::printf("\n");
     }, &fw);
     // G3_VIA=N: keep the last N VIA register accesses, printed at the end.
-    struct ViaRing { std::vector<u32> e; std::vector<u32> pc; std::vector<u64> when; u32 pos = 0; u64 total = 0; YosemiteMachine* m = nullptr; };
+    struct ViaRing { std::vector<u32> e; std::vector<u32> pc; std::vector<u32> pc68; std::vector<u64> when; u32 pos = 0; u64 total = 0; YosemiteMachine* m = nullptr; };
     static ViaRing via;
     if (const char* vn = std::getenv("G3_VIA")) {
         via.e.assign(std::strtoul(vn, nullptr, 10), 0);
         via.pc.assign(via.e.size(), 0);
+        via.pc68.assign(via.e.size(), 0);
         via.when.assign(via.e.size(), 0);
         via.m = &m;
         m.macio().via().set_trace([](void* c, u32 reg, u8 v, bool write) {
@@ -167,6 +168,8 @@ int main(int argc, char** argv)
             if (r->pos && r->e[(r->pos - 1) % r->e.size()] == x)
                 return;  // repeats of the same access (polling) are kept once
             r->pc[r->pos % r->e.size()] = r->m->cpu().state().pc;
+            // r24 holds the 68K program counter while Apple's 68K emulator runs.
+            r->pc68[r->pos % r->e.size()] = r->m->cpu().state().gpr[24];
             r->when[r->pos % r->e.size()] = r->m->cpu().instructions_executed();
             r->e[r->pos++ % r->e.size()] = x;
         }, &via);
@@ -302,8 +305,8 @@ int main(int argc, char** argv)
         for (u32 i = 0; i < n; ++i) {
             const u32 k = (via.pos - n + i) % via.e.size();
             const u32 x = via.e[k];
-            std::printf("[via] %s %-6s %02X  pc=%08X  at %llu\n", (x & 0x80000000u) ? "W" : "R", names[(x >> 8) & 15],
-                        x & 0xFF, via.pc[k], static_cast<unsigned long long>(via.when[k]));
+            std::printf("[via] %s %-6s %02X  pc=%08X r24=%08X  at %llu\n", (x & 0x80000000u) ? "W" : "R", names[(x >> 8) & 15],
+                        x & 0xFF, via.pc[k], via.pc68[k], static_cast<unsigned long long>(via.when[k]));
         }
     }
     // NVRAM partitions at the end.
