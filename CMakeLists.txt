@@ -40,6 +40,9 @@ target_compile_options(g3platform_common PRIVATE ${G3_COMMON_FLAGS})
 
 # --- Host-side build tools for guest code (PEF writer) ---------------------------
 add_library(g3pef STATIC tools/pef/pef_writer.cpp tools/pef/elf2pef.cpp)
+add_executable(g3_hfs tools/hfs/hfs_tool.cpp)
+target_link_libraries(g3_hfs PRIVATE g3core)
+target_compile_options(g3_hfs PRIVATE ${G3_COMMON_FLAGS})
 add_executable(g3_elf2pef tools/pef/elf2pef_main.cpp)
 target_link_libraries(g3_elf2pef PRIVATE g3pef)
 target_include_directories(g3pef PUBLIC ${CMAKE_SOURCE_DIR})
