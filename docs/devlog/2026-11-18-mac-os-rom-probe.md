@@ -211,4 +211,17 @@ many seconds to minutes of host time.
    ADB detected". An `adb` child (device_type and compatible "adb") under
    via-cuda fixes it: the ROM then uses its Cuda driver (0xFFC0E4xx), and
    complete Cuda packets go back and forth. The 68K code continues to
-   0xFFC31B6A. Under investigation.
+   0xFFC31B6A.
+5. **Interrupts.** At 0xFFC31B6A the ADB Manager waits for its bus scan,
+   which is interrupt-driven. The probe's exception counts showed no
+   external interrupt at all. Mac OS had enabled IRQs 15, 16 and 18 in the
+   PIC's IRQ 32-63 bank: it addresses the PIC from the interrupt-controller
+   node's reg (base + 0x14 = IRQ 0-31 enable), Linux from mac-io (bank at
+   + 0x20). The node's reg is now mac-io + 0x10. Then a storm: Mac OS sets
+   the PIC's 68K interrupt mode and acknowledges with bit 31, which clears
+   all events (DingusPPC's model). Modelled (hardware/heathrow-pic.md).
+6. **Now.** The ADB scan finds our keyboard (2) and mouse (3), moves them
+   and turns autopoll on. About 2,400 external interrupts in 4 s, and the
+   68K start-up keeps moving. The screen is still blank. Cuda commands
+   0x02/0x08 (Cuda memory), 0x1B, 0x22 and 0x25 (I2C) get error replies;
+   the ROM goes on regardless.
