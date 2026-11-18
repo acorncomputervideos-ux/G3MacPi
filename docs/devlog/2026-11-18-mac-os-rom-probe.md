@@ -164,3 +164,26 @@ many seconds to minutes of host time.
 - **Probe additions:** G3_SAMPLE_MS (where the CPU is, every N ms),
   G3_DUMP (physical memory), G3_VDUMP (through the CPU's translation),
   NVRAM partition listing.
+
+## The 68K wait is the SCSI interrupt vector; then MESH
+
+- **G3_VDUMP printed zeros.** That was a probe bug: an argument was
+  evaluated before the read that set it. The pointer at 0x5FFFEFD0 is in
+  fact 0x5FFFEB80, a NanoKernel "Hnfo" structure (written at
+  0xF1030C, as a watchpoint showed). The polled word at +0x7A is one of
+  the interrupt vectors the loader computes. 0x0800 means "none". By the
+  loader's print order (SIO, SCSI, SCC A, SCC B, VIA, ADB, NMI) it is
+  SCSI.
+- **A real B&W has MESH SCSI.** A published Linux boot log from a
+  PowerMac1,1 (GitHub gist by tomari) shows "mesh: configured…", with
+  interrupts 12 and 0. It also gives real facts for ESCC (0x13020 /
+  0x13000, interrupts 15 and 16) and NVRAM (OF 0x140, XP 0x11b0, NR
+  0x12b0). Our NVRAM layout now uses those offsets.
+- **The SCSI node.** The loader recognises it only when named "scsi" (it
+  ignored "mesh"). With it, SCSIIntVect = 11 and the 68K wait ends.
+- **Next stop.** In timed runs the NanoKernel stops in its fatal-error
+  loop (0xF10FE8: it increments the word at 0 forever). Ppc750 now has an
+  exception hook (`G3_EXC`, `G3_EXC_VEC` in the probe), which shows the
+  cause: a machine check reading 0x80810040, MESH's bus-status register.
+  We don't emulate MESH yet. Next: a MESH model, starting with no
+  devices on the bus.

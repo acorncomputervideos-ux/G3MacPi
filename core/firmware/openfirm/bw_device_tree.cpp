@@ -221,6 +221,16 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_string(n.disk[i], "device_type", "block");
         t.set_int(n.disk[i], "reg", 0);
     }
+    // MESH SCSI: a real Blue & White has one (Linux on PowerMac1,1: "mesh:
+    // configured for synchronous 5 MB/s"; interrupts 12 and 0, DBDMA channel 0
+    // at mac-io + 0x8000). Apple's Mac OS ROM loader recognises it by the
+    // name "scsi" (its special-node table; with "mesh" it ignored the node),
+    // and the 68K start-up waits forever without its interrupt vector. Linux's
+    // MESH driver matches device_type "scsi" + compatible "chrp,mesh0".
+    // Registers at mac-io + 0x10000. docs/firmware/bw-device-tree.md.
+    const u32 scsi_reg[4] = {0x10000, 0x1000, 0x8000, 0x100}, scsi_irq[2] = {12, 0};
+    n.scsi = cell(t, n.macio, n.pic, "scsi", "scsi", scsi_reg, 4, scsi_irq, 2);
+    t.set_string(n.scsi, "compatible", "chrp,mesh0");
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
 

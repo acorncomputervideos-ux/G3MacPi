@@ -33,32 +33,36 @@ TEST_CASE("machine/bw-nvram/format_and_walk")
     REQUIRE(bw_nvram::valid(nv));
     NvramPartition p{};
     REQUIRE(bw_nvram::partition(nv, 0, p));
-    CHECK(p.offset == 0 && p.signature == 0x7F && p.length == 0x12F0);
+    CHECK(p.offset == 0 && p.signature == 0x7F && p.length == 0x130);
     CHECK(std::string(p.name, 12) == "wwwwwwwwwwww");
     REQUIRE(bw_nvram::partition(nv, 1, p));
-    CHECK(p.offset == 0x12F0 && p.signature == 0xA0 && std::string(p.name) == "APL,MacOS75");
-    CHECK(p.offset + 0x10 == 0x1300u);                 // XPRAM, as Old World machines and Linux expect
-    CHECK(p.offset + 0x110 == 0x1400u);                // Name Registry data (the loader's fallback)
+    CHECK(p.offset == 0x130 && p.signature == 0x50 && std::string(p.name) == "common");
     REQUIRE(bw_nvram::partition(nv, 2, p));
-    CHECK(p.offset == 0x1800 && p.signature == 0x50 && std::string(p.name) == "common");
-    CHECK(p.offset + p.length == MacioNvram::kSize);
-    CHECK(!bw_nvram::partition(nv, 3, p));
+    CHECK(p.offset == 0x11A0 && p.signature == 0xA0 && std::string(p.name) == "APL,MacOS75");
+    CHECK(p.length == 0x510u);
+    REQUIRE(bw_nvram::partition(nv, 3, p));
+    CHECK(p.offset == 0x16B0 && p.signature == 0x7F && p.offset + p.length == MacioNvram::kSize);
+    CHECK(!bw_nvram::partition(nv, 4, p));
     // Walk exactly as Linux's lookup_partitions does.
-    u32 offset = 0, xpram = 0, common = 0;
+    u32 offset = 0, xpram = 0, nr = 0, common = 0;
     do {
         char name[13] = {};
         for (u32 i = 0; i < 12; ++i)
             name[i] = static_cast<char>(nv.byte(offset + 4 + i));
         if (!std::strcmp(name, "common"))
             common = offset + 0x10;
-        if (!std::strcmp(name, "APL,MacOS75"))
+        if (!std::strcmp(name, "APL,MacOS75")) {
             xpram = offset + 0x10;
+            nr = offset + 0x110;
+        }
         offset += ((static_cast<u32>(nv.byte(offset + 2)) << 8) | nv.byte(offset + 3)) * 0x10;
     } while (offset < MacioNvram::kSize);
-    CHECK_EQ(xpram, 0x1300u);
-    CHECK_EQ(common, 0x1810u);
+    // What Linux reported on a real B&W: OF 0x140, XP 0x11b0, NR 0x12b0.
+    CHECK_EQ(common, 0x140u);
+    CHECK_EQ(xpram, 0x11B0u);
+    CHECK_EQ(nr, 0x12B0u);
     // Damage is detected.
-    nv.set_byte(0x1800 + 5, 'X');
+    nv.set_byte(0x130 + 5, 'X');
     CHECK(!bw_nvram::valid(nv));
 }
 
@@ -79,9 +83,9 @@ TEST_CASE("machine/bw-nvram/firmware_formats_blank_nvram_only")
         // A valid NVRAM with data in it is left alone.
         YosemiteMachine m(cfg);
         bw_nvram::format(m.macio().nvram());
-        m.macio().nvram().set_byte(0x1305, 0xAB);      // XPRAM data
+        m.macio().nvram().set_byte(0x11B5, 0xAB);      // XPRAM data
         BwFirmware fw(m, BwFirmware::Config{});
         REQUIRE(fw.ok());
-        CHECK(m.macio().nvram().byte(0x1305) == 0xAB);
+        CHECK(m.macio().nvram().byte(0x11B5) == 0xAB);
     }
 }

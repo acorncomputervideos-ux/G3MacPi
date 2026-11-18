@@ -39,7 +39,9 @@ int main(int argc, char** argv)
     }
     const u64 ms = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 100;
 
-    static std::vector<u8> ram(256u << 20), vram(8u << 20);
+    // G3_RAM_MB: emulated RAM (default 256).
+    const u32 ram_mb = std::getenv("G3_RAM_MB") ? static_cast<u32>(std::strtoul(std::getenv("G3_RAM_MB"), nullptr, 10)) : 256;
+    static std::vector<u8> ram(static_cast<size_t>(ram_mb) << 20), vram(8u << 20);
     YosemiteConfig cfg;
     cfg.ram = ram.data();
     cfg.ram_size = static_cast<u32>(ram.size());
@@ -155,17 +157,57 @@ int main(int argc, char** argv)
     if (fw.client_started()) {
         std::printf("[probe] client started at 0x%08X; running %llu ms of guest time\n", fw.client_entry(),
                     static_cast<unsigned long long>(ms));
+        // G3_EXC=N: log up to N exceptions (any run mode), skipping DSI/ISI page
+        // faults the OS handles itself unless G3_EXC_ALL is set.
+        struct ExcLog { u32 left; bool all; ppc::Ppc750* cpu; u64 count[32]; };
+        static ExcLog exc{0, false, nullptr, {}};
+        if (const char* e = std::getenv("G3_EXC")) {
+            exc.left = static_cast<u32>(std::strtoul(e, nullptr, 10));
+            exc.all = std::getenv("G3_EXC_ALL") != nullptr;
+            exc.cpu = &m.cpu();
+            m.cpu().set_exception_hook([](void* c, u32 vector, u32 srr0, u32 srr1) {
+                auto* x = static_cast<ExcLog*>(c);
+                ++x->count[(vector >> 8) & 31];
+                static const char* only = std::getenv("G3_EXC_VEC");  // e.g. "200": only that vector
+                if (only && vector != std::strtoul(only, nullptr, 16))
+                    return;
+                if (!x->left || (!only && !x->all && (vector == 0x300 || vector == 0x400 || vector == 0x900 ||
+                                                      vector == 0x500 || vector == 0x700)))
+                    return;
+                --x->left;
+                const auto& st = x->cpu->state();
+                std::printf("[exc] vector %04X srr0=%08X srr1=%08X dar=%08X dsisr=%08X lr=%08X dec=%08X insns=%llu\n",
+                            vector, srr0, srr1, st.spr[ppc::spr::DAR], st.spr[ppc::spr::DSISR], st.lr(),
+                            st.spr[ppc::spr::DEC], static_cast<unsigned long long>(x->cpu->instructions_executed()));
+            }, &exc);
+        }
         if (std::getenv("G3_STEP")) {
             // Step by step (no device time passes), reporting each exception
             // entry: the vector, SRR0/SRR1, DAR/DSISR, and the last PCs.
             const u64 steps = ms * 350000ull;  // ~ms at 350 MHz, one instruction per cycle
             u32 history[16] = {}, hp = 0, reported = 0;
             auto& st = m.cpu().state();
+            // G3_WATCH=physaddr: report every change of that word, with the PC.
+            const char* watch_env = std::getenv("G3_WATCH");
+            const u32 watch = watch_env ? static_cast<u32>(std::strtoul(watch_env, nullptr, 16)) : 0;
+            u32 watched = 0, watch_reports = 0;
+            if (watch_env)
+                m.bus().read32(watch, watched);
             for (u64 i = 0; i < steps && !m.cpu().checkstopped() && !fw.client_exited(); ++i) {
                 const u32 before = st.pc;
                 history[hp++ % 16] = before;
                 m.cpu().step();
                 const u32 after = st.pc;
+                if (watch_env && watch_reports < 40) {
+                    u32 now = 0;
+                    m.bus().read32(watch, now);
+                    if (now != watched) {
+                        ++watch_reports;
+                        std::printf("[watch] step %llu pc=%08X: %08X -> %08X (msr=%08X)\n",
+                                    static_cast<unsigned long long>(i), before, watched, now, st.msr);
+                        watched = now;
+                    }
+                }
                 const bool vector = (after & 0xFF) == 0 && (after & ~0xFFF0FF00u) == 0 && after >= 0x100 &&
                                     (after & 0xFFFF) <= 0x1F00 && after != before + 4;
                 if (vector && reported < 40 && (st.spr[ppc::spr::SRR0] == before || st.spr[ppc::spr::SRR0] == before + 4)) {
@@ -205,6 +247,13 @@ int main(int argc, char** argv)
             }
         } else {
             m.run_for(ms * 1000000000ull);  // picoseconds
+        }
+        if (std::getenv("G3_EXC")) {
+            std::printf("[exc] totals:");
+            for (u32 v = 0; v < 32; ++v)
+                if (exc.count[v])
+                    std::printf(" %03X:%llu", v << 8, static_cast<unsigned long long>(exc.count[v]));
+            std::printf("\n");
         }
         if (fw.firmware().exception_vector())
             std::printf("\n[probe] unexpected exception 0x%X: srr0=0x%08X srr1=0x%08X\n",
@@ -275,7 +324,11 @@ int main(int argc, char** argv)
             std::printf("[vdump] %08X:", at + i);
             for (u32 k = 0; k < 16; k += 2) {
                 u16 v = 0;
-                std::printf(mem.read16(at + i + k, v) ? " %04X" : " ----", v);
+                const bool got = mem.read16(at + i + k, v);  // before printing v
+                if (got)
+                    std::printf(" %04X", v);
+                else
+                    std::printf(" ----");
             }
             std::printf("\n");
         }

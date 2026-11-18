@@ -221,6 +221,15 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
               std::vector<u32>({Paddington::kIdeIrq[i], Paddington::kIdeDmaIrq[i]}));
         CHECK(cells(t, ata, "interrupt-parent") == std::vector<u32>({b.n.pic}));
     }
+    // MESH SCSI: named "scsi" (Apple's loader), type + compatible as Linux matches.
+    REQUIRE(b.n.scsi != kNone);
+    CHECK(std::string(t.name(b.n.scsi)) == "scsi");
+    CHECK(str(t, b.n.scsi, "device_type") == "scsi");
+    CHECK(compatible_with(t, b.n.scsi, "chrp,mesh0"));
+    CHECK_EQ(cell_addr(b.n.scsi, 0), base + 0x10000u);
+    CHECK_EQ(cell_addr(b.n.scsi, 1), base + Paddington::kDbdmaOffset + 0 * DbdmaController::kChannelStride);
+    CHECK(cells(t, b.n.scsi, "interrupts") == std::vector<u32>({12, 0}));
+    CHECK(cells(t, b.n.scsi, "interrupt-parent") == std::vector<u32>({b.n.pic}));
     // NVRAM: Linux direct mode uses mult = size / 8 KB.
     const auto nv = cells(t, b.n.nvram, "reg");
     REQUIRE(nv.size() == 2);

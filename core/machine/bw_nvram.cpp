@@ -83,9 +83,11 @@ void format(MacioNvram& nv)
 {
     for (u32 i = 0; i < MacioNvram::kSize; ++i)
         nv.set_byte(i, 0);
-    write_header(nv, 0, kSigFree, kMacOsHeader, "", 'w');
-    write_header(nv, kMacOsHeader, kSigMacOs, kMacOsLength, "APL,MacOS75", '\0');
+    write_header(nv, 0, kSigFree, kCommonHeader, "", 'w');
     write_header(nv, kCommonHeader, kSigOf, kCommonLength, "common", '\0');
+    write_header(nv, kMacOsHeader, kSigMacOs, kMacOsLength, "APL,MacOS75", '\0');
+    const u32 rest = kMacOsHeader + kMacOsLength;
+    write_header(nv, rest, kSigFree, MacioNvram::kSize - rest, "", 'w');
 }
 
 } // namespace g3::bw_nvram

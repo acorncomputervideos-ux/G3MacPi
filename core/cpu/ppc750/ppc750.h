@@ -89,6 +89,14 @@ public:
     // client memory on the client's behalf. False if no translation.
     bool probe_translate(u32 ea, bool write, u32& pa);
 
+    // Observer told of every exception taken (debugging tools); null = none.
+    using ExceptionHook = void (*)(void* context, u32 vector, u32 srr0, u32 srr1);
+    void set_exception_hook(ExceptionHook h, void* ctx)
+    {
+        exception_hook_ = h;
+        exception_ctx_ = ctx;
+    }
+
     // Exception entry (public for tests and for device-driven exceptions).
     // 'srr0' is the address saved; 'srr1_cause' are the cause bits
     // OR-ed into SRR1 next to the copied MSR bits.
@@ -223,6 +231,8 @@ private:
     fp::Tininess fp_tininess_ = fp::Tininess::BeforeRounding;
     u64 instr_count_ = 0;
     HleHandler hle_handler_ = nullptr;
+    ExceptionHook exception_hook_ = nullptr;
+    void* exception_ctx_ = nullptr;
     void* hle_ctx_ = nullptr;
 };
 

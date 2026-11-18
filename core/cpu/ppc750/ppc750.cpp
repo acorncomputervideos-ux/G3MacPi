@@ -35,6 +35,8 @@ void Ppc750::raise_exception(Exception type, u32 srr0, u32 srr1_cause)
     // LE = ILE. A machine check additionally clears ME.
     s_.spr[spr::SRR0] = srr0;
     s_.spr[spr::SRR1] = (s_.msr & msr::kSrr1CopyMask) | srr1_cause;
+    if (exception_hook_)
+        exception_hook_(exception_ctx_, static_cast<u32>(type), srr0, s_.spr[spr::SRR1]);
 
     u32 new_msr = s_.msr & (msr::IP | msr::ME);
     if (s_.msr & msr::ILE)

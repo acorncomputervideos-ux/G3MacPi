@@ -14,13 +14,15 @@
 //  - "common" holds Open Firmware's settings (NVRAM_SIG_OF 0x50);
 //    "APL,MacOS75" is Mac OS's: XPRAM at +0x10 (256 bytes), Name Registry
 //    data at +0x110. Free space: signature 0x7F, name "wwwwwwwwwwww".
-//  - Old World machines keep XPRAM at 0x1300 and Name Registry data at
-//    0x1400; Apple's Mac OS ROM loader falls back to 0x1400 too. Our layout
-//    keeps those offsets.
-// "APL,MacOS75"'s signature is 0xA0 (NVRAM_SIG_OS): Apple's Mac OS ROM
-// loader, finding a partition of that name with another signature, made its
-// own with 0xA0 (and the same 0x510 length). Our choices (to verify against a
-// real B&W): the order of the partitions, "common" from 0x1800.
+//  - A real Blue & White (Linux boot log, PowerMac1,1, published as a
+//    GitHub gist by tomari) reports: OF partition at 0x140, XP partition at
+//    0x11b0, NR partition at 0x12b0. So "common"'s header is at 0x130 and
+//    "APL,MacOS75"'s at 0x11A0. Our layout uses those offsets.
+//  - "APL,MacOS75"'s signature is 0xA0 (NVRAM_SIG_OS): Apple's Mac OS ROM
+//    loader, finding a partition of that name with another signature, made
+//    its own with 0xA0, 0x510 bytes long.
+// Our choices (to verify): what fills 0-0x12F (free space here), the length
+// of "common" (up to "APL,MacOS75") and free space after "APL,MacOS75".
 
 #ifndef G3_CORE_MACHINE_BW_NVRAM_H
 #define G3_CORE_MACHINE_BW_NVRAM_H
@@ -38,8 +40,8 @@ struct NvramPartition {
 };
 
 namespace bw_nvram {
-constexpr u32 kMacOsHeader = 0x12F0, kMacOsLength = 0x510;   // XPRAM 0x1300, Name Registry 0x1400
-constexpr u32 kCommonHeader = 0x1800, kCommonLength = 0x800;
+constexpr u32 kCommonHeader = 0x130, kCommonLength = 0x11A0 - 0x130;   // data at 0x140
+constexpr u32 kMacOsHeader = 0x11A0, kMacOsLength = 0x510;             // XPRAM 0x11B0, Name Registry 0x12B0
 constexpr u8 kSigFree = 0x7F, kSigOf = 0x50, kSigMacOs = 0xA0;
 
 u8 checksum(const u8* header);
