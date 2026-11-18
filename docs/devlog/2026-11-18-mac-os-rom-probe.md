@@ -73,3 +73,18 @@ claimed memory, then hung.
 The loader checks the root node's "copyright" property. Whether our
 firmware should carry Apple's copyright notice there is the user's
 decision.
+
+## The copyright property
+
+The project owner agreed to add the root node's "copyright" property, for
+interoperability only. MacOS.elf holds the strings "Copyright " and
+" Apple Computer, Inc." next to its error message. The value is
+"Copyright 1983-1999 Apple Computer, Inc. All Rights Reserved"
+(`kAppleCopyrightNotice`, bw_device_tree.h).
+
+With it, the loader passes that check. It then reads `/chosen` mmu and
+memory and looks for `/rtas`. Ours is absent, so it writes
+"MacOS: Boot Failure!" and "/rtas not found!" and exits.
+
+Next: RTAS (CHRP Run-Time Abstraction Services), meaning a `/rtas` node,
+`rtas-size`, `instantiate-rtas` and the RTAS calls Mac OS makes.

@@ -147,6 +147,11 @@ TEST_CASE("firmware/bw-tree/machine_identity_and_cpu")
     const DeviceTree& t = *b.t;
     CHECK(str(t, t.root(), "model") == "PowerMac1,1");            // Linux pmac_mb_defs
     CHECK(compatible_with(t, t.root(), "MacRISC"));               // Linux of_empty_ranges_quirk
+    // The check Apple's Mac OS ROM loader makes: starts with "Copyright ",
+    // contains " Apple Computer, Inc." (the two strings in MacOS.elf).
+    const std::string c = str(t, t.root(), "copyright");
+    CHECK(c.rfind("Copyright ", 0) == 0);
+    CHECK(c.find(" Apple Computer, Inc.") != std::string::npos);
     // NewWorld: some node has an "interrupt-controller" property (Linux setup.c).
     CHECK(t.has_property(find_by_name(t, t.root(), "mac-io"), "interrupt-controller"));
     const Phandle cpu = b.n.cpu;

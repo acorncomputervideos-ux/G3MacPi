@@ -18,6 +18,9 @@
 
 namespace g3::of {
 
+// The root node's "copyright" (see bw_device_tree.cpp for why it's there).
+constexpr const char* kAppleCopyrightNotice = "Copyright 1983-1999 Apple Computer, Inc. All Rights Reserved";
+
 struct BwMachine {
     u32 ram_size = 0;
     u32 cpu_hz = 350000000;

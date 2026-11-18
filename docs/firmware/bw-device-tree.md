@@ -58,3 +58,12 @@ The tests check the tree the way Linux uses it:
 
 So if the tree and the hardware model drift apart, a test fails. A second
 build with a different BAR checks that the base flows through.
+
+## "copyright" (root)
+
+"Copyright 1983-1999 Apple Computer, Inc. All Rights Reserved". This is
+an interoperability requirement only. Apple's Mac OS ROM loader
+(MacOS.elf) stops with "Official Apple copyright message missing." unless
+the root's "copyright" starts with "Copyright " and contains " Apple
+Computer, Inc.", the two strings it holds. The project owner agreed to
+add it, as other emulators' firmware does. Our firmware is not Apple's.

@@ -85,6 +85,13 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     n.root = t.root();
     t.set_string(n.root, "name", "device-tree");
     t.set_string(n.root, "model", "PowerMac1,1");
+    // Interoperability only: Apple's Mac OS ROM loader (MacOS.elf) refuses
+    // to continue ("Official Apple copyright message missing.") unless the
+    // root's "copyright" starts with "Copyright " and contains " Apple
+    // Computer, Inc." — the two strings it holds. The notice states Apple's
+    // copyright in their firmware design; ours isn't Apple's. Added with the
+    // project owner's agreement (docs/firmware/virtual-mode.md, devlog).
+    t.set_string(n.root, "copyright", kAppleCopyrightNotice);
     static const char* const compat[] = {"PowerMac1,1", "MacRISC", "Power Macintosh"};
     set_strings(t, n.root, "compatible", compat, 3);
     t.set_int(n.root, "#address-cells", 1);
