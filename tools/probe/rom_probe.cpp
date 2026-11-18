@@ -232,6 +232,20 @@ int main(int argc, char** argv)
         std::printf("[nvram] %04X sig %02X len %04X \"%s\"%s\n", p.offset, p.signature, p.length, p.name,
                     bw_nvram::valid(m.macio().nvram()) ? "" : " (chain invalid)");
     }
+    // G3_SAVE=physaddr,len,file: physical memory at the end, raw, to a file.
+    if (const char* sv = std::getenv("G3_SAVE")) {
+        char* end = nullptr;
+        const u32 at = static_cast<u32>(std::strtoul(sv, &end, 16));
+        const u32 len = static_cast<u32>(std::strtoul(end + 1, &end, 16));
+        if (FILE* o = std::fopen(end + 1, "wb")) {
+            for (u32 i = 0; i < len; ++i) {
+                u8 b = 0;
+                m.bus().read8(at + i, b);
+                std::fputc(b, o);
+            }
+            std::fclose(o);
+        }
+    }
     // G3_DUMP=physaddr,len: physical memory at the end, in hex.
     if (const char* dump = std::getenv("G3_DUMP")) {
         char* end = nullptr;
