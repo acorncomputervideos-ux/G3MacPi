@@ -25,7 +25,8 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | call-method and disk methods (block-size, read-blocks, ...) | to do |
 | Virtual-memory services (translations, map) | to do, if Mac OS needs them |
 | B&W device tree contents (needs a real device-tree dump) | to do |
-| Forth subset for the boot script (`interpret`) | to do |
+| Forth interpreter: language core (forth.md) | ✅ step 8 |
+| Firmware words for the boot script; `interpret` client service | to do |
 
 ## Facts used
 
