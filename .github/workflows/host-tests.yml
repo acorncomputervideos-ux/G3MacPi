@@ -50,3 +50,9 @@ jobs:
           powerpc-linux-gnu-objdump -f smoke.o | tee objdump.txt
           grep -q "elf32-powerpc" objdump.txt
           powerpc-linux-gnu-objdump -d smoke.o | head -30
+
+      - name: Run compiled guest code on the emulated 750
+        run: |
+          cmake -S . -B build/guest -DG3_SANITIZE=ON
+          cmake --build build/guest --target g3_guest_tests -j"$(nproc)"
+          ./build/guest/g3_guest_tests build/guest/guest/kernels.elf

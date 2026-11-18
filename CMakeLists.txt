@@ -5,7 +5,7 @@
 # (see app/circle/Makefile and tools/build-pi.sh).
 
 cmake_minimum_required(VERSION 3.16)
-project(G3MacPi LANGUAGES CXX)
+project(G3MacPi LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -75,3 +75,32 @@ add_test(NAME unit_tests COMMAND g3_unit_tests)
 add_executable(g3_cpu_bench tools/bench/cpu_bench.cpp)
 target_link_libraries(g3_cpu_bench PRIVATE g3core)
 target_compile_options(g3_cpu_bench PRIVATE ${G3_COMMON_FLAGS})
+
+# --- Guest-code tests (only with the PowerPC cross-compiler) ---------------------
+# guest/tests/kernels.c is compiled for the emulated 750 and for the host;
+# g3_guest_tests runs the guest build on the emulator and compares results.
+find_program(G3_PPC_GCC powerpc-linux-gnu-gcc)
+if(G3_PPC_GCC)
+  set(G3_GUEST_FLAGS -m32 -mbig-endian -mcpu=750 -ffreestanding -fno-builtin -nostdlib -static
+      -O2 -msdata=none -ffp-contract=off -Wall -Wextra -Werror -I${CMAKE_SOURCE_DIR})
+  set(G3_KERNELS_ELF ${CMAKE_BINARY_DIR}/guest/kernels.elf)
+  add_custom_command(
+    OUTPUT ${G3_KERNELS_ELF}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/guest
+    COMMAND ${G3_PPC_GCC} ${G3_GUEST_FLAGS} -Wl,-N -Wl,-Ttext=0x10000 -Wl,--build-id=none
+            ${CMAKE_SOURCE_DIR}/guest/tests/start.S ${CMAKE_SOURCE_DIR}/guest/tests/kernels.c
+            -lgcc -o ${G3_KERNELS_ELF}
+    DEPENDS guest/tests/start.S guest/tests/kernels.c guest/tests/kernels.h
+    COMMENT "Building guest test kernels for the PowerPC 750")
+  add_custom_target(g3_guest_kernels DEPENDS ${G3_KERNELS_ELF})
+  add_executable(g3_guest_tests tests/guest/run_kernels.cpp guest/tests/kernels.c)
+  set_source_files_properties(guest/tests/kernels.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+  target_link_libraries(g3_guest_tests PRIVATE g3core)
+  target_compile_options(g3_guest_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${G3_COMMON_FLAGS}>)
+  add_dependencies(g3_guest_tests g3_guest_kernels)
+  if(G3_SANITIZE)
+    target_compile_options(g3_guest_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(g3_guest_tests PRIVATE -fsanitize=address,undefined)
+  endif()
+  add_test(NAME guest_kernels COMMAND g3_guest_tests ${G3_KERNELS_ELF})
+endif()
