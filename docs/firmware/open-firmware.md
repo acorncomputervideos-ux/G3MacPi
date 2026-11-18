@@ -21,6 +21,7 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | Disk partitions (Apple Partition Map): `hd:N` opens partition N | ✅ step 4 |
 | Files on HFS Plus partitions: `hd:N,\\:tbxi` opens the boot file | ✅ step 5 |
 | Files on classic HFS partitions | ✅ step 6 |
+| CHRP bootinfo parser (the boot file's text header; see bootinfo.md) | ✅ step 7 |
 | call-method and disk methods (block-size, read-blocks, ...) | to do |
 | Virtual-memory services (translations, map) | to do, if Mac OS needs them |
 | B&W device tree contents (needs a real device-tree dump) | to do |
