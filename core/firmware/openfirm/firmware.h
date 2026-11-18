@@ -42,6 +42,12 @@ public:
     void attach(ppc::Ppc750& cpu) { cpu.set_hle_handler(hle_trap, this); }
 
     ClientInterface& client() { return ci_; }
+
+    // "go": starts a client program at `entry` (real mode). Registers as
+    // the bindings specify (docs/firmware/elf-loader.md): r1 = a stack
+    // given by the firmware, r3 = r4 = 0 (CHRP 10.2), r5 = the client
+    // interface entry (PowerPC binding; to verify), MSR IR/DR/EE clear.
+    void start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const;
     u32 calls() const { return calls_; }
 
 private:

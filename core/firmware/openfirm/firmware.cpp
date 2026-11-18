@@ -14,6 +14,16 @@ bool Firmware::install(u32 addr)
     return true;
 }
 
+void Firmware::start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const
+{
+    s.pc = entry;
+    s.gpr[1] = (stack_top - 64) & ~15u;  // 16-byte aligned, with a little headroom
+    s.gpr[3] = 0;
+    s.gpr[4] = 0;
+    s.gpr[5] = entry_;
+    s.msr &= ~(ppc::msr::IR | ppc::msr::DR | ppc::msr::EE);
+}
+
 bool Firmware::hle_trap(void* context, u32 insn, ppc::CpuState& s, u32& next_pc)
 {
     auto* fw = static_cast<Firmware*>(context);

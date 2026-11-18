@@ -27,6 +27,7 @@ provides both from C++, so no Apple boot ROM is needed. Mac OS itself
 | B&W device tree contents (needs a real device-tree dump) | to do |
 | Forth interpreter: language core (forth.md) | ✅ step 8 |
 | Firmware words: device tree, encoding, packages, `load` (forth-words.md) | ✅ step 9 |
+| ELF init-program and `go` (elf-loader.md) | ✅ step 10 |
 | `boot` (load + run the bootinfo script), `interpret` client service | to do |
 
 ## Facts used
