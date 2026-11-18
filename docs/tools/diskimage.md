@@ -26,6 +26,33 @@ Formats:
 Chunk types other than zeros (0x00), stored (0x02), ADC (0x83) and end
 (0xFF) are refused, not guessed.
 
+## `tools/diskimage/extract_mac_rom.py`
+
+Copies one file, "Mac OS ROM" by default, out of a raw CD or disk image:
+`.iso`, `.toast`, `.cdr`, or a raw `.img` holding HFS or HFS Plus,
+partitioned or not. It uses only Python 3's standard library, so it runs
+on the user's own computer. That avoids uploading a whole CD. It writes
+the data fork, and the resource fork as `<out>.rsrc`.
+
+    python3 extract_mac_rom.py "Mac OS 9.iso"
+    python3 extract_mac_rom.py "Mac OS 9.iso" "Finder" Finder.bin
+
+How it finds the file:
+- It finds volumes by scanning for an HFS Master Directory Block or an
+  HFS Plus volume header 1024 bytes past a 512-byte boundary. That works
+  with partition maps of either block size, and with an HFS wrapper
+  around HFS Plus.
+- It walks the catalog's leaf nodes to find the file.
+- Files beyond their first extents (3 for HFS, 8 for HFS Plus) are
+  refused rather than read wrongly.
+
+Checked, all byte-identical to `g3_hfs`, on:
+- Apple's ROM Update volume (HFS);
+- the test suite's HFS and HFS Plus images;
+- an HFS Plus image behind an Apple partition map.
+
+The HFS-wrapper path has not been tried on a real image.
+
 ## `g3_hfs` (tools/hfs/hfs_tool.cpp)
 
 Lists and extracts files with the emulator's own HFS / HFS Plus reader
