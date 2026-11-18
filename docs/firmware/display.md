@@ -54,6 +54,25 @@ Drivers can now provide any method through
 `PackageDriver::method()`; `$call-method` and the client interface's
 `call-method` reach it.
 
+## Text terminal (step 3c)
+
+The display instance's `write` draws text, and when a display exists it
+is `/chosen stdout`, so firmware and client output appear on screen.
+Everything written is also echoed to the console sink (the boot log), so
+headless runs and tests still see it.
+
+- **Font**: our own 8×8 design, 95 printable ASCII glyphs. The drawings
+  in `tools/font/make_font.py` are the source; the script generates
+  `core/firmware/openfirm/font8x8.inc`. Every font row is drawn twice:
+  8×16 cells, 80×30 characters at 640×480.
+- **Colours**: index 255 on index 0, which is white on black with the
+  power-on grey palette.
+- **Control characters**: `\n` new line (column 0), `\r` column 0,
+  `\b` back one column, `\t` next multiple of 8, `\f` clear the screen.
+  Other control bytes are ignored; bytes ≥ 0x7F show as `?`.
+- **Layout**: lines wrap at the right edge, and the screen scrolls up one
+  text line at the bottom.
+
 ## Tests
 
 - The node as offb reads it; the power-on picture is enabled and black,
@@ -65,3 +84,8 @@ Drivers can now provide any method through
   added after a sabotage run showed that pure red can't detect a wrong
   shift.
 - A machine without video memory has no display node and no alias.
+- Terminal: the exact pixels of 'H' (row doubling, bit order, colours);
+  new line, carriage return, backspace, tab, wrap and form feed, compared
+  cell by cell with reference drawings; scrolling after 31 lines; 32-bit
+  mode; `stdout` is the screen, and a client's `write` lights pixels and
+  reaches the log.

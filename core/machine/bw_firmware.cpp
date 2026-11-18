@@ -73,7 +73,16 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     inst_.bind(nodes_.console, &console_);
     if (nodes_.display != of::kNone)
         inst_.bind(nodes_.display, &display_);
-    const of::Ihandle con = inst_.open(nodes_.console, "");
+    of::Ihandle con = inst_.open(nodes_.console, "");
+    if (nodes_.display != of::kNone) {
+        // The screen is stdout; its text is also echoed to the console sink.
+        display_.set_echo([](void* ctx, const char* t, u32 len) {
+            static_cast<of::ConsoleDriver*>(ctx)->write(0, reinterpret_cast<const u8*>(t), len);
+        }, &console_);
+        const of::Ihandle scr = inst_.open(nodes_.display, "");
+        if (scr)
+            con = scr;
+    }
     tree_.set_int(nodes_.chosen, "stdout", con);
     tree_.set_int(nodes_.chosen, "stdin", con);
 

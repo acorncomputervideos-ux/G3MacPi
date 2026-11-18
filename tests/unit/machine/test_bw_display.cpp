@@ -178,3 +178,120 @@ TEST_CASE("machine/bw-display/other_depths_and_no_display")
         CHECK_EQ(r.fw->tree().find("screen"), of::kNone);
     }
 }
+
+// --- text terminal -------------------------------------------------------------------------
+
+namespace {
+
+struct TermRig : Rig {
+    std::string echo;
+    TermRig() : Rig(true, 8)
+    {
+        fw->set_console([](void* c, const char* t, u32 n) { static_cast<std::string*>(c)->append(t, n); }, &echo);
+        fw->command("\" screen\" open-dev value scr");
+    }
+    void write(const std::string& s)
+    {
+        std::memcpy(&ram[0x20000], s.data(), s.size());
+        fw->command(("hex 20000 " + std::to_string(s.size()) + " decimal \" write\" scr $call-method drop").c_str());
+    }
+    // The 8x16 cell at (col,row) as 128 bytes of palette indices.
+    std::vector<u8> cell(u32 col, u32 row) const
+    {
+        std::vector<u8> c;
+        for (u32 y = 0; y < 16; ++y)
+            for (u32 x = 0; x < 8; ++x)
+                c.push_back(vram[(row * 16 + y) * 640 + col * 8 + x]);
+        return c;
+    }
+};
+
+} // namespace
+
+TEST_CASE("machine/bw-display/terminal_text")
+{
+    TermRig r;
+    REQUIRE(r.fw->ok());
+    r.write("Hi");
+    // 'H' row 0 of the font is .#...#.. : pixels 1 and 5 lit, on both screen rows 0 and 1.
+    const auto h = r.cell(0, 0);
+    for (u32 y = 0; y < 2; ++y)
+        for (u32 x = 0; x < 8; ++x)
+            CHECK_EQ(h[y * 8 + x], (x == 1 || x == 5) ? 255u : 0u);
+    CHECK_EQ(h[14 * 8 + 1], 0u);                              // font row 7 (blank) at screen rows 14-15
+    CHECK(r.cell(1, 0) != r.cell(2, 0));                      // 'i' drawn, the next cell still blank
+    CHECK(r.echo == "Hi");                                    // echoed to the log
+    // New line, carriage return, backspace, tab.
+    TermRig ref;
+    ref.write("B");
+    r.write("\nA\rB");
+    CHECK(r.cell(0, 1) == ref.cell(0, 0));                    // B overwrote A at row 1, column 0
+    CHECK_EQ(r.fw->nodes().display != of::kNone, true);
+    r.write("xy\b\bZ");
+    TermRig refz;
+    refz.write("Z");
+    CHECK(r.cell(1, 1) == refz.cell(0, 0));                   // backspaced twice, then Z
+    r.write("\t!");
+    TermRig refx;
+    refx.write("!");
+    CHECK(r.cell(8, 1) == refx.cell(0, 0));                   // tab to column 8
+    // Wrap at 80 columns.
+    TermRig w;
+    w.write(std::string(80, '-') + "W");
+    TermRig refw;
+    refw.write("W");
+    CHECK(w.cell(0, 1) == refw.cell(0, 0));
+    // Form feed clears the screen and homes the cursor.
+    r.write("\f");
+    CHECK(r.cell(0, 0) == std::vector<u8>(128, 0));
+}
+
+TEST_CASE("machine/bw-display/terminal_scrolls")
+{
+    TermRig r;
+    REQUIRE(r.fw->ok());
+    // 31 lines on a 30-row screen: line i starts with 'A' + i.
+    std::string text;
+    for (int i = 0; i < 31; ++i)
+        text += std::string(1, static_cast<char>('A' + i)) + (i < 30 ? "\n" : "");
+    r.write(text);
+    TermRig b, last;
+    b.write("B");
+    last.write(std::string(1, static_cast<char>('A' + 30)));
+    CHECK(r.cell(0, 0) == b.cell(0, 0));                      // the first line scrolled away
+    CHECK(r.cell(0, 29) == last.cell(0, 0));                  // the newest line at the bottom
+    CHECK_EQ(r.vram[640 * 480], 0x77u);                       // scrolling stays inside the picture
+}
+
+TEST_CASE("machine/bw-display/stdout_is_the_screen")
+{
+    Rig r;
+    REQUIRE(r.fw->ok());
+    std::string echo;
+    r.fw->set_console([](void* c, const char* t, u32 n) { static_cast<std::string*>(c)->append(t, n); }, &echo);
+    // /chosen stdout is an instance of the display node.
+    const u32 ih = r.prop(r.fw->nodes().chosen, "stdout");
+    CHECK_EQ(r.fw->instances().package(ih), r.fw->nodes().display);
+    // A client writes to stdout via the client interface: pixels appear and the log gets the text.
+    auto w = [&](u32 a, u32 v) { for (u32 k = 0; k < 4; ++k) r.ram[a + k] = static_cast<u8>(v >> (24 - 8 * k)); };
+    std::memcpy(&r.ram[0x9000], "write", 6);
+    std::memcpy(&r.ram[0x9010], "OK", 2);
+    w(0xA000, 0x9000); w(0xA004, 3); w(0xA008, 1); w(0xA00C, ih); w(0xA010, 0x9010); w(0xA014, 2);
+    CHECK_EQ(r.fw->client().call(0xA000), 0u);
+    CHECK(echo == "OK");
+    bool lit = false;
+    for (u32 y = 0; y < 16; ++y)
+        for (u32 x = 0; x < 16; ++x)
+            lit |= r.vram[y * 640 + x] == 255;
+    CHECK(lit);
+    // 32-bit mode: white is 0x00FFFFFF.
+    Rig t(true, 32);
+    REQUIRE(t.fw->ok());
+    t.fw->command("\" screen\" open-dev value scr");
+    std::memcpy(&t.ram[0x20000], "H", 1);
+    t.fw->command("hex 20000 1 \" write\" scr $call-method drop");
+    const size_t px = 1 * 4;                                  // pixel (1, 0): lit in 'H'
+    CHECK_EQ(t.vram[px + 1], 0xFFu);
+    CHECK_EQ(t.vram[px + 3], 0xFFu);
+    CHECK_EQ(t.vram[0 + 1], 0u);                              // pixel (0, 0): background
+}
