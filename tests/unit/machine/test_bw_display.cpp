@@ -79,9 +79,13 @@ TEST_CASE("machine/bw-display/node_as_offb_reads_it")
     CHECK_EQ(r.prop(d, "address"), YosemiteMachine::kVramBase);
     // reg is a root-level (1:1) address range that covers the frame buffer.
     REQUIRE(t.get_property(d, "reg", p, len));
-    REQUIRE(len == 8);
-    CHECK_EQ(r.prop(d, "reg"), YosemiteMachine::kVramBase);
-    CHECK_EQ((static_cast<u32>(p[4]) << 24) | (p[5] << 16) | (p[6] << 8) | p[7], kVramSize);
+    // Then the register block (for our Mac OS display driver).
+    REQUIRE(len == 16);
+    auto cell = [&](u32 i) { return (static_cast<u32>(p[4 * i]) << 24) | (p[4 * i + 1] << 16) | (p[4 * i + 2] << 8) | p[4 * i + 3]; };
+    CHECK_EQ(cell(0), YosemiteMachine::kVramBase);
+    CHECK_EQ(cell(1), kVramSize);
+    CHECK_EQ(cell(2), YosemiteMachine::kDisplayRegs);
+    CHECK_EQ(cell(3), Framebuffer::kRegsSize);
     CHECK_EQ(t.find("screen"), d);
     // Power-on picture: enabled, black.
     CHECK(r.m->display().enabled());

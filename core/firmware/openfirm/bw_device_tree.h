@@ -28,6 +28,7 @@ struct BwMachine {
     u32 macio_device = 0x05;        // mac-io on bus 1 (behind the bridge)
     // The display device (0 = none) and its current mode.
     u32 vram_base = 0, vram_size = 0;
+    u32 regs_base = 0, regs_size = 0;  // its register block (second "reg" entry; 0 = none)
     u32 width = 0, height = 0, depth = 0, linebytes = 0;
 };
 

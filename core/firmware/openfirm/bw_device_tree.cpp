@@ -186,8 +186,10 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         n.display = t.add_node(n.root, "display", unit);
         t.set_string(n.display, "device_type", "display");
         t.set_string(n.display, "compatible", "display");
-        const u32 reg[2] = {m.vram_base, m.vram_size};
-        t.set_ints(n.display, "reg", reg, 2);
+        // reg: video memory, then the register block (our Mac OS driver
+        // finds both here; Linux offb uses the first entry / "address").
+        const u32 reg[4] = {m.vram_base, m.vram_size, m.regs_base, m.regs_size};
+        t.set_ints(n.display, "reg", reg, m.regs_size ? 4 : 2);
         t.set_int(n.display, "address", m.vram_base);
         t.set_int(n.display, "width", m.width);
         t.set_int(n.display, "height", m.height);

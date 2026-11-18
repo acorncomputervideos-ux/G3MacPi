@@ -135,4 +135,30 @@ if(G3_PPC_GCC)
     target_link_options(g3_guest_cfm PRIVATE -fsanitize=address,undefined)
   endif()
   add_test(NAME guest_cfm COMMAND g3_guest_cfm ${G3_DEMO_PEF} ${G3_DEMO_SO})
+
+  # Our Mac OS display driver (guest/ndrv, docs/guest/ndrv.md), and its
+  # test: g3_guest_ndrv plays Mac OS and drives it on the emulated 750.
+  set(G3_NDRV_SO ${CMAKE_BINARY_DIR}/guest/g3_ndrv.so)
+  set(G3_NDRV_PEF ${CMAKE_BINARY_DIR}/guest/g3_ndrv.pef)
+  add_custom_command(
+    OUTPUT ${G3_NDRV_PEF}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/guest
+    COMMAND ${G3_PPC_GCC} ${G3_FRAGMENT_FLAGS} -I${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/guest/ndrv/g3_ndrv.c
+            ${CMAKE_SOURCE_DIR}/guest/cfm/cfm_glue.S -lgcc -o ${G3_NDRV_SO}
+    COMMAND g3_elf2pef ${G3_NDRV_SO} ${G3_NDRV_PEF} --export DoDriverIO --export TheDriverDescription:data
+            --import imp_IOCommandIsComplete=DriverServicesLib:IOCommandIsComplete
+            --import imp_RegistryPropertyGetSize=NameRegistryLib:RegistryPropertyGetSize
+            --import imp_RegistryPropertyGet=NameRegistryLib:RegistryPropertyGet
+    DEPENDS guest/ndrv/g3_ndrv.c guest/cfm/cfm_glue.S guest/cfm/cfm.h g3_elf2pef
+    COMMENT "Building the Mac OS display driver")
+  add_custom_target(g3_ndrv DEPENDS ${G3_NDRV_PEF})
+  add_executable(g3_guest_ndrv tests/guest/run_ndrv.cpp)
+  target_link_libraries(g3_guest_ndrv PRIVATE g3core g3pef)
+  target_compile_options(g3_guest_ndrv PRIVATE ${G3_COMMON_FLAGS})
+  add_dependencies(g3_guest_ndrv g3_ndrv)
+  if(G3_SANITIZE)
+    target_compile_options(g3_guest_ndrv PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(g3_guest_ndrv PRIVATE -fsanitize=address,undefined)
+  endif()
+  add_test(NAME guest_ndrv COMMAND g3_guest_ndrv ${G3_NDRV_PEF})
 endif()

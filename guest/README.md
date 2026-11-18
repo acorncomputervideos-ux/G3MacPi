@@ -34,3 +34,8 @@ is built only when `powerpc-linux-gnu-gcc` is installed. CI's
   Manager would, and calls its exports on the emulated 750. They call a
   hand-assembled routine that follows the Mac OS conventions and clobbers
   everything that a Mac OS routine may clobber.
+
+- `ndrv/` — our Mac OS display driver for the emulator's display
+  device (docs/guest/ndrv.md). `tests/guest/run_ndrv.cpp`
+  (`g3_guest_ndrv`) runs it on the emulated 750 against the real device
+  model, with the test program playing Mac OS.

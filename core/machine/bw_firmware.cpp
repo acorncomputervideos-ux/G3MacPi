@@ -55,6 +55,8 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         fb.set_enabled(true);
         desc.vram_base = fb.vram_base();
         desc.vram_size = fb.vram_size();
+        desc.regs_base = YosemiteMachine::kDisplayRegs;
+        desc.regs_size = Framebuffer::kRegsSize;
         desc.width = fb.width();
         desc.height = fb.height();
         desc.depth = fb.depth();
