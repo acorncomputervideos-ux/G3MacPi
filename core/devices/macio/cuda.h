@@ -68,6 +68,10 @@ public:
     void set_power_callbacks(EventCallback power_down, EventCallback reset, void* context);
     void attach_adb(AdbBus* bus) { adb_ = bus; }
     bool autopoll_enabled() const { return autopoll_; }
+    // Diagnostics: called with each packet the host sent (to_host false)
+    // and each packet queued for the host (to_host true).
+    using PacketTrace = void (*)(void* context, const u8* bytes, u32 len, bool to_host);
+    void set_packet_trace(PacketTrace cb, void* context) { trace_ = cb; trace_ctx_ = context; }
 
     // ViaPeripheral
     void via_port_b_changed(u8 value, u8 driven) override;
@@ -111,6 +115,8 @@ private:
     Scheduler::Handle autopoll_event_ = Scheduler::kInvalidHandle;
     EventCallback power_down_ = nullptr, reset_ = nullptr;
     void* power_ctx_ = nullptr;
+    PacketTrace trace_ = nullptr;
+    void* trace_ctx_ = nullptr;
 };
 
 } // namespace g3

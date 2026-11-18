@@ -429,3 +429,19 @@ TEST_CASE("devices/cuda/collision_host_request_vs_autopoll")
     REQUIRE(c.host.unsolicited.size() >= 5);
     CHECK_EQ(c.host.unsolicited[3], 0x31u);  // the key press was not lost
 }
+
+TEST_CASE("devices/cuda/packet_trace_sees_requests_and_replies")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    struct Log { std::vector<std::vector<u8>> in, out; } log;
+    c.cuda.set_packet_trace([](void* ctx, const u8* b, u32 n, bool to_host) {
+        auto* l = static_cast<Log*>(ctx);
+        (to_host ? l->out : l->in).emplace_back(b, b + n);
+    }, &log);
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGetAutoRate}));
+    REQUIRE(log.in.size() == 1u);
+    CHECK(log.in[0] == std::vector<u8>({Cuda::kCudaPacket, Cuda::kGetAutoRate}));
+    REQUIRE(log.out.size() == 1u);
+    CHECK(log.out[0] == c.host.reply);
+}

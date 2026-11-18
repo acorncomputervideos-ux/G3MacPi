@@ -178,6 +178,8 @@ void Cuda::queue_reply(const u8* bytes, u32 len)
         out_[i] = bytes[i];
     out_pos_ = 0;
     out_pending_ = true;
+    if (trace_)
+        trace_(trace_ctx_, out_, out_len_, true);
     set_treq(true);   // attention
     signal_byte();
 }
@@ -204,6 +206,8 @@ void Cuda::process_packet()
 {
     if (in_len_ == 0)
         return;
+    if (trace_)
+        trace_(trace_ctx_, in_, in_len_, false);
     const u8 type = in_[0];
     if (type == kAdbPacket) {
         const u8 cmd = in_len_ > 1 ? in_[1] : static_cast<u8>(0);

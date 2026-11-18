@@ -174,6 +174,17 @@ int main(int argc, char** argv)
             r->e[r->pos++ % r->e.size()] = x;
         }, &via);
     }
+    // G3_CUDA: print every Cuda packet (host -> Cuda and Cuda -> host).
+    if (std::getenv("G3_CUDA")) {
+        static YosemiteMachine* cm = &m;
+        m.macio().cuda().set_packet_trace([](void*, const u8* b, u32 n, bool to_host) {
+            std::printf("[cuda] %s", to_host ? "<-" : "->");
+            for (u32 i = 0; i < n; ++i)
+                std::printf(" %02X", b[i]);
+            std::printf("   r24=%08X at %llu\n", cm->cpu().state().gpr[24],
+                        static_cast<unsigned long long>(cm->cpu().instructions_executed()));
+        }, nullptr);
+    }
     const bool ok = fw.command("init-program");
     std::printf("\n[probe] init-program: %s\n", ok ? "completed" : "FAILED");
     if (!ok)
