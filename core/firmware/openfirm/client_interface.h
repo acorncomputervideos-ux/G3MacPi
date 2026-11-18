@@ -50,6 +50,11 @@ public:
     void set_exit(EventCallback cb, void* ctx) { exit_cb_ = cb; exit_ctx_ = ctx; }
     void set_enter(EventCallback cb, void* ctx) { enter_cb_ = cb; enter_ctx_ = ctx; }
     void set_clock(ClockCallback cb, void* ctx) { clock_cb_ = cb; clock_ctx_ = ctx; }
+    // Called after every client call (for tools that log a boot): the
+    // service, its argument array address, and whether it was handled.
+    using Trace = void (*)(void* context, const char* service, u32 args_addr, bool handled);
+    void set_trace(Trace t, void* ctx) { trace_ = t; trace_ctx_ = ctx; }
+    ppc::MemoryInterface& memory() { return mem_; }
     void set_memory(MemoryMap* m) { memory_ = m; }
     void set_instances(InstanceTable* t) { instances_ = t; }
     void set_forth(forth::Forth* f) { forth_ = f; }
@@ -66,6 +71,8 @@ public:
     u32 unknown_calls() const { return unknown_calls_; }
 
 private:
+    Trace trace_ = nullptr;
+    void* trace_ctx_ = nullptr;
     bool read_cell(u32 addr, u32& v) { return mem_.read32(addr, v); }
     bool read_string(u32 addr, char* out, u32 max);  // false if unterminated or unreadable
     bool write_bytes(u32 addr, const u8* data, u32 len);

@@ -83,6 +83,12 @@ public:
     bool checkstopped() const { return checkstop_; }
     u64 instructions_executed() const { return instr_count_; }
 
+    // Translates a data address as a load (or store) would right now —
+    // MSR[DR], BATs, page table — without raising an exception, updating
+    // R/C bits or touching the TLB. For firmware that reads and writes
+    // client memory on the client's behalf. False if no translation.
+    bool probe_translate(u32 ea, bool write, u32& pa);
+
     // Exception entry (public for tests and for device-driven exceptions).
     // 'srr0' is the address saved; 'srr1_cause' are the cause bits
     // OR-ed into SRR1 next to the copied MSR bits.
@@ -179,8 +185,9 @@ private:
     // may be written and whether its C bit is already set (BATs: always).
     bool translate_slow(u32 ea, Access access, u32& pa, bool& writable, bool& changed);
     bool bat_translate(u32 ea, Access access, u32& pa, bool& protection_fault, bool& writable);
+    // probe: no R/C updates and no machine check (for probe_translate).
     bool page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& writable,
-                        bool& changed);
+                        bool& changed, bool probe = false);
     void raise_translation_fault(u32 ea, Access access, u32 cause);
 
     // Soft TLB: direct-mapped caches of successful translations, one for

@@ -343,6 +343,41 @@ TEST_CASE("firmware/client/called_from_guest_code")
     CHECK_EQ(cpu.state().pc, 0x2000u + 4 * (sizeof prog / 4 - 1));  // at the final loop
 }
 
+TEST_CASE("firmware/client/exit_does_not_return")
+{
+    using namespace g3::ppc;
+    using namespace asm_ppc;
+    CiRig r;
+    Firmware fw(*r.f.t, r.bus);
+    REQUIRE(fw.install(0x3000));
+    CHECK_EQ(r.rd(0x3004), Firmware::kTrapIdle);
+    Ppc750 cpu(r.bus);
+    fw.attach(cpu);
+    const u32 args = 0x8000;
+    r.wr(args, r.put_string("exit"));
+    r.wr(args + 4, 0);
+    r.wr(args + 8, 0);
+    const u32 prog[] = {
+        lis(3, args >> 16), ori(3, 3, args & 0xFFFF),
+        lis(9, 0), ori(9, 9, 0x3000), mtspr(spr::CTR, 9),
+        bctr() | 1,                      // bctrl: exit
+        stw(3, 0x100, 0),                // must not run
+        b(0),
+    };
+    for (u32 i = 0; i < sizeof prog / 4; ++i)
+        r.wr(0x2000 + 4 * i, prog[i]);
+    r.wr(0x100, 0x11111111u);
+    cpu.reset();
+    cpu.state().msr = 0;
+    cpu.state().pc = 0x2000;
+    CHECK(!fw.client_exited());
+    cpu.run(50);
+    CHECK(fw.client_exited());
+    CHECK_EQ(cpu.state().pc, 0x3004u);   // parked on the idle trap
+    CHECK_EQ(r.rd(0x100), 0x11111111u);  // the code after the call never ran
+    CHECK(!cpu.checkstopped());
+}
+
 TEST_CASE("firmware/client/other_opcode0_words_still_fault")
 {
     using namespace g3::ppc;
@@ -350,7 +385,7 @@ TEST_CASE("firmware/client/other_opcode0_words_still_fault")
     Firmware fw(*r.f.t, r.bus);
     Ppc750 cpu(r.bus);
     fw.attach(cpu);
-    for (u32 word : {0x00000000u, Firmware::kTrapBase | 0x02, 0x00004F01u | 0x00010000u}) {
+    for (u32 word : {0x00000000u, Firmware::kTrapBase | 0x03, 0x00004F01u | 0x00010000u}) {
         r.wr(0x2000, word);
         cpu.reset();
         cpu.state().msr = 0;

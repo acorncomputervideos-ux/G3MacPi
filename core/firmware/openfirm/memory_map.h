@@ -9,8 +9,11 @@
 //    to `align` (a power of two). Failure returns -1.
 //  - release ( virt size -- ) frees an area claimed earlier.
 //
-// Choices: real-mode 1:1 mapping (virtual = physical); sizes are not
-// rounded; an aligned claim takes the lowest free area that fits.
+// Choices: sizes are not rounded; an aligned claim takes the lowest free
+// area that fits, or the highest one with set_top_down(true) — used for
+// physical memory so that low memory stays free for programs that must
+// load at fixed addresses (Apple's Mac OS ROM file needs this:
+// docs/firmware/virtual-mode.md).
 
 #ifndef G3_CORE_FIRMWARE_OPENFIRM_MEMORY_MAP_H
 #define G3_CORE_FIRMWARE_OPENFIRM_MEMORY_MAP_H
@@ -32,6 +35,7 @@ public:
     // Returns false if [virt, virt + size) overlaps free memory.
     bool release(u32 virt, u32 size);
 
+    void set_top_down(bool t) { top_down_ = t; }
     bool is_free(u32 base, u32 size) const;
     u32 range_count() const { return count_; }
     u32 free_bytes() const;
@@ -47,6 +51,7 @@ private:
     u64 base_[kMaxRanges] = {};
     u64 end_[kMaxRanges] = {};
     u32 count_ = 0;
+    bool top_down_ = false;
 };
 
 } // namespace g3::of

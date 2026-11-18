@@ -49,7 +49,10 @@ u32 ClientInterface::call(u32 args_addr)
     for (u32 i = 0; i < nargs_; ++i)
         if (!read_cell(args_addr + 12 + 4 * i, args_[i]))
             return kFail;
-    if (!dispatch()) {
+    const bool handled = dispatch();
+    if (trace_)
+        trace_(trace_ctx_, service_, args_addr, handled);
+    if (!handled) {
         ++unknown_calls_;
         return kFail;
     }

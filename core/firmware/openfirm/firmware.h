@@ -30,8 +30,16 @@ public:
     // 15-8, a service number in bits 7-0.
     static constexpr u32 kTrapBase = 0x00004F00u;
     static constexpr u32 kTrapClientInterface = kTrapBase | 0x01;
+    // Where a client that called `exit` is parked (the word after the entry):
+    // it spins there. Real firmware would return to its user interface.
+    static constexpr u32 kTrapIdle = kTrapBase | 0x02;
 
-    Firmware(DeviceTree& tree, ppc::MemoryInterface& mem) : mem_(mem), ci_(tree, mem) {}
+    Firmware(DeviceTree& tree, ppc::MemoryInterface& mem) : mem_(mem), ci_(tree, mem)
+    {
+        ci_.set_exit(on_exit, this);
+    }
+    // True once the client has called `exit`.
+    bool client_exited() const { return exited_; }
 
     // Writes the entry stub at 'addr' (4 bytes, big-endian). False if the
     // memory isn't writable there.
@@ -47,16 +55,23 @@ public:
     // the bindings specify (docs/firmware/elf-loader.md): r1 = a stack
     // given by the firmware, r3 = r4 = 0 (CHRP 10.2), r5 = the client
     // interface entry (PowerPC binding; to verify), MSR IR/DR/EE clear.
+    // In Virtual-Mode (set_virtual_mode) the client starts with MSR IR/DR
+    // set instead, under the firmware's translations (PowerPC binding §4.2).
     void start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const;
+    void set_virtual_mode(bool v) { virtual_mode_ = v; }
     u32 calls() const { return calls_; }
 
 private:
     static bool hle_trap(void* context, u32 insn, ppc::CpuState& s, u32& next_pc);
+    static void on_exit(void* context);
 
     ppc::MemoryInterface& mem_;
     ClientInterface ci_;
     u32 entry_ = 0;
     u32 calls_ = 0;
+    bool virtual_mode_ = false;
+    bool exited_ = false;
+    bool exit_pending_ = false;
 };
 
 } // namespace g3::of

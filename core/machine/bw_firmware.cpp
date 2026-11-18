@@ -18,18 +18,23 @@ BwFirmware::Layout BwFirmware::Layout::for_ram(u32 ram)
     l.scratch = l.base + 0x11000;
     l.scratch_size = 0x4000;
     l.stack_top = l.base + 0x40000;            // 0x2B000 bytes of client stack below
+    l.htab = l.base + 0x40000;                 // 64 KB, aligned (base is 1 MB aligned)
     return l;
 }
 
 BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     : m_(m), layout_(Layout::for_ram(m.ram_size())),
-      forth_(m.bus(), layout_.forth_data, layout_.forth_size),
+      view_(m.bus(), m.cpu()),
+      mmu_(tree_, translations_, virt_free_),
+      memdrv_(memory_),
+      forth_(view_, layout_.forth_data, layout_.forth_size),
       words_(forth_, tree_, inst_, layout_.scratch, layout_.scratch_size, c.load_base, layout_.base),
-      fw_(tree_, m.bus()),
+      fw_(tree_, view_),
       disk_{of::DiskDriver(c.disk[0] ? *c.disk[0] : no_disk_), of::DiskDriver(c.disk[1] ? *c.disk[1] : no_disk_)},
       display_(m.display())
 {
-    if (!m.ok() || m.ram_size() < kMinRam || c.load_base >= layout_.base)
+    if (!m.ok() || m.ram_size() < kMinRam || m.ram_size() > kMaxRam || c.load_base >= layout_.base ||
+        (layout_.htab & (kHtabSize - 1)) != 0)
         return;
 
     // PCI resources, as firmware assigns them at power-on.
@@ -65,8 +70,44 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     if (!of::build_bw_device_tree(tree_, desc, nodes_))
         return;
 
-    // Free memory: everything below the firmware region.
-    memory_.add_free(0, layout_.base);
+    // Free memory: everything below the firmware region, except the
+    // exception vectors (0 - 0x3FFF; PowerPC binding §4.1: memory that can't
+    // be used for general purposes isn't available). Aligned claims come
+    // from the top.
+    memory_.add_free(kVectorsEnd, layout_.base - kVectorsEnd);
+    memory_.set_top_down(true);
+
+    // Virtual-Mode (docs/firmware/virtual-mode.md). Translations at power-on:
+    // RAM, mac-io and the display, each 1:1. RAM (and the I/O windows) are
+    // covered by BATs; other translations go into the hashed page table.
+    // Virtual space for claims: above the RAM window, below the I/O space.
+    ram_window_ = 0x20000;                      // BAT blocks: 128 KB .. 256 MB
+    while (ram_window_ < m.ram_size() && ram_window_ < (256u << 20))
+        ram_window_ <<= 1;
+    if (m.ram_size() > (256u << 20))
+        ram_window_ = 512u << 20;               // two 256 MB BATs
+    virt_free_.add_free(ram_window_, 0x80000000u - ram_window_);
+    bool mapped = translations_.map(0, 0, m.ram_size(), of::wimg::M | of::wimg::PP_RW) &&
+                  translations_.map(c.macio_base, c.macio_base, Paddington::kBarSize, of::wimg::kIoDefault);
+    if (m.has_display())
+        mapped = mapped &&
+                 translations_.map(m.display().vram_base(), m.display().vram_base(), m.display().vram_size(),
+                                   of::wimg::kIoDefault) &&
+                 translations_.map(YosemiteMachine::kDisplayRegs, YosemiteMachine::kDisplayRegs,
+                                   Framebuffer::kRegsSize, of::wimg::kIoDefault);
+    if (!mapped || !apply_mmu())
+        return;
+    mmu_.set_io_test([](void*, u32 pa) { return pa >= 0x80000000u; }, nullptr);
+    mmu_.attach(nodes_.cpu, sync_mmu, this);
+    inst_.bind(nodes_.cpu, &mmu_);
+    inst_.bind(nodes_.memory, &memdrv_);
+    const of::Ihandle mmu_ih = inst_.open(nodes_.cpu, "");
+    const of::Ihandle mem_ih = inst_.open(nodes_.memory, "");
+    if (!mmu_ih || !mem_ih)
+        return;
+    tree_.set_int(nodes_.chosen, "mmu", mmu_ih);
+    tree_.set_int(nodes_.chosen, "memory", mem_ih);
+    fw_.set_virtual_mode(true);
 
     // Devices.
     for (u32 i = 0; i < 2; ++i)
@@ -108,6 +149,71 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     words_.set_go(go, this);
     words_.set_clock(clock_ms, this);
     ok_ = tree_.ok();
+}
+
+bool BwFirmware::in_bat_window(u32 va) const
+{
+    if (va < ram_window_)
+        return true;
+    if (va >= 0x80000000u && va < 0x90000000u)
+        return true;                            // PCI / mac-io
+    return m_.has_display() && va >= 0x90000000u && va < 0x92000000u;
+}
+
+bool BwFirmware::sync_mmu(void* ctx) { return static_cast<BwFirmware*>(ctx)->apply_mmu(); }
+
+// BATs (PEM 7.4): BATU = BEPI | BL << 2 | Vs; BATL = BRPN | WIMG | PP.
+// Page table: every translated page outside the BAT windows. Segment
+// register n holds VSID n (Ks = Kp = 0: PP 00-10 read/write).
+bool BwFirmware::apply_mmu()
+{
+    of::PageTable pt(m_.bus(), layout_.htab, kHtabSize);
+    if (!pt.clear())
+        return false;
+    for (u32 i = 0; i < translations_.count(); ++i) {
+        const of::Translation& t = translations_[i];
+        for (u64 off = 0; off < t.size; off += of::Translations::kPage) {
+            const u32 va = static_cast<u32>(t.virt + off), pa = static_cast<u32>(t.phys + off);
+            if (in_bat_window(va)) {
+                if (va != pa)
+                    return false;               // a BAT window is 1:1; it would hide this mapping
+                continue;
+            }
+            if (!pt.insert(va >> 28, va, pa, t.mode))
+                return false;                   // both PTE groups full
+        }
+    }
+    ppc::CpuState& s = m_.cpu().state();
+    for (u32 n = 0; n < 16; ++n)
+        s.sr[n] = n;
+    s.spr[ppc::spr::SDR1] = pt.sdr1();
+    auto no_bat = [&](u32 index) {
+        for (u32 k = 0; k < 2; ++k)
+            s.spr[ppc::spr::DBAT0U + 2 * index + k] = s.spr[ppc::spr::IBAT0U + 2 * index + k] = 0;
+    };
+    auto bat = [&](u32 index, u32 base, u32 size, u32 wimg, bool code) {
+        const u32 bl = (size >> 17) - 1;
+        const u32 upper = (base & 0xFFFE0000u) | (bl << 2) | ppc::mmu::BATU_VS;
+        const u32 lower = (base & 0xFFFE0000u) | (wimg & 0x78) | of::wimg::PP_RW;
+        s.spr[ppc::spr::DBAT0U + 2 * index] = upper;
+        s.spr[ppc::spr::DBAT0U + 2 * index + 1] = lower;
+        s.spr[ppc::spr::IBAT0U + 2 * index] = code ? upper : 0;
+        s.spr[ppc::spr::IBAT0U + 2 * index + 1] = code ? lower : 0;
+    };
+    const u32 first = ram_window_ > (256u << 20) ? (256u << 20) : ram_window_;
+    bat(0, 0, first, of::wimg::M, true);
+    if (ram_window_ > (256u << 20))
+        bat(1, 256u << 20, 256u << 20, of::wimg::M, true);
+    else
+        no_bat(1);
+    bat(2, 0x80000000u, 256u << 20, of::wimg::I | of::wimg::G, false);
+    if (m_.has_display())
+        bat(3, 0x90000000u, 32u << 20, of::wimg::I | of::wimg::G, false);
+    else
+        no_bat(3);
+    s.msr |= ppc::msr::IR | ppc::msr::DR;
+    m_.cpu().flush_tlb();
+    return true;
 }
 
 u32 BwFirmware::clock_ms(void* ctx)

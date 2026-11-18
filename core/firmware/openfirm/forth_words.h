@@ -109,6 +109,7 @@ private:
     static void w_call_method(forth::Forth&, void*);
     static void w_load_base(forth::Forth&, void*);
     static void w_dot_registers(forth::Forth&, void*);
+    static void w_set_my_self(forth::Forth&, void*);
     static void w_load_size(forth::Forth&, void*);
     static void w_load(forth::Forth&, void*);
     static void w_ms(forth::Forth&, void*);
@@ -143,7 +144,8 @@ private:
     // "instances" for my-self are kSelfBase + depth.
     static constexpr u32 kSelfBase = 0x30000000u;
     Phandle building_[16] = {};
-    u32 building_depth_ = 0;  // the last init-program ran a bootinfo script
+    u32 building_depth_ = 0;
+    u32 my_self_ = 0;         // `to my-self` outside new-device ... finish-device  // the last init-program ran a bootinfo script
     BootInfo bootinfo_;
     u8 text_[64 * 1024] = {};  // host copy of a bootinfo object's text
     u8 buf_[4096] = {};  // staging for property bytes and file data

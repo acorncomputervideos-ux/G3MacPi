@@ -74,6 +74,10 @@ public:
 
     // Adds a word implemented in C++.
     bool define_native(const char* name, Native fn, void* context, bool immediate = false);
+    // A value whose reading and `to` are C++ (IEEE 1275 values such as
+    // my-self that the firmware computes). The setter takes the new value
+    // from the stack.
+    bool define_native_value(const char* name, Native get, Native set, void* context);
     // A constant-like word (pushes `value`).
     bool define_constant(const char* name, Cell value);
 
@@ -110,6 +114,7 @@ private:
         u32 does;          // Create: code index of does> part (0 = none)
         Native fn;
         void* ctx;
+        Native set;        // Native words: `to` handler (0 = none)
     };
 
     // Control-flow entries while compiling.

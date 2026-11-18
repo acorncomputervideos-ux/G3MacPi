@@ -79,7 +79,7 @@ bool Ppc750::bat_translate(u32 ea, Access access, u32& pa, bool& protection_faul
 }
 
 bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& writable,
-                            bool& changed)
+                            bool& changed, bool probe)
 {
     const u32 sr = s_.sr[ea >> 28];
     const bool fetch = access == Access::Fetch;
@@ -116,7 +116,8 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& wr
             const u32 pte_addr = pteg + 8 * i;
             u32 w0;
             if (!mem_.read32(pte_addr, w0)) {
-                machine_check();
+                if (!probe)
+                    machine_check();
                 fault = kFaultNone;
                 return false;
             }
@@ -124,7 +125,8 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& wr
                 continue;
             u32 w1;
             if (!mem_.read32(pte_addr + 4, w1)) {
-                machine_check();
+                if (!probe)
+                    machine_check();
                 fault = kFaultNone;
                 return false;
             }
@@ -133,7 +135,7 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& wr
             if (!page_access_allowed(w1 & 3, key, write)) {
                 fault = kFaultProtection;
                 // R is still set: the page was referenced (PEM 7.5.3).
-                if (!(w1 & mmu::PTE1_R))
+                if (!(w1 & mmu::PTE1_R) && !probe)
                     mem_.write32(pte_addr + 4, w1 | mmu::PTE1_R);
                 return false;
             }
@@ -145,7 +147,7 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& wr
             u32 nw1 = w1 | mmu::PTE1_R;
             if (write)
                 nw1 |= mmu::PTE1_C;
-            if (nw1 != w1)
+            if (nw1 != w1 && !probe)
                 mem_.write32(pte_addr + 4, nw1);
             writable = page_access_allowed(w1 & 3, key, true);
             changed = (nw1 & mmu::PTE1_C) != 0;
@@ -199,6 +201,22 @@ bool Ppc750::translate_slow(u32 ea, Access access, u32& pa, bool& writable, bool
     if (fault != kFaultNone)  // kFaultNone: a machine check was already raised
         raise_translation_fault(ea, access, fault);
     return false;
+}
+
+bool Ppc750::probe_translate(u32 ea, bool write, u32& pa)
+{
+    if (!(s_.msr & msr::DR)) {
+        pa = ea;
+        return true;
+    }
+    const Access access = write ? Access::Write : Access::Read;
+    bool protection = false, writable = false, changed = false;
+    if (bat_translate(ea, access, pa, protection, writable))
+        return true;
+    if (protection)
+        return false;
+    u32 fault = 0;
+    return page_translate(ea, access, pa, fault, writable, changed, true);
 }
 
 void Ppc750::flush_tlb()

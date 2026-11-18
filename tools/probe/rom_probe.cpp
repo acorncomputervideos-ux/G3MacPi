@@ -98,6 +98,39 @@ int main(int argc, char** argv)
         std::printf("\n[probe] pre-command failed: %s\n", fw.forth().error_text());
         return 1;
     }
+    // Log every client interface call: service, arguments, results; strings
+    // for the services that take them.
+    fw.client().set_trace([](void* c, const char* service, u32 a, bool handled) {
+        ppc::MemoryInterface& mem = static_cast<BwFirmware*>(c)->client().memory();
+        auto cell = [&](u32 addr) { u32 v = 0; mem.read32(addr, v); return v; };
+        auto str = [&](u32 addr, u32 max = 64) {
+            std::string s;
+            for (u32 i = 0; i < max; ++i) {
+                u8 ch = 0;
+                if (!mem.read8(addr + i, ch) || !ch)
+                    break;
+                s.push_back(ch >= 0x20 && ch < 0x7F ? static_cast<char>(ch) : '.');
+            }
+            return s;
+        };
+        const u32 nargs = cell(a + 4), nrets = cell(a + 8);
+        std::printf("[ci] %s%s(", service, handled ? "" : " UNHANDLED");
+        for (u32 i = 0; i < nargs && i < 8; ++i)
+            std::printf("%s%X", i ? " " : "", cell(a + 12 + 4 * i));
+        std::printf(") ->");
+        for (u32 i = 0; i < nrets && i < 6; ++i)
+            std::printf(" %X", cell(a + 12 + 4 * (nargs + i)));
+        const std::string sv = service;
+        if (sv == "finddevice" || sv == "interpret")
+            std::printf("  \"%s\"", str(cell(a + 12)).c_str());
+        if (sv == "getprop" || sv == "getproplen" || sv == "setprop" || sv == "nextprop")
+            std::printf("  \"%s\"", str(cell(a + 16)).c_str());
+        if (sv == "call-method")
+            std::printf("  \"%s\"", str(cell(a + 12)).c_str());
+        if (sv == "write")
+            std::printf("  \"%s\"", str(cell(a + 16), cell(a + 20) < 60 ? cell(a + 20) : 60).c_str());
+        std::printf("\n");
+    }, &fw);
     const bool ok = fw.command("init-program");
     std::printf("\n[probe] init-program: %s\n", ok ? "completed" : "FAILED");
     if (!ok)
@@ -106,6 +139,8 @@ int main(int argc, char** argv)
         std::printf("[probe] client started at 0x%08X; running %llu ms of guest time\n", fw.client_entry(),
                     static_cast<unsigned long long>(ms));
         m.run_for(ms * 1000000ull);
+        if (fw.client_exited())
+            std::printf("\n[probe] the client called exit\n");
         const auto& s = m.cpu().state();
         std::printf("\n[probe] pc=0x%08X lr=0x%08X msr=0x%08X r1=0x%08X r3=0x%08X%s\n", s.pc, s.lr(), s.msr,
                     s.gpr[1], s.gpr[3], m.cpu().checkstopped() ? " CHECKSTOP" : "");

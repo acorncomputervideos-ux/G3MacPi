@@ -36,3 +36,40 @@ So the firmware must run in the PowerPC binding's Virtual-Mode
 - the client program starts with those translations active.
 
 That is the next piece of work.
+
+## Later the same day: Virtual-Mode, and Apple's loader runs
+
+Our firmware now runs in Virtual-Mode (docs/firmware/virtual-mode.md),
+with these additions:
+- `my-self` is a value (`0 to my-self`);
+- init-program reports which ELF check fails;
+- physical claims come from the top (with the bottom-up rule, the
+  compressed ROM image took the loader's fixed addresses);
+- `exit` no longer returns to the client: it is parked on an idle trap.
+
+With these, the whole boot script runs:
+1. it claims and maps memory and copies the compressed toolbox image
+   (1.8 MB);
+2. it creates `/rom/macos`;
+3. it copies MacOS.elf to load-base;
+4. `init-program` loads its two segments (0x200000 code and 0x100000
+   data), and `go` starts it at 0x208780 with translation on.
+
+**Apple's loader then runs on the emulated 750 and calls our client
+interface.** `g3_rom_probe` logs every call:
+
+    finddevice "/chosen"    getprop stdout
+    finddevice "/"          getprop "AAPL,debug"  (absent)
+                            getprop "AAPL,writable-ROM-aperture"  (absent)
+                            getproplen "copyright"  (absent)
+    write "MacOS: Boot Failure!  (0xF3C481F6)"
+    write "Official Apple copyright message missing."
+    exit
+
+Before `exit` was fixed, the call returned. The loader went on to look
+for `/rtas` (absent: "Unable to find RTAS. Proceed with caution"), then
+claimed memory, then hung.
+
+The loader checks the root node's "copyright" property. Whether our
+firmware should carry Apple's copyright notice there is the user's
+decision.

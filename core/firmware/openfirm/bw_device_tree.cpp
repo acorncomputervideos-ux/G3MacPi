@@ -119,6 +119,11 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     n.chosen = t.add_node(n.root, "chosen");
     n.aliases = t.add_node(n.root, "aliases");
     n.options = t.add_node(n.root, "options");
+    // Virtual-Mode (PowerPC binding §4.2; docs/firmware/virtual-mode.md).
+    t.set_string(n.options, "real-mode?", "false");
+    // /rom: Apple's Mac OS ROM boot script creates /rom/macos under it.
+    // Our node carries no properties yet (what Apple's has: to verify).
+    n.rom = t.add_node(n.root, "rom");
     n.openprom = t.add_node(n.root, "openprom");
     t.set_string(n.openprom, "model", "OpenFirmware 3");
     n.packages = t.add_node(n.root, "packages");

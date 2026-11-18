@@ -146,7 +146,8 @@ TEST_CASE("machine/bw-boot/power_on_state")
     BwFirmware& fw = *mc.fw;
     CHECK_EQ(mc.m->macio().mapped_base(), 0x80800000u);            // BAR assigned and enabled
     CHECK_EQ(fw.layout().base, kRam - BwFirmware::kFirmwareSize);
-    CHECK(fw.memory().is_free(0, fw.layout().base));
+    CHECK(fw.memory().is_free(BwFirmware::kVectorsEnd, fw.layout().base - BwFirmware::kVectorsEnd));
+    CHECK(!fw.memory().is_free(0, BwFirmware::kVectorsEnd));       // exception vectors stay out
     CHECK(!fw.memory().is_free(fw.layout().base, 1));
     CHECK_EQ(mc.rd(fw.layout().ci_entry), of::Firmware::kTrapClientInterface);
     // The tree knows the machine.
@@ -174,6 +175,8 @@ TEST_CASE("machine/bw-boot/boots_a_client_from_disk")
     REQUIRE(mc.fw->client_started());
     CHECK_EQ(mc.fw->client_entry(), Client::kCode);
     CHECK_EQ(mc.m->cpu().state().pc, Client::kCode);
+    // Virtual-Mode: the client starts with translation on (PowerPC binding §4.2).
+    CHECK((mc.m->cpu().state().msr & (ppc::msr::IR | ppc::msr::DR)) == (ppc::msr::IR | ppc::msr::DR));
     // Run the machine: the client calls finddevice, getprop and write.
     mc.m->run_for(1000000000ull);                                 // 1 ms of guest time
     CHECK(mc.console == "booting\n" + client.msg);          // the script's output, then the client's

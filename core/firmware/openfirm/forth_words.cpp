@@ -36,11 +36,14 @@ FirmwareWords::FirmwareWords(Forth& f, DeviceTree& tree, InstanceTable& inst, u3
         {"open-dev", w_open_dev}, {"close-dev", w_close_dev}, {"$call-method", w_call_method},
         {"load-base", w_load_base}, {"load-size", w_load_size}, {"load", w_load},
         {"ms", w_ms}, {"get-msecs", w_get_msecs}, {"init-program", w_init_program},
-        {"go", w_go}, {".registers", w_dot_registers}, {"boot", w_boot}, {"reg", w_reg}, {"my-self", w_my_self},
+        {"go", w_go}, {".registers", w_dot_registers}, {"boot", w_boot}, {"reg", w_reg},
         {"ihandle>phandle", w_ihandle_to_phandle},
     };
     for (const Def& d : defs)
         f_.define_native(d.name, d.fn, this);
+    // my-self is a value (IEEE 1275): `0 to my-self` is how scripts leave
+    // an instance (Apple's Mac OS ROM boot script does it).
+    f_.define_native_value("my-self", w_my_self, w_set_my_self, this);
 }
 
 // --- helpers -------------------------------------------------------------------------------
@@ -296,7 +299,17 @@ void FirmwareWords::w_reg(Forth& f, void* ctx)
 void FirmwareWords::w_my_self(Forth& f, void* ctx)
 {
     FirmwareWords& s = self(ctx);
-    f.push(s.building_depth_ ? kSelfBase + s.building_depth_ - 1 : 0);
+    f.push(s.building_depth_ ? kSelfBase + s.building_depth_ - 1 : s.my_self_);
+}
+
+// to my-self: outside new-device ... finish-device, sets the current
+// instance (0 = none). While a node is being built its instance stays
+// my-self (new-device's rule).
+void FirmwareWords::w_set_my_self(Forth& f, void* ctx)
+{
+    const Cell v = f.pop();
+    if (!f.failed())
+        self(ctx).my_self_ = v;
 }
 
 void FirmwareWords::w_ihandle_to_phandle(Forth& f, void* ctx)
@@ -720,8 +733,15 @@ void FirmwareWords::w_init_program(Forth& f, void* ctx)
     }
     const ElfError e = load_elf_program(f.memory(), s.memory_, s.load_base_, s.load_size_, s.program_);
     if (e != ElfError::None) {
-        f.fail(-21, e == ElfError::NotElf ? "init-program: unknown image format"
-                                          : "init-program: bad ELF image");
+        static const char* const why[] = {
+            "", "init-program: unknown image format", "init-program: ELF: not an executable",
+            "init-program: ELF: not PowerPC", "init-program: ELF: bad version", "init-program: ELF: bad flags",
+            "init-program: ELF: little-endian", "init-program: ELF: bad headers",
+            "init-program: ELF: segment outside the image", "init-program: ELF: segment memory not available",
+            "init-program: ELF: memory error",
+        };
+        const u32 k = static_cast<u32>(e);
+        f.fail(-21, k < sizeof why / sizeof why[0] ? why[k] : "init-program: bad ELF image");
         return;
     }
     s.program_ready_ = true;

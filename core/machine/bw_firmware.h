@@ -21,6 +21,8 @@
 #include "core/firmware/openfirm/bw_device_tree.h"
 #include "core/firmware/openfirm/display_driver.h"
 #include "core/firmware/openfirm/firmware.h"
+#include "core/firmware/openfirm/guest_view.h"
+#include "core/firmware/openfirm/mmu.h"
 #include "core/firmware/openfirm/forth_words.h"
 #include "core/firmware/openfirm/instances.h"
 #include "core/firmware/openfirm/memory_map.h"
@@ -47,9 +49,13 @@ public:
         u32 scratch;       // property values handed to Forth
         u32 scratch_size;
         u32 stack_top;     // client stack (grows down)
+        u32 htab;          // hashed page table (kHtabSize, aligned to it)
         static Layout for_ram(u32 ram_size);
     };
     static constexpr u32 kFirmwareSize = 0x00100000u;  // 1 MB
+    static constexpr u32 kHtabSize = 0x00010000u;      // 64 KB: 8192 PTEs
+    static constexpr u32 kVectorsEnd = 0x4000u;         // exception vectors, never handed out
+    static constexpr u32 kMaxRam = 512u << 20;          // two BATs (docs/firmware/virtual-mode.md)
     static constexpr u32 kMinRam = 8u << 20;
 
     BwFirmware(YosemiteMachine& m, const Config& c);
@@ -66,6 +72,7 @@ public:
     bool place_file(const u8* data, u32 len, const char* path) { return words_.place_file(data, len, path); }
 
     bool client_started() const { return started_; }
+    bool client_exited() const { return fw_.client_exited(); }
     u32 client_entry() const { return entry_; }
     const Layout& layout() const { return layout_; }
 
@@ -78,6 +85,9 @@ public:
 
 private:
     static void go(void* ctx, u32 entry);
+    static bool sync_mmu(void* ctx);
+    bool apply_mmu();                   // BATs + page table from translations_
+    bool in_bat_window(u32 va) const;
     static u32 clock_ms(void* ctx);
 
     YosemiteMachine& m_;
@@ -90,6 +100,12 @@ private:
     of::BwNodes nodes_{};
     of::MemoryMap memory_;
     of::InstanceTable inst_;
+    of::GuestView view_;              // before forth_ and fw_, which use it
+    of::Translations translations_;
+    of::MemoryMap virt_free_;
+    of::MmuDriver mmu_;
+    of::MemoryDriver memdrv_;
+    u32 ram_window_ = 0;              // size of the RAM BAT window(s)
     forth::Forth forth_;
     of::FirmwareWords words_;
     of::Firmware fw_;

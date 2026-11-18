@@ -13,7 +13,7 @@ namespace {
 // Inline operations in compiled code (cells with the top bit set).
 enum Op : u32 {
     OP_LIT = 0x80000001, OP_BRANCH, OP_0BRANCH, OP_EXIT, OP_DO, OP_QDO, OP_LOOP, OP_PLOOP,
-    OP_LEAVE, OP_STR, OP_PRINT, OP_DOES, OP_TOVAL, OP_OF, OP_ABORTQ, OP_DROP,
+    OP_LEAVE, OP_STR, OP_PRINT, OP_DOES, OP_TOVAL, OP_TONATIVE, OP_OF, OP_ABORTQ, OP_DROP,
 };
 constexpr u32 kXtBase = 0x00E00000u;  // execution tokens: kXtBase + word index
 
@@ -168,6 +168,7 @@ s32 Forth::add_word(const char* name, u32 len, Kind kind, u32 param)
         names_[names_used_++] = name[i];
     w.kind = kind;
     w.param = param;
+    w.set = nullptr;
     return static_cast<s32>(word_count_++);
 }
 
@@ -179,6 +180,14 @@ bool Forth::define_native(const char* name, Native fn, void* context, bool immed
     words_[w].fn = fn;
     words_[w].ctx = context;
     words_[w].immediate = immediate;
+    return true;
+}
+
+bool Forth::define_native_value(const char* name, Native get, Native set, void* context)
+{
+    if (!define_native(name, get, context))
+        return false;
+    words_[word_count_ - 1].set = set;
     return true;
 }
 
@@ -744,6 +753,11 @@ bool Forth::run_code(u32 ip)
         case OP_TOVAL:
             mem_.write32(code_[ip++], pop());
             break;
+        case OP_TONATIVE: {
+            const Word& w = words_[code_[ip++]];
+            w.set(*this, w.ctx);
+            break;
+        }
         case OP_OF: {
             const Cell x2 = pop(), x1 = pop();
             if (x1 == x2) {
@@ -1337,11 +1351,19 @@ bool Forth::primitive(u32 id)
         u32 len;
         if (!parse_name(w, len)) break;
         const s32 idx = find(w, len);
-        if (idx < 0 || (words_[idx].kind != Kind::Value && words_[idx].kind != Kind::Defer)) {
+        const bool native_value = idx >= 0 && words_[idx].kind == Kind::Native && words_[idx].set;
+        if (idx < 0 || (words_[idx].kind != Kind::Value && words_[idx].kind != Kind::Defer && !native_value)) {
             fail(kUndefined, "to/is needs a value or defer");
             break;
         }
-        if (state_) {
+        if (native_value) {
+            if (state_) {
+                emit_cell(OP_TONATIVE);
+                emit_cell(static_cast<u32>(idx));
+            } else {
+                words_[idx].set(*this, words_[idx].ctx);
+            }
+        } else if (state_) {
             emit_cell(OP_TOVAL);
             emit_cell(words_[idx].param);
         } else {

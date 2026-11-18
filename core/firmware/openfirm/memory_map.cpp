@@ -98,6 +98,16 @@ u32 MemoryMap::claim(u32 virt, u32 size, u32 align)
     }
     if (align & (align - 1))
         return kFail;  // not a power of two
+    if (top_down_) {
+        for (u32 i = count_; i-- > 0;) {
+            if (end_[i] - base_[i] < size)
+                continue;
+            const u64 start = (end_[i] - size) & ~static_cast<u64>(align - 1);
+            if (start >= base_[i])
+                return take(i, start, start + size) ? static_cast<u32>(start) : kFail;
+        }
+        return kFail;
+    }
     for (u32 i = 0; i < count_; ++i) {
         const u64 start = (base_[i] + align - 1) & ~static_cast<u64>(align - 1);
         const u64 end = start + size;
