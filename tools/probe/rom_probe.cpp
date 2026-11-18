@@ -145,5 +145,20 @@ int main(int argc, char** argv)
         std::printf("\n[probe] pc=0x%08X lr=0x%08X msr=0x%08X r1=0x%08X r3=0x%08X%s\n", s.pc, s.lr(), s.msr,
                     s.gpr[1], s.gpr[3], m.cpu().checkstopped() ? " CHECKSTOP" : "");
     }
+    // G3_SCREEN=file.ppm: the emulated display at the end (binary PPM).
+    if (const char* shot = std::getenv("G3_SCREEN"); shot && m.has_display()) {
+        Framebuffer& fb = m.display();
+        std::vector<u32> px(static_cast<size_t>(fb.width()) * fb.height());
+        fb.convert(px.data(), fb.width());
+        if (FILE* o = std::fopen(shot, "wb")) {
+            std::fprintf(o, "P6\n%u %u\n255\n", fb.width(), fb.height());
+            for (u32 v : px) {
+                const u8 rgb[3] = {static_cast<u8>(v >> 16), static_cast<u8>(v >> 8), static_cast<u8>(v)};
+                std::fwrite(rgb, 1, 3, o);
+            }
+            std::fclose(o);
+            std::printf("[probe] screen saved to %s\n", shot);
+        }
+    }
     return ok ? 0 : 1;
 }

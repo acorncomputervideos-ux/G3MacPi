@@ -502,11 +502,20 @@ bool Forth::interpret(const char* text, u32 len)
     error_ = false;
     error_code_ = 0;
     error_text_[0] = '\0';
+    stop_ = false;
     src_depth_ = 1;
     src_[0] = {text, len, 0};
     const bool ok = interpret_source();
-    if (!ok)
+    if (!ok) {
         reset_after_error();
+    } else if (stop_) {
+        // stop(): the rest of the input is dropped; so is any half-built
+        // definition or interpreted structure (the data stack is kept).
+        const u32 sp = sp_;
+        reset_after_error();
+        sp_ = sp;
+    }
+    stop_ = false;
     src_depth_ = 0;
     return ok;
 }
@@ -527,7 +536,7 @@ bool Forth::interpret_source()
 {
     const char* w;
     u32 len;
-    while (!error_ && parse_word(w, len))
+    while (!error_ && !stop_ && parse_word(w, len))
         if (!interpret_word(w, len))
             return false;
     return !error_;
@@ -640,7 +649,7 @@ bool Forth::run_code(u32 ip)
         return false;
     }
     bool ok = true;
-    while (ok && !error_) {
+    while (ok && !error_ && !stop_) {
         if (ip >= code_used_) {
             fail(kInvalidAddress, "ran off the end of code");
             ok = false;

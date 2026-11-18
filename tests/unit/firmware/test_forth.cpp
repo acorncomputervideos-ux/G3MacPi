@@ -298,3 +298,21 @@ TEST_CASE("forth/interpreted_abort_quote_and_string_words")
     CHECK_EQ(miss[1], 12);
     CHECK_EQ(miss[2], 0);
 }
+
+TEST_CASE("forth/stop_ends_interpretation_without_an_error")
+{
+    // Open Firmware's `go` doesn't return: a native word calls stop(), and
+    // nothing after it runs — on the same line, in the definition that
+    // called it, or in an interpreted structure — yet it isn't an error.
+    Rig r;
+    REQUIRE(r.f->define_native("halt", [](Forth& f, void*) { f.stop(); }, nullptr));
+    CHECK(r.output("1 . halt 2 .") == "1 ");
+    CHECK(r.stack("") == V({}));
+    CHECK(r.output(": t 3 . halt 4 . ; t 5 .") == "3 ");
+    CHECK(r.output("1 if 6 . halt 7 . then 8 .") == "6 ");
+    CHECK(r.output("7 halt 9 .") == "");
+    CHECK(r.stack("") == V({7}));                                // the data stack is kept
+    // The next input is interpreted normally.
+    CHECK(r.output("9 .") == "9 ");
+    CHECK(r.stack("1 if 2 then") == V({2}));
+}

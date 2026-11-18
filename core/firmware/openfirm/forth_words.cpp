@@ -759,6 +759,9 @@ void FirmwareWords::w_go(Forth& f, void* ctx)
         return;
     }
     s.go_(s.go_ctx_, s.program_.entry);
+    // The client now owns the machine; nothing after `go` runs (real
+    // firmware never returns from it unless the client calls exit).
+    f.stop();
 }
 
 // .registers: Open Firmware shows the client program's saved registers.

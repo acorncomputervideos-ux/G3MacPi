@@ -81,6 +81,11 @@ public:
     // A constant-like word (pushes `value`).
     bool define_constant(const char* name, Cell value);
 
+    // Ends the current interpret() after the running word, without an
+    // error: the rest of the input and of any running definitions is
+    // skipped (Open Firmware's `go` doesn't return to the script).
+    void stop() { stop_ = true; }
+
     // Signals an error from a native word (like `throw`).
     void fail(s32 code, const char* text = nullptr);
     bool failed() const { return error_; }
@@ -189,6 +194,7 @@ private:
     u32 call_depth_ = 0;
     u32 catch_depth_ = 0;
     bool error_ = false;
+    bool stop_ = false;
     s32 error_code_ = 0;
     char error_text_[96] = {};
 };
