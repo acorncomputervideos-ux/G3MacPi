@@ -39,7 +39,9 @@ target_link_libraries(g3platform_common PUBLIC g3core)
 target_compile_options(g3platform_common PRIVATE ${G3_COMMON_FLAGS})
 
 # --- Host-side build tools for guest code (PEF writer) ---------------------------
-add_library(g3pef STATIC tools/pef/pef_writer.cpp)
+add_library(g3pef STATIC tools/pef/pef_writer.cpp tools/pef/elf2pef.cpp)
+add_executable(g3_elf2pef tools/pef/elf2pef_main.cpp)
+target_link_libraries(g3_elf2pef PRIVATE g3pef)
 target_include_directories(g3pef PUBLIC ${CMAKE_SOURCE_DIR})
 target_compile_options(g3pef PRIVATE ${G3_COMMON_FLAGS})
 
@@ -64,6 +66,7 @@ if(G3_SANITIZE)
   target_link_options(g3core PUBLIC -fsanitize=address,undefined)
   target_compile_options(g3platform_common PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_compile_options(g3pef PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_link_options(g3pef PUBLIC -fsanitize=address,undefined)
   target_compile_options(g3_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(g3_unit_tests PRIVATE -fsanitize=address,undefined)
 endif()
@@ -103,4 +106,33 @@ if(G3_PPC_GCC)
     target_link_options(g3_guest_tests PRIVATE -fsanitize=address,undefined)
   endif()
   add_test(NAME guest_kernels COMMAND g3_guest_tests ${G3_KERNELS_ELF})
+
+  # guest/cfm/demo.c as a Mac OS code fragment: -fPIC -shared, converted by
+  # g3_elf2pef; g3_guest_cfm prepares it like the Code Fragment Manager and
+  # calls it on the emulated 750 (docs/tools/pef.md).
+  set(G3_FRAGMENT_FLAGS -m32 -mbig-endian -mcpu=750 -ffreestanding -fno-builtin -nostdlib -O2
+      -msdata=none -fPIC -shared -Wall -Wextra -Werror
+      -Wl,-Bsymbolic -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,-z,norelro
+      -Wl,--hash-style=sysv -Wl,--build-id=none)
+  set(G3_DEMO_SO ${CMAKE_BINARY_DIR}/guest/cfm_demo.so)
+  set(G3_DEMO_PEF ${CMAKE_BINARY_DIR}/guest/cfm_demo.pef)
+  add_custom_command(
+    OUTPUT ${G3_DEMO_PEF}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/guest
+    COMMAND ${G3_PPC_GCC} ${G3_FRAGMENT_FLAGS} ${CMAKE_SOURCE_DIR}/guest/cfm/demo.c
+            ${CMAKE_SOURCE_DIR}/guest/cfm/cfm_glue.S -lgcc -o ${G3_DEMO_SO}
+    COMMAND g3_elf2pef ${G3_DEMO_SO} ${G3_DEMO_PEF} --export demo_entry --export demo_calls
+            --export table:data --import imp_Callee=TestLib:Callee
+    DEPENDS guest/cfm/demo.c guest/cfm/cfm_glue.S guest/cfm/cfm.h g3_elf2pef
+    COMMENT "Building the CFM demo fragment")
+  add_custom_target(g3_guest_cfm_demo DEPENDS ${G3_DEMO_PEF})
+  add_executable(g3_guest_cfm tests/guest/run_cfm.cpp)
+  target_link_libraries(g3_guest_cfm PRIVATE g3core g3pef)
+  target_compile_options(g3_guest_cfm PRIVATE ${G3_COMMON_FLAGS})
+  add_dependencies(g3_guest_cfm g3_guest_cfm_demo)
+  if(G3_SANITIZE)
+    target_compile_options(g3_guest_cfm PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(g3_guest_cfm PRIVATE -fsanitize=address,undefined)
+  endif()
+  add_test(NAME guest_cfm COMMAND g3_guest_cfm ${G3_DEMO_PEF} ${G3_DEMO_SO})
 endif()

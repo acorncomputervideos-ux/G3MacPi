@@ -9,7 +9,8 @@
 // functions and the hash slot/exported-symbol encodings from Apple's
 // PEFBinaryFormat.h (facts only). See docs/tools/pef.md.
 //
-// Supported subset: code (0), unpacked data (1) and constant (3) sections,
+// Supported subset: code (0), unpacked data (1), constant (3) and executable
+// data (6: code and writable data together, Table 8-1) sections,
 // one loader section; imported libraries and symbols; relocations that add
 // an imported symbol's address or a section's address to a word; exports;
 // main/init/term entry points. Pattern-initialized data is not produced.
@@ -23,7 +24,8 @@
 
 namespace g3::pef {
 
-enum SectionKind : uint8_t { kCode = 0, kUnpackedData = 1, kPatternData = 2, kConstant = 3, kLoader = 4 };
+enum SectionKind : uint8_t { kCode = 0, kUnpackedData = 1, kPatternData = 2, kConstant = 3, kLoader = 4,
+                              kExecutableData = 6 };
 enum ShareKind : uint8_t { kProcessShare = 1, kGlobalShare = 4, kProtectedShare = 5 };
 enum SymbolClass : uint8_t { kCodeSymbol = 0, kDataSymbol = 1, kTVectorSymbol = 2, kTocSymbol = 3, kGlueSymbol = 4 };
 

@@ -119,12 +119,13 @@ std::vector<uint8_t> build(const Container& c, std::string* error)
     };
     const uint32_t nsec = static_cast<uint32_t>(c.sections.size());
     for (const Section& s : c.sections) {
-        if (s.kind != kCode && s.kind != kUnpackedData && s.kind != kConstant)
+        if (s.kind != kCode && s.kind != kUnpackedData && s.kind != kConstant && s.kind != kExecutableData)
             return err("unsupported section kind");
         if (s.total_size && s.total_size < s.data.size())
             return err("total_size smaller than the data");
-        if (s.kind != kUnpackedData && s.total_size > s.data.size())
-            return err("only data sections can have zero-initialized space");
+        // Read-only instantiated sections can't have zero-initialized extensions.
+        if ((s.kind == kCode || s.kind == kConstant) && s.total_size > s.data.size())
+            return err("read-only sections can't have zero-initialized space");
     }
     uint32_t import_count = 0;
     for (const ImportedLibrary& l : c.imports)

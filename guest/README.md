@@ -24,3 +24,13 @@ Both builds use `-ffp-contract=off`, so neither fuses multiply-adds and
 the floating-point results are the same IEEE operations. The guest test
 is built only when `powerpc-linux-gnu-gcc` is installed. CI's
 `guest-toolchain` job installs it and runs the test.
+
+- `cfm/` — the path for code that Mac OS loads (our display driver).
+  `cfm.h` / `cfm_glue.S`: `cfm_call`, the only way guest C calls a Mac OS
+  routine (the SVR4 and Mac OS calling conventions differ; see `cfm.h`).
+  `demo.c`: a test fragment. It is built `-fPIC -shared` and converted
+  to PEF by `g3_elf2pef` (docs/tools/pef.md). `tests/guest/run_cfm.cpp`
+  (`g3_guest_cfm`) prepares it at two addresses, as the Code Fragment
+  Manager would, and calls its exports on the emulated 750. They call a
+  hand-assembled routine that follows the Mac OS conventions and clobbers
+  everything that a Mac OS routine may clobber.

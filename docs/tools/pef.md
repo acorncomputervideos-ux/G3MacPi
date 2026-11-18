@@ -67,3 +67,84 @@ against a separate Python implementation of the published algorithm.
 The writer and the preparer have the same author. The real check is Mac
 OS's Code Fragment Manager accepting our driver, which needs a Mac OS 9
 boot.
+
+## elf2pef: compiled C to PEF
+
+`tools/pef/elf2pef.{h,cpp}` and the `g3_elf2pef` command line convert a
+PowerPC ELF shared object into a PEF container:
+
+    g3_elf2pef in.so out.pef --export DoDriverIO --export TheDriverDescription:data \
+        --import imp_SynchronizeIO=DriverServicesLib:SynchronizeIO
+
+Build the input with the flags in CMakeLists.txt (`G3_FRAGMENT_FLAGS`):
+- `-fPIC -shared`;
+- `-Wl,-Bsymbolic`, so that calls between our own functions are direct
+  rather than through a PLT;
+- 16-byte page sizes, so that the code and data segments are adjacent;
+- `-z norelro`.
+
+The conversion:
+- **One section.** The whole loaded image goes into one PEF "executable
+  data" section (kind 6). SVR4 PIC code finds its data at a fixed
+  distance from its own address, so code and data must stay together.
+  The bss is stored as zeros when transition vectors follow it.
+- **Relocations.**
+  - `R_PPC_RELATIVE` becomes "add the section address".
+  - `R_PPC_ADDR32` / `R_PPC_GLOB_DAT` against a defined symbol also
+    becomes "add the section address".
+  - Against an undefined symbol, the same relocations become "add the
+    import's address". Undeclared imports are refused.
+  - `R_PPC_JMP_SLOT` is refused, because calls to Mac OS must go through
+    `cfm_call`. Other types are refused too.
+- **Exports.**
+  - A code export gets a transition vector {code address, TOC}, appended
+    after the image, with both words relocated by the section address.
+    It is exported with class TVector.
+  - Data exports point at the symbol.
+  - Our code does not use r2, so the TOC value doesn't matter.
+
+### Calling conventions
+
+Mac OS code follows the AIX-derived conventions from Mac OS Runtime
+Architectures, chapter 1. Our code follows SVR4. Between the two:
+- integer and pointer arguments and results are passed alike, in r3 and
+  up;
+- the nonvolatile registers are compatible.
+
+What differs:
+- r2 (the TOC);
+- r12 (the transition vector);
+- the caller's linkage area: the callee may write CR at 4(SP), LR at
+  8(SP) and the parameter area at 24..55(SP);
+- where floating-point and stacked arguments go.
+
+So:
+- Calls into Mac OS go through `cfm_call` (guest/cfm/cfm_glue.S). It
+  provides a 64-byte CFM frame, keeps its own return address out of the
+  callee's reach, loads r2 and r12 from the vector, and restores r2.
+- Our exports may be called directly. An SVR4 function only writes 4(SP)
+  of its caller's frame (the CR save slot, which a CFM callee may also
+  write) and reads its first 8 arguments from registers.
+- Limits: integer and pointer arguments only (at most 7 through
+  `cfm_call`, 8 for exports), and integer or pointer results.
+
+### Tests
+
+`g3_guest_cfm` (tests/guest/run_cfm.cpp, run in CI's guest job) checks
+the whole path on the emulated 750, at two load addresses:
+- results;
+- the callee's r2, r12 and seven arguments;
+- stack balance and r2 on return;
+- the relocated pointer and the exported data;
+- reproducible output;
+- refusals: an undeclared import, a missing export, an executable, a
+  truncated file, a PLT call.
+
+Planted bugs it catches:
+- in the glue: no r2 restore, LR saved where the callee writes, no r12,
+  no callee TOC, a frame too small;
+- in the converter: dropped relative relocations, an unrelocated vector
+  TOC.
+
+Unverified: the real Code Fragment Manager accepting a kind-6 section
+with these relocations. That needs Mac OS 9.

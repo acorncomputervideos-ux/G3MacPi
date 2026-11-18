@@ -54,5 +54,6 @@ jobs:
       - name: Run compiled guest code on the emulated 750
         run: |
           cmake -S . -B build/guest -DG3_SANITIZE=ON
-          cmake --build build/guest --target g3_guest_tests -j"$(nproc)"
+          cmake --build build/guest --target g3_guest_tests g3_guest_cfm -j"$(nproc)"
           ./build/guest/g3_guest_tests build/guest/guest/kernels.elf
+          ./build/guest/g3_guest_cfm build/guest/guest/cfm_demo.pef build/guest/guest/cfm_demo.so
