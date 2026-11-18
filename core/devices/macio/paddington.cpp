@@ -14,6 +14,9 @@ Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
     via_.set_irq_output([](void* c, bool a) {
         static_cast<HeathrowPic*>(c)->set_input(kViaIrq, a);
     }, &pic_);
+    escc_.set_irq([](void* c, u32 ch, bool a) { static_cast<HeathrowPic*>(c)->set_input(kEsccIrq[ch & 1], a); },
+                  &pic_);
+    mesh_.set_irq([](void* c, bool a) { static_cast<HeathrowPic*>(c)->set_input(kMeshIrq, a); }, &pic_);
     for (u32 i = 0; i < 2; ++i) {
         ide_irq_[i] = {&pic_, kIdeIrq[i]};
         ide_dma_irq_[i] = {&pic_, kIdeDmaIrq[i]};
@@ -48,6 +51,8 @@ void Paddington::unmap_cells()
     bus_.unmap(mapped_base_ + kNvramOffset);
     bus_.unmap(mapped_base_ + kIdeOffset[0]);
     bus_.unmap(mapped_base_ + kIdeOffset[1]);
+    bus_.unmap(mapped_base_ + kMeshOffset);
+    bus_.unmap(mapped_base_ + kEsccOffset);
     mapped_base_ = 0;
 }
 
@@ -72,6 +77,8 @@ void Paddington::update_mapping()
         {kNvramOffset, MacioNvram::kWindowSize, &nvram_},
         {kIdeOffset[0], MacioIde::kWindowSize, &ide_[0]},
         {kIdeOffset[1], MacioIde::kWindowSize, &ide_[1]},
+        {kMeshOffset, MacioMesh::kWindowSize, &mesh_},
+        {kEsccOffset, MacioEscc::kWindowSize, &escc_},
     };
     constexpr u32 kCells = sizeof cells / sizeof cells[0];
     u32 mapped = 0;

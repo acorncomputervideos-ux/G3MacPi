@@ -230,6 +230,20 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
     CHECK_EQ(cell_addr(b.n.scsi, 1), base + Paddington::kDbdmaOffset + 0 * DbdmaController::kChannelStride);
     CHECK(cells(t, b.n.scsi, "interrupts") == std::vector<u32>({12, 0}));
     CHECK(cells(t, b.n.scsi, "interrupt-parent") == std::vector<u32>({b.n.pic}));
+    // ESCC: MacRISC channels where Linux found them on a real B&W (ch-a at
+    // + 0x13020 on interrupt 15, ch-b at + 0x13000 on 16), plus escc-legacy.
+    REQUIRE(b.n.escc != kNone);
+    CHECK_EQ(t.parent(b.n.escc_a), b.n.escc);
+    CHECK_EQ(cell_addr(b.n.escc_a, 0), base + 0x13020u);
+    CHECK_EQ(cell_addr(b.n.escc_b, 0), base + 0x13000u);
+    CHECK(cells(t, b.n.escc_a, "interrupts") == std::vector<u32>({15}));
+    CHECK(cells(t, b.n.escc_b, "interrupts") == std::vector<u32>({16}));
+    CHECK(compatible_with(t, b.n.escc_a, "chrp,es4") && compatible_with(t, b.n.escc_b, "chrp,es5"));
+    CHECK(str(t, b.n.escc_a, "device_type") == "serial");
+    const Phandle legacy = find_by_name(t, mio, "escc-legacy");
+    REQUIRE(legacy != kNone);
+    CHECK(compatible_with(t, legacy, "chrp,es1"));
+    CHECK_EQ(cells(t, legacy, "reg")[0], 0x12000u);
     // NVRAM: Linux direct mode uses mult = size / 8 KB.
     const auto nv = cells(t, b.n.nvram, "reg");
     REQUIRE(nv.size() == 2);

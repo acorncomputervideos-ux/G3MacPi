@@ -187,3 +187,23 @@ many seconds to minutes of host time.
   cause: a machine check reading 0x80810040, MESH's bus-status register.
   We don't emulate MESH yet. Next: a MESH model, starting with no
   devices on the bus.
+
+## MESH, ESCC, continuous time
+
+1. **MESH.** The machine check was MESH's registers. With a MESH model
+   (empty bus), Mac OS initialises it. The 68K code still waited, on a
+   different entry of the "Hnfo" vector table (+0x7A; SCSI is +0x7C).
+2. **SCC.** Forth experiments through the probe showed the loader takes
+   the SCC base from `escc-legacy` and the channel vectors from `escc`'s
+   ch-a/ch-b (chrp,es4/es5). With both, the 68K wait ended. Thousands of
+   machine checks on 0x80812000 then showed the SCC itself is needed. It
+   is now modelled with nothing connected (hardware/escc.md). The real
+   B&W's Linux log gives its addresses and interrupts.
+3. **Continuous time.** A VIA trace (`G3_VIA` in the probe) showed the
+   ROM writing timer 2 and reading back exactly the same value: time stood
+   still inside a CPU slice. Fixed (hardware/timing.md).
+4. **Now.** The 68K code waits at 0xFFC0F09C for the VIA shift-register
+   flag. Before that it wrote SR = 0x01 (Cuda packet type) with ACR 0x1C,
+   without asserting TIP. It then means to check TREQ and assert TIP. Our
+   Cuda, like QEMU's, clocks bytes only on TIP/TACK changes. Under
+   investigation.

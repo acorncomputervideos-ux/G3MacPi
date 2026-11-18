@@ -173,3 +173,53 @@ TEST_CASE("machine/loop/scheduled_event_runs_at_its_time")
     CHECK(p.fired_at >= 1000000u && p.fired_at < 1000000u + 2858u);  // within one instruction
     CHECK(p.instructions >= 350u && p.instructions <= 351u);         // 1 us at 350 MHz
 }
+
+TEST_CASE("machine/loop/time_moves_within_a_slice")
+{
+    // A guest loop reads the time base several times inside one slice (no
+    // events, no decrementer): each read must see the time of its own
+    // instruction, not the slice start. Mac OS calibrates delays this way.
+    using namespace asm_ppc;
+    LoopMachine m;
+    const u32 prog[] = {
+        mftb(3, ppc::spr::TBL_READ),      // 0x1000
+        li(9, 0x100), mtspr(ppc::spr::CTR, 9),
+        bdnz(0),                          // 0x100 iterations of nothing
+        mftb(4, ppc::spr::TBL_READ),
+        b(0),
+    };
+    for (u32 i = 0; i < sizeof prog / 4; ++i)
+        m.mem.write32(0x1000 + 4 * i, prog[i]);
+    m.cpu.state().spr[ppc::spr::DEC] = 0x80000000u;   // no decrementer expiry planned
+    m.loop.set_max_slice(1000000);
+    m.loop.run_for(20000000);                          // 20 us: one slice
+    const u32 t0 = m.cpu.state().gpr[3], t1 = m.cpu.state().gpr[4];
+    // ~259 instructions between the reads at 350 MHz = ~740 ns = ~18 ticks at 25 MHz.
+    CHECK(t1 > t0);
+    CHECK(t1 - t0 >= 17u && t1 - t0 <= 20u);
+    // The scheduler's precise clock follows the CPU too.
+    CHECK(m.sched.precise_now() == m.loop.now_ps());   // between slices: the same
+}
+
+TEST_CASE("machine/loop/decrementer_written_mid_slice")
+{
+    // mtdec inside a slice: the expiry is planned from the new value.
+    using namespace asm_ppc;
+    LoopMachine m;
+    const u32 prog[] = {li(5, 50), mtspr(ppc::spr::DEC, 5), b(0)};
+    for (u32 i = 0; i < sizeof prog / 4; ++i)
+        m.mem.write32(0x1000 + 4 * i, prog[i]);
+    m.cpu.state().spr[ppc::spr::DEC] = 0x7FFFFFFFu;   // far away when the slice was planned
+    m.cpu.state().msr = ppc::msr::EE;
+    m.loop.set_max_slice(1000000);
+    struct At { ppc::Ppc750* cpu; u64 n = 0; } at{&m.cpu};
+    m.cpu.set_exception_hook([](void* c, u32 vector, u32, u32) {
+        auto* a = static_cast<At*>(c);
+        if (vector == 0x900 && !a->n)
+            a->n = a->cpu->instructions_executed();
+    }, &at);
+    m.loop.run_for(1000000000ull);                     // 1 ms
+    CHECK_EQ(m.cpu.state().pc, 0x900u);
+    // Taken ~51 ticks (~714 instructions) after the write, not at the end of the run.
+    CHECK(at.n >= 700u && at.n <= 760u);
+}

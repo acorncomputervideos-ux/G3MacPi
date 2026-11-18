@@ -116,8 +116,10 @@ void Ppc750::step()
 
 void Ppc750::run(u64 count)
 {
-    for (u64 i = 0; i < count && !checkstop_; ++i)
+    break_run_ = false;
+    for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i)
         step();
+    break_run_ = false;
 }
 
 void Ppc750::execute(u32 insn)

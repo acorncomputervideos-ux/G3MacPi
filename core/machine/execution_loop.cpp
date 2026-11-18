@@ -18,6 +18,22 @@ ExecutionLoop::ExecutionLoop(ppc::Ppc750& cpu, Scheduler& scheduler, const CpuTi
         (static_cast<u128>(timing_.cycles_per_instruction) * kPsPerSecond << 32) / timing_.cpu_hz;
     time_q32_ = static_cast<u128>(sched_.now()) << 32;
     run_target_ps_ = sched_.now();
+    sched_.set_clock([](void* c) { return static_cast<ExecutionLoop*>(c)->precise_ps(); }, this);
+    cpu_.set_time_hook(time_hook, this);
+}
+
+u64 ExecutionLoop::precise_ps() const
+{
+    if (!in_slice_)
+        return now_ps();
+    const u64 done = cpu_.instructions_executed() - slice_first_insn_;
+    return static_cast<u64>((time_q32_ + ps_per_instruction_q32_ * done) >> 32);
+}
+
+void ExecutionLoop::time_hook(void* ctx)
+{
+    auto* self = static_cast<ExecutionLoop*>(ctx);
+    self->sync_timebase(self->precise_ps());
 }
 
 u64 ExecutionLoop::instructions_until(u64 target_ps) const
@@ -30,10 +46,11 @@ u64 ExecutionLoop::instructions_until(u64 target_ps) const
     return n > 0xFFFFFFFFFFFFull ? 0xFFFFFFFFFFFFull : static_cast<u64>(n);
 }
 
-void ExecutionLoop::sync_timebase()
+void ExecutionLoop::sync_timebase(u64 at_ps)
 {
-    // ticks = floor(now_ps * tb_hz / 1e12), from absolute time: no drift.
-    const u128 due = (static_cast<u128>(now_ps()) * timing_.timebase_hz) / kPsPerSecond;
+    // ticks = floor(t * tb_hz / 1e12), from absolute time: no drift. Never
+    // backwards (a catch-up inside a slice may already have delivered them).
+    const u128 due = (static_cast<u128>(at_ps) * timing_.timebase_hz) / kPsPerSecond;
     const u64 due64 = static_cast<u64>(due);
     if (due64 > tb_ticks_) {
         u64 delta = due64 - tb_ticks_;
@@ -76,10 +93,14 @@ void ExecutionLoop::run_for(u64 duration_ps)
         if (cpu_.checkstopped()) {
             time_q32_ = static_cast<u128>(target) << 32;  // a stopped CPU just lets time pass
         } else {
+            slice_first_insn_ = cpu_.instructions_executed();
+            in_slice_ = true;
             cpu_.run(n);
-            time_q32_ += ps_per_instruction_q32_ * n;
+            in_slice_ = false;
+            // run() may end early (a decrementer write): count what ran.
+            time_q32_ += ps_per_instruction_q32_ * (cpu_.instructions_executed() - slice_first_insn_);
         }
-        sync_timebase();
+        sync_timebase(now_ps());
         sched_.advance_to(now_ps());
     }
 }

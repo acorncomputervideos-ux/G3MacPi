@@ -150,6 +150,27 @@ int main(int argc, char** argv)
             std::printf("  \"%s\"", str(cell(a + 16), cell(a + 20) < 60 ? cell(a + 20) : 60).c_str());
         std::printf("\n");
     }, &fw);
+    // G3_VIA=N: keep the last N VIA register accesses, printed at the end.
+    struct ViaRing { std::vector<u32> e; std::vector<u32> pc; std::vector<u64> when; u32 pos = 0; u64 total = 0; YosemiteMachine* m = nullptr; };
+    static ViaRing via;
+    if (const char* vn = std::getenv("G3_VIA")) {
+        via.e.assign(std::strtoul(vn, nullptr, 10), 0);
+        via.pc.assign(via.e.size(), 0);
+        via.when.assign(via.e.size(), 0);
+        via.m = &m;
+        m.macio().via().set_trace([](void* c, u32 reg, u8 v, bool write) {
+            auto* r = static_cast<ViaRing*>(c);
+            if (r->e.empty())
+                return;
+            const u32 x = (write ? 0x80000000u : 0) | (reg << 8) | v;
+            ++r->total;
+            if (r->pos && r->e[(r->pos - 1) % r->e.size()] == x)
+                return;  // repeats of the same access (polling) are kept once
+            r->pc[r->pos % r->e.size()] = r->m->cpu().state().pc;
+            r->when[r->pos % r->e.size()] = r->m->cpu().instructions_executed();
+            r->e[r->pos++ % r->e.size()] = x;
+        }, &via);
+    }
     const bool ok = fw.command("init-program");
     std::printf("\n[probe] init-program: %s\n", ok ? "completed" : "FAILED");
     if (!ok)
@@ -272,6 +293,18 @@ int main(int argc, char** argv)
         for (u32 i = 0; i < 32; i += 8)
             std::printf("[probe] r%-2u %08X %08X %08X %08X %08X %08X %08X %08X\n", i, s.gpr[i], s.gpr[i + 1],
                         s.gpr[i + 2], s.gpr[i + 3], s.gpr[i + 4], s.gpr[i + 5], s.gpr[i + 6], s.gpr[i + 7]);
+    }
+    if (!via.e.empty()) {
+        static const char* const names[16] = {"ORB", "ORA", "DDRB", "DDRA", "T1CL", "T1CH", "T1LL", "T1LH",
+                                               "T2CL", "T2CH", "SR", "ACR", "PCR", "IFR", "IER", "ORA_NH"};
+        std::printf("[via] %llu accesses; the last:\n", static_cast<unsigned long long>(via.total));
+        const u32 n = via.pos < via.e.size() ? via.pos : static_cast<u32>(via.e.size());
+        for (u32 i = 0; i < n; ++i) {
+            const u32 k = (via.pos - n + i) % via.e.size();
+            const u32 x = via.e[k];
+            std::printf("[via] %s %-6s %02X  pc=%08X  at %llu\n", (x & 0x80000000u) ? "W" : "R", names[(x >> 8) & 15],
+                        x & 0xFF, via.pc[k], static_cast<unsigned long long>(via.when[k]));
+        }
     }
     // NVRAM partitions at the end.
     for (u32 i = 0;; ++i) {

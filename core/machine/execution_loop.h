@@ -36,6 +36,9 @@ public:
     void run_for(u64 duration_ps);
 
     u64 now_ps() const { return static_cast<u64>(time_q32_ >> 32); }
+    // Guest time as of the instruction executing now (inside a slice: the
+    // slice start plus the instructions run so far).
+    u64 precise_ps() const;
     u64 timebase_ticks() const { return tb_ticks_; }
 
     // Maximum slice length in instructions (bounds interrupt latency for
@@ -45,7 +48,8 @@ public:
 private:
     using u128 = unsigned __int128;
 
-    void sync_timebase();
+    void sync_timebase(u64 at_ps);
+    static void time_hook(void* ctx);
     u64 instructions_until(u64 target_ps) const;
 
     ppc::Ppc750& cpu_;
@@ -56,6 +60,8 @@ private:
     u64 tb_ticks_ = 0;              // time-base ticks delivered so far
     u64 run_target_ps_ = 0;         // accumulated requested end time
     u64 max_slice_ = 100000;
+    bool in_slice_ = false;
+    u64 slice_first_insn_ = 0;      // cpu instructions_executed() at the slice start
 };
 
 } // namespace g3

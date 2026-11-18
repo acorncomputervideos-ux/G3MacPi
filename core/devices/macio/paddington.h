@@ -27,6 +27,8 @@
 #include "core/devices/macio/dbdma.h"
 #include "core/devices/macio/heathrow_pic.h"
 #include "core/devices/macio/macio_ide.h"
+#include "core/devices/macio/escc.h"
+#include "core/devices/macio/mesh.h"
 #include "core/devices/macio/nvram.h"
 #include "core/devices/macio/via6522.h"
 #include "core/devices/pci/pci.h"
@@ -42,6 +44,14 @@ public:
     static constexpr u32 kDbdmaOffset = 0x08000;
     static constexpr u32 kViaOffset = 0x16000;
     static constexpr u32 kNvramOffset = 0x60000;
+    // MESH SCSI cell and its interrupt (a real B&W: Linux shows MESH on
+    // interrupt 12; registers at mac-io + 0x10000 as in Heathrow's layout).
+    static constexpr u32 kMeshOffset = 0x10000;
+    static constexpr u32 kMeshIrq = 12;
+    // ESCC (Z85C30): legacy view at + 0x12000, MacRISC view at + 0x13000;
+    // channel A on input 15, B on 16 (a real B&W's Linux log).
+    static constexpr u32 kEsccOffset = 0x12000;
+    static constexpr u32 kEsccIrq[2] = {15, 16};
     // Interrupt controller input used by the VIA/Cuda (QEMU Old World
     // OLDWORLD_CUDA_IRQ = 0x12; to verify for the B&W).
     static constexpr u32 kViaIrq = 18;
@@ -59,6 +69,8 @@ public:
     DbdmaController& dbdma() { return dbdma_; }
     MacioNvram& nvram() { return nvram_; }
     MacioIde& ide(u32 n) { return ide_[n & 1]; }
+    MacioMesh& mesh() { return mesh_; }
+    MacioEscc& escc() { return escc_; }
     u32 mapped_base() const { return mapped_base_; }
 
     // PciFunction
@@ -77,6 +89,8 @@ private:
     DbdmaController dbdma_;
     MacioNvram nvram_;
     MacioIde ide_[2];
+    MacioMesh mesh_;
+    MacioEscc escc_;
     struct IrqRoute { HeathrowPic* pic; u32 irq; };
     IrqRoute ide_irq_[2] = {};
     IrqRoute ide_dma_irq_[2] = {};

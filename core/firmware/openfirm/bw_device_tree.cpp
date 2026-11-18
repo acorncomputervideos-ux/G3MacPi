@@ -228,9 +228,41 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     // and the 68K start-up waits forever without its interrupt vector. Linux's
     // MESH driver matches device_type "scsi" + compatible "chrp,mesh0".
     // Registers at mac-io + 0x10000. docs/firmware/bw-device-tree.md.
-    const u32 scsi_reg[4] = {0x10000, 0x1000, 0x8000, 0x100}, scsi_irq[2] = {12, 0};
+    const u32 scsi_reg[4] = {Paddington::kMeshOffset, 0x1000, 0x8000, 0x100}, scsi_irq[2] = {Paddington::kMeshIrq, 0};
     n.scsi = cell(t, n.macio, n.pic, "scsi", "scsi", scsi_reg, 4, scsi_irq, 2);
     t.set_string(n.scsi, "compatible", "chrp,mesh0");
+    // ESCC serial (Z85C30): a real B&W has one (Linux: ttyPZ0 at mac-io +
+    // 0x13020 on interrupt 15, ttyPZ1 at + 0x13000 on 16). Apple's Mac OS
+    // ROM loader takes the SCC's base from "escc-legacy" and the channels'
+    // interrupt vectors from the MacRISC "escc" children (its special-node
+    // table: escc-legacy/chrp,es1, ch-a/chrp,es2, ch-b/chrp,es3 and
+    // ch-a/chrp,es4, ch-b/chrp,es5, type "serial"). Without them the 68K
+    // start-up waits forever on the SCC interrupt vector.
+    {
+        const u32 base = Paddington::kEsccOffset;
+        const u32 legacy_reg[2] = {base, 0x1000};
+        const Phandle legacy = t.add_node(n.macio, "escc-legacy", "12000");
+        t.set_string(legacy, "device_type", "escc-legacy");
+        t.set_string(legacy, "compatible", "chrp,es1");
+        t.set_ints(legacy, "reg", legacy_reg, 2);
+        t.set_int(legacy, "#address-cells", 1);   // children's reg: one address, one size cell
+        t.set_int(legacy, "#size-cells", 1);
+        const u32 la_reg[2] = {base + 2, 1}, lb_reg[2] = {base, 1};
+        const u32 irq_a[1] = {Paddington::kEsccIrq[0]}, irq_b[1] = {Paddington::kEsccIrq[1]};
+        t.set_string(cell(t, legacy, n.pic, "ch-a", "serial", la_reg, 2, irq_a, 1), "compatible", "chrp,es2");
+        t.set_string(cell(t, legacy, n.pic, "ch-b", "serial", lb_reg, 2, irq_b, 1), "compatible", "chrp,es3");
+        const u32 escc_reg[2] = {base + 0x1000, 0x1000};
+        n.escc = t.add_node(n.macio, "escc", "13000");
+        t.set_string(n.escc, "device_type", "escc");
+        t.set_ints(n.escc, "reg", escc_reg, 2);
+        t.set_int(n.escc, "#address-cells", 1);
+        t.set_int(n.escc, "#size-cells", 1);
+        const u32 a_reg[2] = {base + 0x1020, 0x20}, b_reg[2] = {base + 0x1000, 0x20};
+        n.escc_a = cell(t, n.escc, n.pic, "ch-a", "serial", a_reg, 2, irq_a, 1);
+        n.escc_b = cell(t, n.escc, n.pic, "ch-b", "serial", b_reg, 2, irq_b, 1);
+        t.set_string(n.escc_a, "compatible", "chrp,es4");
+        t.set_string(n.escc_b, "compatible", "chrp,es5");
+    }
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
 

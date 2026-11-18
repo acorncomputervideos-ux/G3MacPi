@@ -68,6 +68,8 @@ void Ppc750::op_mfspr(u32 insn)
         return;
     }
 
+    if (n == spr::DEC && time_hook_)
+        time_hook_(time_ctx_);  // the decrementer as of this instruction
     u32 v;
     switch (n) {
     case spr::PVR: v = pvr_; break;
@@ -98,6 +100,11 @@ void Ppc750::op_mtspr(u32 insn)
     }
 
     const u32 v = s_.gpr[field::rd(insn)];
+    if (n == spr::DEC) {
+        if (time_hook_)
+            time_hook_(time_ctx_);  // ticks up to now count against the old value
+        break_run_ = true;          // the next expiry must be planned from the new one
+    }
     switch (n) {
     case spr::XER:
         s_.xer() = v & kXerMask;
@@ -126,6 +133,8 @@ void Ppc750::op_mtspr(u32 insn)
 void Ppc750::op_mftb(u32 insn)
 {
     const u32 n = spr_number(insn);
+    if (time_hook_)
+        time_hook_(time_ctx_);  // the time base as of this instruction
     if (n == spr::TBL_READ)
         s_.gpr[field::rd(insn)] = static_cast<u32>(s_.tb);
     else if (n == spr::TBU_READ)

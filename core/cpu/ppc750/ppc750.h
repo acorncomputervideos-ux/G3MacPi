@@ -89,6 +89,19 @@ public:
     // client memory on the client's behalf. False if no translation.
     bool probe_translate(u32 ea, bool write, u32& pa);
 
+    // Called just before the time base or the decrementer is read or the
+    // decrementer is written, so whoever drives time (the execution loop) can
+    // bring them up to the current instruction; null = none.
+    using TimeHook = void (*)(void* context);
+    void set_time_hook(TimeHook h, void* ctx)
+    {
+        time_hook_ = h;
+        time_ctx_ = ctx;
+    }
+    // Ends the current run() after the instruction executing now (e.g. after a
+    // decrementer write, so the next expiry is planned again).
+    void break_run() { break_run_ = true; }
+
     // Observer told of every exception taken (debugging tools); null = none.
     using ExceptionHook = void (*)(void* context, u32 vector, u32 srr0, u32 srr1);
     void set_exception_hook(ExceptionHook h, void* ctx)
@@ -232,6 +245,9 @@ private:
     u64 instr_count_ = 0;
     HleHandler hle_handler_ = nullptr;
     ExceptionHook exception_hook_ = nullptr;
+    TimeHook time_hook_ = nullptr;
+    void* time_ctx_ = nullptr;
+    bool break_run_ = false;
     void* exception_ctx_ = nullptr;
     void* hle_ctx_ = nullptr;
 };

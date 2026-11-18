@@ -17,3 +17,21 @@ Code: `core/sched/scheduler.*`, `core/machine/execution_loop.*`.
   systems the time base runs at bus/4 = 25 MHz. The OS learns the rates
   from the device tree (`timebase-frequency`, `clock-frequency`), so the
   machine model and the firmware must use the SAME values.
+
+## Time inside a slice
+
+The CPU runs in slices of up to `max_slice` instructions, and machine
+time advances between them. Code that polls time in a loop must still
+see it move. Mac OS calibrates its delays with the VIA timers and the
+time base, and before this both stood still for up to 100,000
+instructions:
+- `Scheduler::precise_now()` is the slice start plus the instructions run
+  so far (`ExecutionLoop::precise_ps`). The VIA reads its counters from it.
+- The CPU calls a time hook just before `mftb`, `mfspr DEC` and
+  `mtspr DEC`. The loop then delivers the time-base ticks due by that
+  instruction, without double-counting at the slice end.
+- `mtspr DEC` also ends the slice (`Ppc750::break_run`), so the new
+  expiry is planned from the new value.
+
+Tests: `machine/loop/time_moves_within_a_slice`,
+`machine/loop/decrementer_written_mid_slice`.

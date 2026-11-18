@@ -40,6 +40,9 @@ protected:
 class Via6522 final : public MmioDevice {
 public:
     static constexpr u32 kRegisterStride = 0x200;
+    // Observer of register accesses through MMIO (debugging tools); null = none.
+    using TraceHook = void (*)(void* context, u32 reg, u8 value, bool write);
+    void set_trace(TraceHook h, void* ctx) { trace_ = h; trace_ctx_ = ctx; }
     static constexpr u32 kWindowSize = 0x2000;
     // Timer clock: 4.7 MHz / 6.
     static constexpr u64 kClockNumerator = 4700000;   // Hz * 6
@@ -73,6 +76,8 @@ public:
     void mmio_write(u32 offset, u32 size, u32 value) override;
 
 private:
+    TraceHook trace_ = nullptr;
+    void* trace_ctx_ = nullptr;
     struct Timer {
         bool running = false;
         u64 start_tick = 0;   // VIA tick at which 'start_value' was loaded

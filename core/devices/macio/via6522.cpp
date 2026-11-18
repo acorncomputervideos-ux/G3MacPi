@@ -26,7 +26,7 @@ void Via6522::set_irq_output(IrqCallback cb, void* context)
 u64 Via6522::now_tick() const
 {
     // tick = floor(now_ps * 4.7e6 / 6 / 1e12)
-    return static_cast<u64>((static_cast<u128>(sched_.now()) * kClockNumerator) /
+    return static_cast<u64>((static_cast<u128>(sched_.precise_now()) * kClockNumerator) /
                             (static_cast<u128>(kClockDenominator) * kPsPerSecond));
 }
 
@@ -205,6 +205,8 @@ void Via6522::write_reg(u32 r, u8 v)
 u32 Via6522::mmio_read(u32 offset, u32 size)
 {
     const u8 v = read_reg((offset / kRegisterStride) & 0xF);
+    if (trace_)
+        trace_(trace_ctx_, (offset / kRegisterStride) & 0xF, v, false);
     // A wider access returns the register in its lowest-addressed byte;
     // the VIA only decodes byte accesses (not used by drivers).
     return size == 1 ? v : static_cast<u32>(v) << (8 * (size - 1));
@@ -213,6 +215,8 @@ u32 Via6522::mmio_read(u32 offset, u32 size)
 void Via6522::mmio_write(u32 offset, u32 size, u32 value)
 {
     const u8 v = static_cast<u8>(value >> (8 * (size - 1)));
+    if (trace_)
+        trace_(trace_ctx_, (offset / kRegisterStride) & 0xF, v, true);
     write_reg((offset / kRegisterStride) & 0xF, v);
 }
 
