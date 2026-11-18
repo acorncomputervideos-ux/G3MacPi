@@ -183,3 +183,115 @@ TEST_CASE("forth-words/open_read_seek_and_load")
     CHECK(!r.run("load hd:2,\\\\:zzzz"));
     CHECK(!r.run("load"));
 }
+
+// --- boot: bootinfo scripts and ELF programs ---------------------------------------------
+
+namespace {
+
+// Where file data of the test volume sits inside Rig::image.
+constexpr size_t kVolume = 64 * 512;
+size_t rom_at() { return kVolume + 10 * 4096; }     // "Mac OS ROM": blocks 10-12
+size_t frag_at() { return kVolume + 40 * 4096; }    // "Fragmented": first block is 40
+
+std::vector<u8> tiny_elf(u32 entry, u32 dest)
+{
+    std::vector<u8> e(0x200);
+    auto b16 = [&](size_t a, u32 v) { e[a] = static_cast<u8>(v >> 8); e[a + 1] = static_cast<u8>(v); };
+    auto b32 = [&](size_t a, u32 v) { b16(a, v >> 16); b16(a + 2, v & 0xFFFF); };
+    e[0] = 0x7F; e[1] = 'E'; e[2] = 'L'; e[3] = 'F'; e[4] = 1; e[5] = 2; e[6] = 1;
+    b16(16, 2); b16(18, 20); b32(20, 1); b32(24, entry); b32(28, 52); b16(42, 32); b16(44, 1);
+    b32(52 + 0, 1); b32(52 + 4, 0x100); b32(52 + 8, dest); b32(52 + 12, dest);
+    b32(52 + 16, 0x40); b32(52 + 20, 0x40);
+    for (u32 i = 0; i < 0x40; ++i) e[0x100 + i] = static_cast<u8>(0xC0 + i);
+    return e;
+}
+
+struct BootRig : Rig {
+    u32 started = 0;
+    int go_calls = 0;
+    BootRig()
+    {
+        words->set_go([](void* c, u32 entry) {
+            auto* b = static_cast<BootRig*>(c);
+            b->started = entry;
+            ++b->go_calls;
+        }, this);
+    }
+    void put(size_t at, const std::string& s) { std::memcpy(&image[at], s.data(), s.size()); }
+    void put(size_t at, const std::vector<u8>& v) { std::memcpy(&image[at], v.data(), v.size()); }
+};
+
+} // namespace
+
+TEST_CASE("forth-words/boot_runs_a_bootinfo_script")
+{
+    BootRig r;
+    r.put(rom_at(), std::string(
+        "<CHRP-BOOT><COMPATIBLE>MacRISC</COMPATIBLE><OS-NAME>Test OS</OS-NAME>\n"
+        "<BOOT-SCRIPT>\n"
+        ".\" on &device; part &partition; [&directory;] &filename;\" cr\n"
+        "decimal 40 2 +\n"
+        "</BOOT-SCRIPT></CHRP-BOOT>"));
+    CHECK(r.output("boot hd:2,\\\\:tbxi") == "on hd part 2 [] :tbxi\n");
+    CHECK(r.stack("") == V({42}));                           // the script's results remain
+    CHECK_EQ(r.go_calls, 0);
+    CHECK(std::string(r.words->load_path()) == "hd:2,\\\\:tbxi");
+    // The same file by its full path: directory and filename entities.
+    CHECK(r.output("boot hd:2,\\System Folder\\Mac OS ROM") ==
+          "on hd part 2 [System Folder] Mac OS ROM\n");
+    r.stack("");
+}
+
+TEST_CASE("forth-words/boot_starts_an_elf_program")
+{
+    BootRig r;
+    r.put(rom_at(), tiny_elf(0x12000, 0x12000));
+    CHECK(r.run("boot hd:2,\\\\:tbxi"));
+    CHECK_EQ(r.go_calls, 1);
+    CHECK_EQ(r.started, 0x12000u);
+    CHECK_EQ(r.ram[0x12000], 0xC0u);                         // segment copied into place
+    CHECK_EQ(r.ram[0x1203F], 0xFFu);
+    // load + init-program + go, step by step.
+    CHECK(r.run("load hd:2,\\\\:tbxi"));
+    CHECK(!r.words->program_ready());
+    CHECK(r.run("init-program"));
+    CHECK(r.words->program_ready());
+    CHECK(r.run("go"));
+    CHECK_EQ(r.go_calls, 2);
+}
+
+TEST_CASE("forth-words/bootinfo_script_loads_and_starts_an_elf")
+{
+    // The Mac-like chain: the boot file's script loads another file and runs it.
+    BootRig r;
+    r.put(rom_at(), std::string(
+        "<chrp-boot><boot-script>\n"
+        "load &device;:&partition;,\\System Folder\\Fragmented\n"
+        "init-program go\n"
+        "</boot-script></chrp-boot>"));
+    r.put(frag_at(), tiny_elf(0x15000, 0x15000));
+    CHECK(r.run("boot hd:2,\\\\:tbxi"));
+    CHECK_EQ(r.go_calls, 1);
+    CHECK_EQ(r.started, 0x15000u);
+    CHECK_EQ(r.ram[0x15000], 0xC0u);
+}
+
+TEST_CASE("forth-words/boot_errors")
+{
+    BootRig r;
+    // Not a known format (the test volume's pattern data).
+    CHECK(!r.run("boot hd:2,\\\\:tbxi"));
+    CHECK(!r.run("go"));                                      // nothing prepared
+    CHECK(!r.run("boot hd:2,\\\\:nope"));
+    // A boot script may not boot another bootinfo object.
+    r.put(rom_at(), std::string("<chrp-boot><boot-script>boot hd:2,\\\\:tbxi</boot-script></chrp-boot>"));
+    CHECK(!r.run("boot hd:2,\\\\:tbxi"));
+    CHECK_EQ(r.f->error_code(), -21);
+    // Bootinfo without a script.
+    r.put(rom_at(), std::string("<chrp-boot><os-name>x</os-name></chrp-boot>                     "));
+    CHECK(!r.run("boot hd:2,\\\\:tbxi"));
+    // An ELF without a go callback.
+    Rig plain;
+    std::memcpy(&plain.image[rom_at()], tiny_elf(0x12000, 0x12000).data(), 0x200);
+    CHECK(!plain.run("boot hd:2,\\\\:tbxi"));
+}

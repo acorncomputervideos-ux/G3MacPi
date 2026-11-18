@@ -497,6 +497,18 @@ bool Forth::interpret(const char* text, u32 len)
     return ok;
 }
 
+bool Forth::evaluate(const char* text, u32 len)
+{
+    if (src_depth_ == 0 || src_depth_ >= sizeof src_ / sizeof src_[0]) {
+        fail(-8, "evaluate: too deep");
+        return false;
+    }
+    src_[src_depth_++] = {text, len, 0};
+    const bool ok = interpret_source();
+    --src_depth_;
+    return ok;
+}
+
 bool Forth::interpret_source()
 {
     const char* w;

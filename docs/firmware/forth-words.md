@@ -36,6 +36,9 @@ logged when booting).
 | `load-base`, `load-size` | ( -- addr ), ( -- n ) |
 | `load` | ( "device-specifier<eol>" -- ): reads the whole file to load-base; the path runs to the end of the line, since HFS names contain spaces |
 | `ms`, `get-msecs` | ( n -- ), ( -- ms ) |
+| `init-program` | ( -- ): prepares the image at load-base: an ELF program (see `elf-loader.md`), or a CHRP bootinfo object, whose boot script is then run |
+| `go` | ( -- ): starts the prepared ELF program through the machine's `go` callback |
+| `boot` | ( "device-specifier<eol>" -- ): `load`, `init-program`, then `go` if an ELF program was prepared |
 
 ## Choices
 
@@ -52,6 +55,24 @@ logged when booting).
   Other methods fail with −21 and will be added as the boot script needs
   them.
 
+## Booting
+
+`boot hd:9,\\:tbxi` loads Mac OS's boot file. Its text header is a
+bootinfo object, so `init-program` runs its BOOT-SCRIPT, as the CHRP
+binding's multiboot menu does when the user picks an OS (§3.1.7). That a
+plain `boot` of a bootinfo file does the same is our choice, matching how
+Mac OS boot paths are used. The script may `load` another file and
+`init-program go` it. `boot` then does not call `go` again. It only calls
+`go` when its own `init-program` prepared an ELF program.
+
+The path entities for the script come from the boot path: device, the
+partition number, and, after the comma, the rest split at its last
+backslash into directory and filename. So `hd:9,\System Folder\Mac OS ROM`
+gives `hd`, `9`, `System Folder`, `Mac OS ROM`, and `hd:9,\\:tbxi` gives
+`hd`, `9`, empty, `:tbxi` (Apple's values for such paths: to verify). A
+boot script can't boot another bootinfo object (−21), so recursion is
+impossible.
+
 ## Tests
 
 - Queries: properties of the root and the CPU, missing properties,
@@ -66,3 +87,12 @@ logged when booting).
   unsupported method, a closed instance.
 - `load` by Finder type and by a path with spaces. The file's bytes are
   checked at load-base.
+- `boot` of a bootinfo file: the script's output with all entities,
+  through both path forms.
+- `boot` of an ELF: the segment is in place and `go` is called with the
+  entry point; also step by step with `load`, `init-program`, `go`.
+- The Mac-like chain: a boot script that loads an ELF from another file
+  and starts it. `go` happens exactly once; this test found a bug where
+  `boot` called `go` a second time.
+- Errors: an unknown format, `go` with nothing prepared, a missing file,
+  a nested bootinfo, a bootinfo without a script, no `go` callback.

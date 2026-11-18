@@ -22,6 +22,10 @@
 //   load-base ( -- addr )   load-size ( -- n )
 //   load ( "device-specifier<eol>" -- ): reads the file at load-base
 //   ms ( n -- )   get-msecs ( -- ms )
+//   init-program ( -- ): prepares the image at load-base (ELF, or a CHRP
+//     bootinfo object whose script is then run — our choice, see docs)
+//   go ( -- ): starts the prepared ELF program (through the go callback)
+//   boot ( "device-specifier<eol>" -- ): load + init-program + go
 //
 // Property values handed to Forth (get-*-property, encode-*) are copied
 // into a scratch region of guest memory used round-robin; a script must
@@ -32,8 +36,11 @@
 
 #include "core/common/types.h"
 #include "core/firmware/forth/forth.h"
+#include "core/firmware/openfirm/bootinfo.h"
 #include "core/firmware/openfirm/device_tree.h"
+#include "core/firmware/openfirm/elf_loader.h"
 #include "core/firmware/openfirm/instances.h"
+#include "core/firmware/openfirm/memory_map.h"
 
 namespace g3::of {
 
@@ -46,9 +53,17 @@ public:
                   u32 scratch_size, u32 load_base, u32 load_limit);
 
     void set_clock(Clock c, void* ctx) { clock_ = c; clock_ctx_ = ctx; }
+    // Memory for init-program to claim (optional).
+    void set_memory(MemoryMap* m) { memory_ = m; }
+    // Called by `go` with the entry point; the machine starts the client.
+    using Go = void (*)(void* context, u32 entry);
+    void set_go(Go g, void* ctx) { go_ = g; go_ctx_ = ctx; }
 
     Phandle active_package() const { return active_; }
     u32 load_size() const { return load_size_; }
+    const char* load_path() const { return load_path_; }
+    bool program_ready() const { return program_ready_; }
+    u32 program_entry() const { return program_.entry; }
 
 private:
     using Native = forth::Forth::Native;
@@ -87,6 +102,11 @@ private:
     static void w_load(forth::Forth&, void*);
     static void w_ms(forth::Forth&, void*);
     static void w_get_msecs(forth::Forth&, void*);
+    static void w_init_program(forth::Forth&, void*);
+    static void w_go(forth::Forth&, void*);
+    static void w_boot(forth::Forth&, void*);
+    bool load_file(const char* path);
+    void run_bootinfo();
 
     forth::Forth& f_;
     DeviceTree& tree_;
@@ -97,6 +117,16 @@ private:
     Phandle active_ = kNone;
     Clock clock_ = nullptr;
     void* clock_ctx_ = nullptr;
+    MemoryMap* memory_ = nullptr;
+    Go go_ = nullptr;
+    void* go_ctx_ = nullptr;
+    char load_path_[256] = {};
+    ElfProgram program_;
+    bool program_ready_ = false;
+    bool in_script_ = false;
+    bool ran_script_ = false;  // the last init-program ran a bootinfo script
+    BootInfo bootinfo_;
+    u8 text_[64 * 1024] = {};  // host copy of a bootinfo object's text
     u8 buf_[4096] = {};  // staging for property bytes and file data
 };
 

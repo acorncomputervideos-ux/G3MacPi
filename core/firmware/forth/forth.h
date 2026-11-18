@@ -58,6 +58,10 @@ public:
     // (then error_code()/error_text() describe it; stacks are reset).
     bool interpret(const char* text, u32 len);
     bool interpret(const char* text);
+    // Like `evaluate`, for host text, from inside a native word: the text
+    // is interpreted as a nested input source; it must stay valid until
+    // this returns. False on error (the error then unwinds normally).
+    bool evaluate(const char* text, u32 len);
     s32 error_code() const { return error_code_; }
     const char* error_text() const { return error_text_; }
 

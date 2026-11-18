@@ -35,7 +35,8 @@ FirmwareWords::FirmwareWords(Forth& f, DeviceTree& tree, InstanceTable& inst, u3
         {"decode-int", w_decode_int}, {"decode-string", w_decode_string},
         {"open-dev", w_open_dev}, {"close-dev", w_close_dev}, {"$call-method", w_call_method},
         {"load-base", w_load_base}, {"load-size", w_load_size}, {"load", w_load},
-        {"ms", w_ms}, {"get-msecs", w_get_msecs},
+        {"ms", w_ms}, {"get-msecs", w_get_msecs}, {"init-program", w_init_program},
+        {"go", w_go}, {"boot", w_boot},
     };
     for (const Def& d : defs)
         f_.define_native(d.name, d.fn, this);
@@ -500,54 +501,190 @@ void FirmwareWords::w_call_method(Forth& f, void* ctx)
 void FirmwareWords::w_load_base(Forth& f, void* ctx) { f.push(self(ctx).load_base_); }
 void FirmwareWords::w_load_size(Forth& f, void* ctx) { f.push(self(ctx).load_size_); }
 
-void FirmwareWords::w_load(Forth& f, void* ctx)
+bool FirmwareWords::load_file(const char* path)
 {
-    FirmwareWords& s = self(ctx);
-    const char* text;
-    u32 len;
-    if (!f.rest_of_line(text, len)) {
-        f.fail(-16, "load: device-specifier expected");
-        return;
-    }
-    char path[kMaxPath];
-    if (len >= sizeof path) {
-        f.fail(kErrBadArgs, "path too long");
-        return;
-    }
-    cstr::copy_bytes(path, text, len);
-    path[len] = '\0';
-    const Ihandle ih = s.open_path(path);
+    const Ihandle ih = open_path(path);
     if (!ih) {
-        f.fail(kErrNoPackage, "load: can't open");
-        return;
+        f_.fail(kErrNoPackage, "load: can't open");
+        return false;
     }
-    PackageDriver* d = s.inst_.driver(ih);
-    const u32 slot = s.inst_.slot(ih);
-    ppc::MemoryInterface& m = f.memory();
+    PackageDriver* d = inst_.driver(ih);
+    const u32 slot = inst_.slot(ih);
+    ppc::MemoryInterface& m = f_.memory();
     u32 total = 0;
     bool ok = true;
     for (;;) {
-        const s32 n = d->read(slot, s.buf_, sizeof s.buf_);
+        const s32 n = d->read(slot, buf_, sizeof buf_);
         if (n < 0) {
             ok = false;
             break;
         }
         if (n == 0)
             break;
-        if (total + static_cast<u32>(n) > s.load_limit_ - s.load_base_) {
+        if (total + static_cast<u32>(n) > load_limit_ - load_base_) {
             ok = false;  // doesn't fit below the load limit
             break;
         }
         for (s32 i = 0; i < n && ok; ++i)
-            ok = m.write8(s.load_base_ + total + static_cast<u32>(i), s.buf_[i]);
+            ok = m.write8(load_base_ + total + static_cast<u32>(i), buf_[i]);
         total += static_cast<u32>(n);
     }
-    s.inst_.close(ih);
+    inst_.close(ih);
     if (!ok) {
-        f.fail(-37, "load: read error or file too large");  // -37: file I/O exception
+        f_.fail(-37, "load: read error or file too large");  // -37: file I/O exception
+        return false;
+    }
+    load_size_ = total;
+    program_ready_ = false;
+    u32 n = 0;
+    for (; path[n] && n + 1 < sizeof load_path_; ++n)
+        load_path_[n] = path[n];
+    load_path_[n] = '\0';
+    return true;
+}
+
+namespace {
+bool line_path(Forth& f, char* path, u32 max)
+{
+    const char* text;
+    u32 len;
+    if (!f.rest_of_line(text, len)) {
+        f.fail(-16, "device-specifier expected");
+        return false;
+    }
+    if (len >= max) {
+        f.fail(kErrBadArgs, "path too long");
+        return false;
+    }
+    cstr::copy_bytes(path, text, len);
+    path[len] = '\0';
+    return true;
+}
+} // namespace
+
+void FirmwareWords::w_load(Forth& f, void* ctx)
+{
+    char path[kMaxPath];
+    if (line_path(f, path, sizeof path))
+        self(ctx).load_file(path);
+}
+
+// The bootinfo object's own path, split into the entities of CHRP
+// 3.1.6.1 ("&device;:[&partition;][,]\&directory;\&filename;"). After the
+// partition and comma, the rest splits at its last backslash: before it
+// (without a leading backslash) is the directory, after it the filename.
+// So "hd:9,\System Folder\Mac OS ROM" gives "hd", "9", "System Folder",
+// "Mac OS ROM", and "hd:9,\\:tbxi" gives "hd", "9", "", ":tbxi".
+// (How Apple's firmware fills them for "\\:tbxi" paths: to verify.)
+void FirmwareWords::run_bootinfo()
+{
+    char dev[kMaxPath] = {}, part[32] = {}, dir[kMaxPath] = {}, file[kMaxPath] = {};
+    auto copy = [](char* out, u32 max, const char* from, const char* to) {
+        u32 n = 0;
+        for (const char* q = from; q < to && n + 1 < max; ++q)
+            out[n++] = *q;
+        out[n] = '\0';
+    };
+    const char* p = load_path_;
+    const char* end = p + cstr::length(p);
+    const char* colon = p;
+    while (colon < end && *colon != ':')
+        ++colon;
+    copy(dev, sizeof dev, p, colon);
+    if (colon < end) {
+        const char* q = colon + 1;
+        const char* digits = q;
+        while (q < end && *q >= '0' && *q <= '9')
+            ++q;
+        copy(part, sizeof part, digits, q);
+        if (q < end && *q == ',')
+            ++q;
+        const char* last = nullptr;
+        for (const char* r = q; r < end; ++r)
+            if (*r == '\\')
+                last = r;
+        if (last) {
+            copy(dir, sizeof dir, (*q == '\\' && q < last) ? q + 1 : q, last);
+            copy(file, sizeof file, last + 1, end);
+        } else {
+            copy(file, sizeof file, q, end);
+        }
+    }
+    BootInfoPath path;
+    path.device = dev;
+    path.partition = part;
+    path.directory = dir;
+    path.filename = file;
+    // Parse from a host copy of the start of the image (the text part).
+    const u32 n = load_size_ < sizeof text_ ? load_size_ : static_cast<u32>(sizeof text_);
+    for (u32 i = 0; i < n; ++i)
+        f_.memory().read8(load_base_ + i, text_[i]);
+    if (!parse_bootinfo(text_, n, path, bootinfo_)) {
+        f_.fail(-21, "init-program: malformed bootinfo object");
         return;
     }
-    s.load_size_ = total;
+    if (!bootinfo_.has_script) {
+        f_.fail(-21, "init-program: bootinfo object has no boot script");
+        return;
+    }
+    in_script_ = true;
+    f_.evaluate(bootinfo_.script, bootinfo_.script_len);
+    in_script_ = false;
+}
+
+void FirmwareWords::w_init_program(Forth& f, void* ctx)
+{
+    FirmwareWords& s = self(ctx);
+    s.program_ready_ = false;
+    s.ran_script_ = false;
+    // Is it a bootinfo object? Look at the start of the image.
+    u8 head[64];
+    const u32 n = s.load_size_ < sizeof head ? s.load_size_ : static_cast<u32>(sizeof head);
+    for (u32 i = 0; i < n; ++i)
+        f.memory().read8(s.load_base_ + i, head[i]);
+    if (n && is_bootinfo(head, n)) {
+        if (s.in_script_) {
+            f.fail(-21, "init-program: bootinfo inside a boot script");
+            return;
+        }
+        s.run_bootinfo();
+        // Set afterwards: the script's own init-program clears it.
+        s.ran_script_ = true;  // the script decided what runs (it may load + go itself)
+        return;
+    }
+    const ElfError e = load_elf_program(f.memory(), s.memory_, s.load_base_, s.load_size_, s.program_);
+    if (e != ElfError::None) {
+        f.fail(-21, e == ElfError::NotElf ? "init-program: unknown image format"
+                                          : "init-program: bad ELF image");
+        return;
+    }
+    s.program_ready_ = true;
+}
+
+void FirmwareWords::w_go(Forth& f, void* ctx)
+{
+    FirmwareWords& s = self(ctx);
+    if (!s.program_ready_) {
+        f.fail(-21, "go: no program prepared");
+        return;
+    }
+    if (!s.go_) {
+        f.fail(-21, "go: no way to start a program");
+        return;
+    }
+    s.go_(s.go_ctx_, s.program_.entry);
+}
+
+void FirmwareWords::w_boot(Forth& f, void* ctx)
+{
+    FirmwareWords& s = self(ctx);
+    char path[kMaxPath];
+    if (!line_path(f, path, sizeof path) || !s.load_file(path))
+        return;
+    w_init_program(f, ctx);
+    if (f.failed() || s.ran_script_ || !s.program_ready_)
+        return;  // an error, or a boot script that has run (and may have started a program)
+    w_go(f, ctx);
 }
 
 void FirmwareWords::w_ms(Forth& f, void*) { f.pop(); }  // time passes on its own
