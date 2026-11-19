@@ -31,10 +31,10 @@ everything valid still applies. Keys and words are case-insensitive.
 - **Memory:** up to 512 MB, the firmware's current limit (two BATs map
   RAM in virtual mode; docs/firmware/virtual-mode.md). A real Blue & White
   takes up to 1 GB.
-- **Drives:** the two mac-io ATA channels, master and slave. A real B&W
-  has its CD-ROM as master on channel 0 (the default here) and its hard
-  disk on a CMD646 controller, which is not emulated yet; channel 1 stands
-  in for it.
+- **Drives:** as on a real Blue & White: `ata0` is the mac-io ATA channel
+  (the CD-ROM bus; CD-ROM as master by default), `ata1` the CMD646's
+  primary channel (the hard-disk bus; docs/hardware/cmd646.md). The menu
+  calls them "CD bus" and "Hard disk bus".
 - **Floppy:** the Blue & White G3 has no floppy drive. A `[floppy]` section
   is reported and ignored; the menu shows the line greyed out.
 - **Hard disks and Mac OS:** Mac OS mounts an ATA hard disk only if it
