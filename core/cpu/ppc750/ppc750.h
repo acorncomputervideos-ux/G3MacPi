@@ -19,6 +19,7 @@
 
 #include "core/common/endian.h"
 #include "core/common/types.h"
+#include "core/cpu/ppc750/block_cache.h"
 #include "core/cpu/ppc750/cpu_state.h"
 #include "core/cpu/ppc750/memory_interface.h"
 #include "core/fpu/ieee754.h"
@@ -112,6 +113,12 @@ public:
         watch_ctx_ = ctx;
         fetch_host_ = nullptr;
     }
+    // Decoded-block cache (JIT stage 1; docs/cpu/block-cache.md). With one
+    // set (and ready), run() replays decoded blocks instead of fetching and
+    // decoding each instruction; the results are the same instruction for
+    // instruction. nullptr: the plain interpreter.
+    void set_block_cache(BlockCache* cache) { cache_ = cache; }
+    BlockCache* block_cache() { return cache_; }
     // Ends the current run() after the instruction executing now (e.g. after a
     // decrementer write, so the next expiry is planned again).
     void break_run() { break_run_ = true; }
@@ -193,6 +200,7 @@ private:
                     if (Size == 4) store_be32(p, value);
                     else if (Size == 2) store_be16(p, static_cast<u16>(value));
                     else *p = static_cast<u8>(value);
+                    note_store(pa, Size);
                 } else {
                     value = Size == 4 ? load_be32(p) : Size == 2 ? load_be16(p) : *p;
                 }
@@ -295,7 +303,20 @@ private:
     void op_rfi();
     void op_sc();
 
+    // --- block cache (ppc750_blocks.cpp)
+    void run_blocks(u64 count);
+
+    BlockCache::Block* build_block(u32 pa, const u8* host_page);
+    static bool ends_block(u32 insn);
+    static void op_generic(Ppc750& cpu, u32 insn) { cpu.execute(insn); }
+    void note_store(u32 pa, u32 len)
+    {
+        if (cache_)
+            cache_->note_write(pa, len);
+    }
+
     MemoryInterface& mem_;
+    BlockCache* cache_ = nullptr;
     // Direct RAM window, refreshed at the start of run().
     u8* ram_ = nullptr;
     u32 ram_base_ = 0, ram_size_ = 0;

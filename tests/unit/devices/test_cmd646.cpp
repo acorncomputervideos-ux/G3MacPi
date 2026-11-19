@@ -140,6 +140,20 @@ TEST_CASE("devices/cmd646/mrdmode_blocks_and_clears")
     CHECK_EQ(r.in8(kBm + 2) & 0x60, 0x60u);
 }
 
+namespace {
+// Records the RAM writes a bus reports (the block cache's view).
+struct WriteRecord {
+    u32 count = 0, lo = 0xFFFFFFFFu, hi = 0;
+    static void hear(void* ctx, u32 pa, u32 len)
+    {
+        auto* w = static_cast<WriteRecord*>(ctx);
+        ++w->count;
+        if (pa < w->lo) w->lo = pa;
+        if (pa + len > w->hi) w->hi = pa + len;
+    }
+};
+} // namespace
+
 TEST_CASE("devices/cmd646/bus_master_dma_read")
 {
     Rig r;
@@ -161,7 +175,12 @@ TEST_CASE("devices/cmd646/bus_master_dma_read")
     r.out8(kCmd + 6, 0xE0);
     r.out8(kCmd + 7, 0xC8);                                    // READ DMA
     CHECK(!r.irq);                                             // nothing until the engine runs
+    WriteRecord heard;
+    r.bus.set_write_observer(WriteRecord::hear, &heard);
     r.out8(kBm + 0, 0x09);                                     // start
+    CHECK(heard.count >= 2);                                   // RAM written by DMA is reported
+    CHECK_EQ(heard.lo, 0x8000u);
+    CHECK_EQ(heard.hi, 0x9200u);
     CHECK_EQ(r.ram[0x8000], r.disk_bytes[10 * 512]);
     CHECK_EQ(r.ram[0x8000 + 1023], r.disk_bytes[10 * 512 + 1023]);
     CHECK_EQ(r.ram[0x9000 + 511], r.disk_bytes[12 * 512 + 511]);
@@ -190,7 +209,10 @@ TEST_CASE("devices/cmd646/bus_master_dma_write_and_bad_table")
     r.out8(kCmd + 5, 0);
     r.out8(kCmd + 6, 0xE0);
     r.out8(kCmd + 7, 0xCA);                                    // WRITE DMA
+    WriteRecord heard;
+    r.bus.set_write_observer(WriteRecord::hear, &heard);
     r.out8(kBm + 0, 0x01);                                     // start, memory to drive
+    CHECK_EQ(heard.count, 0u);                                 // reading RAM is not a write
     CHECK_EQ(r.disk_bytes[7 * 512 + 3], static_cast<u8>(0x5A ^ 3));
     CHECK_EQ(r.in8(kBm + 2) & 0x05, 0x04u);
     r.out8(kBm + 0, 0x00);

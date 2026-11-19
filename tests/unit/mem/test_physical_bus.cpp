@@ -155,3 +155,41 @@ TEST_CASE("mem/bus/unmap_and_remap")
     CHECK(bus.read32(0x90000010u, v));
     CHECK_EQ(dev.log.back().offset, 0x10u);
 }
+
+
+namespace {
+// Records the RAM writes a bus reports (the block cache's view).
+struct WriteRecord {
+    u32 count = 0, lo = 0xFFFFFFFFu, hi = 0;
+    static void hear(void* ctx, u32 pa, u32 len)
+    {
+        auto* w = static_cast<WriteRecord*>(ctx);
+        ++w->count;
+        if (pa < w->lo) w->lo = pa;
+        if (pa + len > w->hi) w->hi = pa + len;
+    }
+};
+} // namespace
+
+TEST_CASE("mem/bus/write_observer_hears_ram_writes_only")
+{
+    std::vector<u8> ram(0x10000), rom(0x1000);
+    PhysicalBus bus;
+    REQUIRE(bus.map_ram(0, ram.data(), 0x10000));
+    REQUIRE(bus.map_rom(0xFFF00000u, rom.data(), 0x1000));
+    WriteRecord heard;
+    bus.set_write_observer(WriteRecord::hear, &heard);
+    u32 v;
+    bus.read32(0x100, v);
+    CHECK_EQ(heard.count, 0u);
+    bus.write16(0x1FFE, 0x1234);
+    CHECK_EQ(heard.count, 1u);
+    CHECK_EQ(heard.lo, 0x1FFEu);
+    CHECK_EQ(heard.hi, 0x2000u);
+    bus.write32(0xFFF00000u, 1);  // ROM: ignored, nothing changed
+    bus.write8(0x80000000u, 1);   // unmapped
+    CHECK_EQ(heard.count, 1u);
+    bus.notify_write(0x4000, 0x200);  // DMA through host_pointer
+    CHECK_EQ(heard.count, 2u);
+    CHECK_EQ(heard.hi, 0x4200u);
+}

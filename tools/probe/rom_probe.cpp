@@ -83,7 +83,17 @@ int main(int argc, char** argv)
     cfg.ram_size = static_cast<u32>(ram.size());
     cfg.vram = vram.data();
     cfg.vram_size = static_cast<u32>(vram.size());
+    // G3_JIT=MB: the CPU's decoded-block cache, with that much memory.
+    static std::vector<u8> jit;
+    if (const char* j = std::getenv("G3_JIT")) {
+        jit.resize(static_cast<size_t>(std::strtoul(j, nullptr, 10)) << 20);
+        cfg.jit_memory = jit.data();
+        cfg.jit_size = static_cast<u32>(jit.size());
+    }
     YosemiteMachine m(cfg);
+    if (!jit.empty())
+        std::printf("[probe] block cache: %s, %u blocks\n", m.cpu().block_cache() ? "on" : "FAILED",
+                    m.cpu().block_cache() ? m.cpu().block_cache()->capacity() : 0);
     BwFirmware::Config fc;
     fc.width = mc.width;
     fc.height = mc.height;
@@ -472,6 +482,19 @@ int main(int argc, char** argv)
             std::printf("[via] %s %-6s %02X  pc=%08X r24=%08X  at %llu\n", (x & 0x80000000u) ? "W" : "R", names[(x >> 8) & 15],
                         x & 0xFF, via.pc[k], via.pc68[k], static_cast<unsigned long long>(via.when[k]));
         }
+    }
+    // A fingerprint of all of RAM (FNV-1a), for comparing runs.
+    {
+        u64 h = 0xCBF29CE484222325ull;
+        for (u8 b : ram)
+            h = (h ^ b) * 0x100000001B3ull;
+        std::printf("[probe] ram fnv1a=%016llX\n", static_cast<unsigned long long>(h));
+    }
+    if (ppc::BlockCache* bc = m.cpu().block_cache()) {
+        const auto& st = bc->stats();
+        std::printf("[probe] blocks: %llu built, %llu hits, %llu flushes, %llu page invalidations\n",
+                    static_cast<unsigned long long>(st.built), static_cast<unsigned long long>(st.hits),
+                    static_cast<unsigned long long>(st.flushes), static_cast<unsigned long long>(st.invalidations));
     }
     // Interrupt controller state at the end.
     std::printf("[pic] enabled=%016llX output=%d\n",

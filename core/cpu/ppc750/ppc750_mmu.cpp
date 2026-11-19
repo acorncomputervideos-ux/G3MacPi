@@ -135,8 +135,10 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& wr
             if (!page_access_allowed(w1 & 3, key, write)) {
                 fault = kFaultProtection;
                 // R is still set: the page was referenced (PEM 7.5.3).
-                if (!(w1 & mmu::PTE1_R) && !probe)
+                if (!(w1 & mmu::PTE1_R) && !probe) {
                     mem_.write32(pte_addr + 4, w1 | mmu::PTE1_R);
+                    note_store(pte_addr + 4, 4);
+                }
                 return false;
             }
             if (fetch && (w1 & mmu::PTE1_G)) {
@@ -147,8 +149,10 @@ bool Ppc750::page_translate(u32 ea, Access access, u32& pa, u32& fault, bool& wr
             u32 nw1 = w1 | mmu::PTE1_R;
             if (write)
                 nw1 |= mmu::PTE1_C;
-            if (nw1 != w1 && !probe)
+            if (nw1 != w1 && !probe) {
                 mem_.write32(pte_addr + 4, nw1);
+                note_store(pte_addr + 4, 4);
+            }
             writable = page_access_allowed(w1 & 3, key, true);
             changed = (nw1 & mmu::PTE1_C) != 0;
             pa = (w1 & 0xFFFFF000u) | (ea & 0xFFF);

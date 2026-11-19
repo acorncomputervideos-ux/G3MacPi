@@ -70,6 +70,21 @@ public:
     // The RAM region at physical address 0 (main memory), if mapped.
     u8* direct_window(u32& base, u32& size) override;
 
+    // RAM writes: the observer hears of every write to RAM made through the
+    // bus, and devices that write RAM through host_pointer() (DMA) report
+    // it with notify_write(). Used by the CPU's decoded-block cache.
+    using WriteObserver = void (*)(void* context, u32 pa, u32 len);
+    void set_write_observer(WriteObserver cb, void* context)
+    {
+        observer_ = cb;
+        observer_ctx_ = context;
+    }
+    void notify_write(u32 pa, u32 len)
+    {
+        if (observer_ && len)
+            observer_(observer_ctx_, pa, len);
+    }
+
     // Diagnostics.
     u64 unmapped_accesses() const { return unmapped_count_; }
     u32 last_unmapped_address() const { return last_unmapped_; }
@@ -84,6 +99,9 @@ private:
         u8* data;             // RAM/ROM (ROM is only read through it)
         MmioDevice* device;   // MMIO
     };
+
+    WriteObserver observer_ = nullptr;
+    void* observer_ctx_ = nullptr;
 
     bool add(const Region& r);
     // Region containing [addr, addr + len), or nullptr.

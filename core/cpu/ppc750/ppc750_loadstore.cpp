@@ -102,6 +102,7 @@ bool Ppc750::mem_access(u32 ea, u32 size, bool write, u32& value)
                     machine_check();
                     return false;
                 }
+                note_store(pa, 1);
             } else {
                 u8 b;
                 if (!mem_.read8(pa, b)) {
@@ -124,6 +125,7 @@ bool Ppc750::mem_access(u32 ea, u32 size, bool write, u32& value)
             if (size == 4) store_be32(p, value);
             else if (size == 2) store_be16(p, static_cast<u16>(value));
             else *p = static_cast<u8>(value);
+            note_store(pa, size);
         } else {
             value = size == 4 ? load_be32(p) : size == 2 ? load_be16(p) : *p;
         }
@@ -134,6 +136,8 @@ bool Ppc750::mem_access(u32 ea, u32 size, bool write, u32& value)
         ok = size == 4 ? mem_.write32(pa, value)
            : size == 2 ? mem_.write16(pa, static_cast<u16>(value))
                        : mem_.write8(pa, static_cast<u8>(value));
+        // (RAM outside the direct window is not in the block cache; RAM
+        // written through the bus is reported by the bus's write observer.)
     } else {
         if (size == 4) {
             ok = mem_.read32(pa, value);
@@ -341,6 +345,8 @@ bool Ppc750::op_stwcx(u32 insn)
         machine_check();
         return true;
     }
+    if (success)
+        note_store(pa, 4);
     u32 f = success ? crf::EQ : 0;
     if (s_.xer() & xer::SO)
         f |= crf::SO;

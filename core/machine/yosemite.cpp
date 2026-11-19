@@ -14,6 +14,12 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
 {
     bool ok = c.ram && c.ram_size > 0 && bus_.map_ram(0, c.ram, c.ram_size);
     ram_size_ = c.ram_size;
+    if (ok && c.jit_memory && blocks_.init(c.jit_memory, c.jit_size, c.ram_size)) {
+        cpu_.set_block_cache(&blocks_);
+        bus_.set_write_observer([](void* cache, u32 pa, u32 len) {
+            static_cast<ppc::BlockCache*>(cache)->note_write(pa, len);
+        }, &blocks_);
+    }
     cpu_hz_ = c.cpu_hz;
     bus_hz_ = c.bus_hz;
     if (ok && c.rom)

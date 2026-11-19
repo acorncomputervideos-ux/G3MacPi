@@ -218,6 +218,8 @@ void Cmd646::run_dma(Channel& c)
             return;
         }
         const u32 moved = to_memory ? c.ata.dma_read(mem, count) : c.ata.dma_write(mem, count);
+        if (to_memory)
+            bus_.notify_write(addr & ~1u, moved);
         if (moved < count) {
             // The drive finished before the table did: the engine stays
             // active until software stops it (SFF-8038i).

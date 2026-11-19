@@ -43,15 +43,14 @@ struct Rec {
 
 inline std::vector<u8> key_bytes(u32 parent, const std::string& name)
 {
-    std::vector<u8> k(8 + 2 * name.size());
     const u16 klen = static_cast<u16>(6 + 2 * name.size());
-    k[0] = static_cast<u8>(klen >> 8); k[1] = static_cast<u8>(klen);
-    k[2] = static_cast<u8>(parent >> 24); k[3] = static_cast<u8>(parent >> 16);
-    k[4] = static_cast<u8>(parent >> 8); k[5] = static_cast<u8>(parent);
-    k[6] = static_cast<u8>(name.size() >> 8); k[7] = static_cast<u8>(name.size());
-    for (size_t i = 0; i < name.size(); ++i) {
-        k[8 + 2 * i] = 0;
-        k[9 + 2 * i] = static_cast<u8>(name[i]);
+    std::vector<u8> k = {static_cast<u8>(klen >> 8), static_cast<u8>(klen),
+                         static_cast<u8>(parent >> 24), static_cast<u8>(parent >> 16),
+                         static_cast<u8>(parent >> 8), static_cast<u8>(parent),
+                         static_cast<u8>(name.size() >> 8), static_cast<u8>(name.size())};
+    for (char c : name) {  // appended, not indexed: indexing trips a GCC -O2 false positive
+        k.push_back(0);
+        k.push_back(static_cast<u8>(c));
     }
     return k;
 }

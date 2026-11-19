@@ -112,13 +112,36 @@ TEST_CASE("devices/dbdma/output_then_stop")
     CHECK(r.status() & RUN);
 }
 
+namespace {
+// Records the RAM writes a bus reports (the block cache's view).
+struct WriteRecord {
+    u32 count = 0, lo = 0xFFFFFFFFu, hi = 0;
+    u32 min = 0;  // writes below this are not recorded
+    static void hear(void* ctx, u32 pa, u32 len)
+    {
+        auto* w = static_cast<WriteRecord*>(ctx);
+        if (pa < w->min)
+            return;
+        ++w->count;
+        if (pa < w->lo) w->lo = pa;
+        if (pa + len > w->hi) w->hi = pa + len;
+    }
+};
+} // namespace
+
 TEST_CASE("devices/dbdma/input_and_append_with_wake")
 {
     Rig r;
     r.dev.source = {1, 2, 3, 4, 5, 6};
     r.desc(0x1000, cmd(INPUT_LAST), 4, 0x3000);
     r.desc(0x1010, cmd(STOP), 0, 0);
+    WriteRecord heard;
+    heard.min = 0x2000;                                        // not the descriptors' status words
+    r.bus.set_write_observer(WriteRecord::hear, &heard);
     r.start(0x1000);
+    CHECK_EQ(heard.lo, 0x3000u);                               // input DMA reports what it wrote
+    CHECK_EQ(heard.hi, 0x3004u);
+    r.bus.set_write_observer(nullptr, nullptr);
     CHECK_EQ(r.ram[0x3000], 1u);
     CHECK_EQ(r.ram[0x3003], 4u);
     // Driver pattern: replace the STOP with new work, add a new STOP, WAKE.

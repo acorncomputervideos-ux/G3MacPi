@@ -135,8 +135,12 @@ void Ppc750::run(u64 count)
     break_run_ = false;
     ram_ = mem_.direct_window(ram_base_, ram_size_);
     fetch_host_ = nullptr;
-    for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i)
-        step();
+    if (cache_ && cache_->ready() && ram_) {
+        run_blocks(count);
+    } else {
+        for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i)
+            step();
+    }
     break_run_ = false;
 }
 
@@ -364,8 +368,8 @@ void Ppc750::execute_op31(u32 insn)
     case 54: case 86: case 246: case 278: case 982:  // dcbst dcbf dcbtst dcbt icbi
     case 598: case 854:                                // sync eieio
         // No caches are modelled; these have no architecturally visible
-        // effect here. (icbi will matter once decoded-instruction caching
-        // or a JIT exists.)
+        // effect here. (The decoded-block cache needs no icbi: it watches
+        // every write to RAM instead; docs/cpu/block-cache.md.)
         break;
     case 1014:
         op_dcbz(insn);

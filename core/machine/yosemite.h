@@ -43,6 +43,10 @@ struct YosemiteConfig {
     // Video memory for the display device (optional; at most kMaxVram).
     u8* vram = nullptr;
     u32 vram_size = 0;
+    // Memory for the CPU's decoded-block cache (docs/cpu/block-cache.md;
+    // a few MB). None: the CPU interprets every instruction.
+    u8* jit_memory = nullptr;
+    u32 jit_size = 0;
 };
 
 class YosemiteMachine {
@@ -87,6 +91,7 @@ private:
     Scheduler sched_;
     PhysicalBus bus_;
     ppc::Ppc750 cpu_;
+    ppc::BlockCache blocks_;
     ExecutionLoop loop_;
     Grackle grackle_;
     PciToPciBridge bridge_;

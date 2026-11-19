@@ -198,6 +198,8 @@ bool DbdmaChannel::step()
             u32 done;
             if (p) {
                 done = output ? stream_->dma_output(p, chunk, last) : stream_->dma_input(p, chunk);
+                if (!output)
+                    bus_->notify_write(addr + progress_, done);
             } else {
                 // Not plain RAM: go through the bus in small pieces.
                 chunk = left > sizeof tmp ? static_cast<u32>(sizeof tmp) : left;
