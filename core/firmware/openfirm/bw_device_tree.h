@@ -52,7 +52,11 @@ struct BwMachine {
     u32 cmd646_io[5] = {};
     // The display device (0 = none) and its current mode.
     u32 vram_base = 0, vram_size = 0;
-    u32 regs_base = 0, regs_size = 0;  // its register block (second "reg" entry; 0 = none)
+    u32 regs_base = 0, regs_size = 0;  // its register block (0 = none)
+    // Its PCI function on bus 0 (Grackle): BAR 0 = video memory (vram_bar
+    // bytes, a power of two), BAR 1 = the register block (regs_size).
+    u32 display_device = 0x10;
+    u32 vram_bar = 0;
     u32 width = 0, height = 0, depth = 0, linebytes = 0;
 };
 

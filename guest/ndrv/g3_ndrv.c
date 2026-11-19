@@ -280,20 +280,23 @@ static int initialize(const void *init_info)
 {
     /* DriverInitInfo: DriverRefNum refNum (2 bytes), then RegEntryID deviceEntry. */
     const void *entry = (const u8 *)init_info + 2;
-    u32 cells[8];
+    u32 cells[10];
     u32 vram = 0, regs = 0;
-    /* Logical addresses if Mac OS provides them (AAPL,address: one per reg entry);
-       otherwise the physical addresses in reg (see docs/guest/ndrv.md). */
-    s32 n = get_cells(entry, "AAPL,address", cells, 8);
+    /* Logical addresses as Mac OS maps them (AAPL,address: one per
+       assigned-addresses entry); otherwise the physical addresses in
+       assigned-addresses (PCI binding: phys.hi, phys.mid, phys.lo, size.hi,
+       size.lo per BAR; BAR 0 = video memory, BAR 1 = registers).
+       docs/guest/ndrv.md. */
+    s32 n = get_cells(entry, "AAPL,address", cells, 10);
     if (n >= 2) {
         vram = cells[0];
         regs = cells[1];
     } else {
-        n = get_cells(entry, "reg", cells, 8);
-        if (n < 4)
+        n = get_cells(entry, "assigned-addresses", cells, 10);
+        if (n < 10)
             return noHardwareErr;
-        vram = cells[0];
-        regs = cells[2];
+        vram = cells[2];
+        regs = cells[7];
     }
     g.regs = (volatile u32 *)regs;
     g.vram = (u8 *)vram;

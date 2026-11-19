@@ -70,6 +70,10 @@ public:
     static constexpr u32 kVramBase = 0x90000000u;
     static constexpr u32 kMaxVram = 16u << 20;
     static constexpr u32 kDisplayRegs = 0x91000000u;
+    // Its node sits on the Grackle bus as PCI device 0x10 (our choice of
+    // slot): Mac OS maps it from the node's assigned-addresses. It has no
+    // configuration space. docs/hardware/framebuffer.md.
+    static constexpr u32 kDisplayDevfn = 0x10 << 3;
 
     explicit YosemiteMachine(const YosemiteConfig& config);
 

@@ -360,17 +360,31 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
 
-    // --- display (our framebuffer device; properties as Linux offb reads them)
+    // --- display (our framebuffer device; docs/hardware/framebuffer.md).
+    // Under /pci, as PCI device display_device with assigned-addresses:
+    // Mac OS maps a device's memory and gives its driver logical addresses
+    // (AAPL,address) from them. As a root node with physical "reg" it stayed
+    // unmapped in Mac OS 9.2.1 and our driver's first register read faulted.
+    // There is no configuration space behind it (no vendor ID of ours to
+    // give), and Mac OS needs none: it maps from these properties. The
+    // other properties are the ones Linux offb reads.
     if (m.vram_size) {
-        char unit[9];
-        hex_unit(unit, m.vram_base);
-        n.display = t.add_node(n.root, "display", unit);
+        char dunit[9];
+        hex_unit(dunit, m.display_device);
+        n.display = t.add_node(n.pci, "display", dunit);
         t.set_string(n.display, "device_type", "display");
         t.set_string(n.display, "compatible", "display");
-        // reg: video memory, then the register block (our Mac OS driver
-        // finds both here; Linux offb uses the first entry / "address").
-        const u32 reg[4] = {m.vram_base, m.vram_size, m.regs_base, m.regs_size};
-        t.set_ints(n.display, "reg", reg, m.regs_size ? 4 : 2);
+        const u32 bar0 = pci_hi(kMem32, 0, m.display_device, 0, 0x10);
+        const u32 bar1 = pci_hi(kMem32, 0, m.display_device, 0, 0x14);
+        // reg (PCI binding): configuration space, then each BAR's size.
+        const u32 reg[15] = {pci_hi(kConfig, 0, m.display_device, 0, 0), 0, 0, 0, 0,
+                             bar0, 0, 0, 0, m.vram_bar,
+                             bar1, 0, 0, 0, m.regs_size};
+        t.set_ints(n.display, "reg", reg, m.regs_size ? 15 : 10);
+        // assigned-addresses: where the firmware put the BARs (n: not relocatable).
+        const u32 display_assigned[10] = {bar0 | 0x80000000u, 0, m.vram_base, 0, m.vram_bar,
+                                  bar1 | 0x80000000u, 0, m.regs_base, 0, m.regs_size};
+        t.set_ints(n.display, "assigned-addresses", display_assigned, m.regs_size ? 10 : 5);
         t.set_int(n.display, "address", m.vram_base);
         t.set_int(n.display, "width", m.width);
         t.set_int(n.display, "height", m.height);

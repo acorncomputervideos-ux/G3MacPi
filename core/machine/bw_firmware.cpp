@@ -96,6 +96,10 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         desc.vram_size = fb.vram_size();
         desc.regs_base = YosemiteMachine::kDisplayRegs;
         desc.regs_size = Framebuffer::kRegsSize;
+        desc.display_device = YosemiteMachine::kDisplayDevfn >> 3;
+        desc.vram_bar = 16;  // a power of two covering video memory (as a PCI BAR would be)
+        while (desc.vram_bar < fb.vram_size())
+            desc.vram_bar <<= 1;
         desc.width = fb.width();
         desc.height = fb.height();
         desc.depth = fb.depth();

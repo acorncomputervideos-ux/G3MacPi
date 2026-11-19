@@ -78,15 +78,28 @@ TEST_CASE("machine/bw-display/node_as_offb_reads_it")
     CHECK_EQ(r.prop(d, "depth"), 8u);
     CHECK_EQ(r.prop(d, "linebytes"), 640u);
     CHECK_EQ(r.prop(d, "address"), YosemiteMachine::kVramBase);
-    // reg is a root-level (1:1) address range that covers the frame buffer.
-    REQUIRE(t.get_property(d, "reg", p, len));
-    // Then the register block (for our Mac OS display driver).
-    REQUIRE(len == 16);
+    // A node on the Grackle bus (Mac OS maps it from its
+    // assigned-addresses): entry 0 = video memory, entry 1 = the registers.
+    CHECK_EQ(t.parent(d), r.fw->nodes().pci);
     auto cell = [&](u32 i) { return (static_cast<u32>(p[4 * i]) << 24) | (p[4 * i + 1] << 16) | (p[4 * i + 2] << 8) | p[4 * i + 3]; };
-    CHECK_EQ(cell(0), YosemiteMachine::kVramBase);
-    CHECK_EQ(cell(1), kVramSize);
-    CHECK_EQ(cell(2), YosemiteMachine::kDisplayRegs);
-    CHECK_EQ(cell(3), Framebuffer::kRegsSize);
+    REQUIRE(t.get_property(d, "assigned-addresses", p, len));
+    REQUIRE(len == 40);
+    const u32 dev = YosemiteMachine::kDisplayDevfn >> 3;
+    CHECK_EQ(cell(0), 0x82000010u | (dev << 11));   // n, 32-bit memory, BAR 0
+    CHECK_EQ(cell(2), YosemiteMachine::kVramBase);
+    CHECK_EQ(cell(4), kVramSize);
+    CHECK_EQ(cell(5), 0x82000014u | (dev << 11));   // BAR 1
+    CHECK_EQ(cell(7), YosemiteMachine::kDisplayRegs);
+    CHECK_EQ(cell(9), Framebuffer::kRegsSize);
+    REQUIRE(t.get_property(d, "reg", p, len));
+    REQUIRE(len == 60);
+    CHECK_EQ(cell(0), dev << 11);                   // configuration space
+    CHECK_EQ(cell(5), 0x02000010u | (dev << 11));
+    CHECK_EQ(cell(9), kVramSize);
+    CHECK_EQ(cell(10), 0x02000014u | (dev << 11));
+    CHECK_EQ(cell(14), Framebuffer::kRegsSize);
+    // No configuration space behind it (no vendor ID of ours).
+    CHECK_EQ(r.m->grackle().pci_bus().config_read(YosemiteMachine::kDisplayDevfn, 0x00), 0xFFFFFFFFu);
     CHECK_EQ(t.find("screen"), d);
     // Power-on picture: enabled, black.
     CHECK(r.m->display().enabled());

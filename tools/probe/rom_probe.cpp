@@ -620,6 +620,8 @@ int main(int argc, char** argv)
                 if (const char* path = std::getenv("G3_REGSAT_PATH")) {
                     char* e = nullptr;
                     u32 a = s.gpr[std::strtoul(path, &e, 10) & 31];
+                    if (e && *e == ':')  // n:off: start at rn + off (hex, may be negative)
+                        a += static_cast<u32>(std::strtol(e + 1, &e, 16));
                     auto word = [&](u32 ea) {
                         u32 pa = 0;
                         return r->cpu->probe_translate(ea, false, pa) && pa + 4 <= r->ram_size ? load_be32(r->ram + pa) : 0u;

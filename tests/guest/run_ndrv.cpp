@@ -191,7 +191,7 @@ int main(int argc, char** argv)
 
     Host host;
     host.bus = &bus;
-    host.props["reg"] = {kVram, kVramSize, kRegs, Framebuffer::kRegsSize};
+    host.props["assigned-addresses"] = {0x82008010u, 0, kVram, 0, kVramSize, 0x82008014u, 0, kRegs, 0, Framebuffer::kRegsSize};
     ppc::Ppc750 cpu(bus);
     cpu.set_hle_handler(trap, &host);
 
@@ -274,13 +274,17 @@ int main(int argc, char** argv)
     for (u32 i = 0; i < 16; ++i)
         wr8(bus, init + 2 + i, kEntryMagic);
     {
-        // No reg property: no hardware.
+        // No addresses: no hardware.
         auto saved = host.props;
         host.props.clear();
-        EXPECT(io(kInitialize, init, kImmediate) == noHardwareErr, "init without reg");
-        // reg pointing at RAM: the ID register doesn't match.
-        host.props["reg"] = {0x300000, 0x1000, 0x300000, 0x1000};
+        EXPECT(io(kInitialize, init, kImmediate) == noHardwareErr, "init without assigned-addresses");
+        // Addresses pointing at RAM: the ID register doesn't match.
+        host.props["assigned-addresses"] = {0x82008010u, 0, 0x300000, 0, 0x1000, 0x82008014u, 0, 0x300000, 0, 0x1000};
         EXPECT(io(kInitialize, init, kImmediate) == noHardwareErr, "init on the wrong device");
+        // AAPL,address (Mac OS's logical addresses) wins over assigned-addresses.
+        host.props["AAPL,address"] = {0x300000, 0x300000};
+        host.props["assigned-addresses"] = saved["assigned-addresses"];
+        EXPECT(io(kInitialize, init, kImmediate) == noHardwareErr, "init uses AAPL,address first");
         host.props = saved;
     }
     host.completions.clear();
@@ -516,7 +520,7 @@ int main(int argc, char** argv)
         Framebuffer small(small_vram.data(), static_cast<u32>(small_vram.size()));
         EXPECT(small.map(bus, 0x92000000u, 0x93000000u) && small.set_mode(1600, 1200, 8) == false,
                "second device (1600x1200 doesn't fit in 1 MB)");
-        host.props["reg"] = {0x92000000u, 1u << 20, 0x93000000u, Framebuffer::kRegsSize};
+        host.props["AAPL,address"] = {0x92000000u, 0x93000000u};  // Mac OS's logical addresses
         EXPECT(io(kInitialize, init, kImmediate) == noErr, "initialize on the small device");
         EXPECT(small.width() == 640 && small.depth() == 8 && small.enabled(), "unknown firmware mode: 640x480x8");
         u32 prev = 0xFFFFFFFEu, n = 0;

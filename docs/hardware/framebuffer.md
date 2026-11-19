@@ -11,9 +11,19 @@ the first Mac OS boots we use our own simple display device:
 Our firmware and our own Mac OS display driver are the only software that
 programs it, so its interface is our design. It imitates no real card.
 
-It isn't a PCI device. Mac OS and Linux both find displays through the
-device tree, and a PCI function would need a vendor ID; we must not
-borrow another company's.
+It isn't a PCI device: a PCI function would need a vendor ID, and we must
+not borrow another company's. Its device-tree node sits under `/pci`
+(Grackle) as device 0x10, with PCI-binding `reg` and `assigned-addresses`
+(entry 0 = video memory at 0x90000000, a power of two in size; entry 1 =
+the register block at 0x91000000). There is no configuration space
+behind it.
+
+Why under `/pci`: Mac OS maps a device's memory and gives its driver
+logical addresses (`AAPL,address`) from the node's `assigned-addresses`.
+As a root node with physical `reg`, Mac OS 9.2.1 left it unmapped, and
+our driver's first register read faulted (DSI at 0x91000000). That ended
+in System Error 11. Under `/pci` it is mapped and drawn on, without any
+configuration space (tried both ways).
 
 ## Pixel formats
 

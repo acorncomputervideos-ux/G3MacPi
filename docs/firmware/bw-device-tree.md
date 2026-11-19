@@ -42,9 +42,9 @@ value has one of these sources:
 | …/ata/disk@0 | `device_type` `block` | IEEE 1275 |
 | …/nvram@60000 | `reg` 0x60000 0x20000 | Linux nvram direct mode: stride = size / 8 KB = 16 (as emulated) |
 | /aliases | `hd`, `ide0`, `ide1`, `mac-io` | our choice |
+| /pci/display@10 | our display device: `device_type`/`compatible` "display", PCI-binding `reg` and `assigned-addresses` (video memory, registers), plus `address`, `width`, `height`, `depth`, `linebytes` | our design (docs/hardware/framebuffer.md). Under /pci so that Mac OS maps it from `assigned-addresses`; no configuration space behind it |
 
-Not in the tree yet: the SCC serial ports, audio, floppy, USB, the
-display. These hardware models don't exist yet, and a node without a
+Not in the tree yet: the SCC serial ports, audio, floppy, USB. These hardware models don't exist yet, and a node without a
 device would mislead an OS.
 
 ## Tests

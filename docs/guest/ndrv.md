@@ -39,8 +39,9 @@ explicit byte offsets, never C structs.
 
 - **Initialize** (and Replace):
   - Finds the device through the Name Registry: `AAPL,address` (logical
-    addresses) if present, else the node's `reg`. Our firmware gives two
-    `reg` entries: video memory, then the register block.
+    addresses, which Mac OS makes from `assigned-addresses`) if present,
+    else the physical addresses in `assigned-addresses`. Our firmware
+    gives two entries: video memory, then the register block.
   - Checks the ID register ('G3FB'); otherwise `noHardwareErr`.
   - Reads back the firmware's palette.
   - Keeps the firmware's mode if it's in the table; else uses 640x480 at
@@ -119,9 +120,10 @@ All of this needs a real Mac OS 9 boot:
   the driver, matching `nameInfoStr` "display" to our node's name, and
   preparing the fragment. The firmware doesn't yet put the PEF into the
   node's `driver,AAPL,MacOS,PowerPC` property; that is the next step.
-- **Addresses.** If Mac OS creates no `AAPL,address` for our device (it
-  isn't on PCI), the driver uses the physical addresses in `reg`. That
-  assumes Mac OS maps them 1:1.
+- **Addresses.** Mac OS 9.2.1 does not map a root-level device 1:1; our
+  driver's first register read faulted there. The node now sits under
+  `/pci` with `assigned-addresses`, and Mac OS maps it (the CD's start-up
+  desktop pattern is drawn through the driver).
 - **Interrupts.** No vertical-blanking interrupt is offered: there is no
   Video Services Library call yet. The Display Manager may need one for
   the cursor.
