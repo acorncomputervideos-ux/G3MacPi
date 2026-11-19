@@ -14,7 +14,9 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
   - `ori`, `oris`, `xori`, `xoris`;
   - `rlwinm` without Rc;
   - `add`, `subf`, `and`, `or`, `xor` without OE or Rc;
-  - `mflr`, `mfctr`.
+  - `mflr`, `mfctr`;
+  - the D-form integer loads and stores (`lwz`, `lbz`, `lhz`, `stw`,
+    `stb`, `sth` and their update forms; see below).
 - **Everything else** calls its stage-1 block handler, the same function
   the block cache runs. Results therefore come from the interpreter's own
   code.
@@ -34,6 +36,25 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
   cache (on its flushes, and through a flush when it runs out).
 - **When it runs:** only whole blocks run as generated code. Near the end
   of a `run()` budget, a block runs operation by operation instead.
+
+### Loads and stores
+
+The generated fast path repeats `mem_fast`'s checks inline, in the same
+order:
+1. the access stays within its 4 KB page;
+2. real mode, or a data-TLB hit (the tag includes MSR[PR]; stores also
+   need the writable and changed bits);
+3. the physical address lies inside the RAM window;
+4. for stores, the page holds no blocks.
+
+Then the access itself, byte-swapped (`rev`/`rev16`). Anything else runs
+the instruction's handler, which does the whole instruction again;
+nothing has been changed before that decision. Pages with blocks are left
+to the handler, so `note_write` sees every store to code. A memory
+instruction is a sync point: PC and count are written before it and,
+on the fast path, after it. `JitStats::memory_slow` counts the handler
+calls. In 0.6 s of the ROM boot, 129,529 loads and stores took the
+handler.
 
 Configuration: `YosemiteConfig::jit_code` / `jit_code_words`, and
 `jit = yes` in `g3macpi.ini` on the Pi (block cache and code). Without a
@@ -79,6 +100,17 @@ Native execution on the Pi has not been tested yet.
   operands, a missing PC write, wrong counts, a missing exit check, a
   wrong rotate, the rA = 0 rule, Rc forms compiled natively, a wrong
   register restore, a missing code-buffer reset, and others).
+- **Memory path:** 14 more sabotages, all caught:
+  - byte swaps, the tag compare, the writable check, the PR bit, the
+    code-page check;
+  - the page-crossing check, caught by an access that leaves BAT1's
+    window and by a store that spills onto a page with compiled code;
+  - the RAM bound, real/translated selection, the TLB index, update
+    writes and syncs.
+
+  The TLB-index sabotage only costs speed. It is caught by
+  `generated_loads_and_stores_take_the_fast_path`, which requires
+  that almost all accesses in a loop are done in generated code.
 - **ROM boot:** `G3_JIT=8 G3_JITCODE=8 g3_rom_probe` runs the Mac OS ROM
   boot with generated code on the simulator. Over 3 s of guest time
   (1.05 × 10⁹ instructions, 3.9 × 10⁸ block runs in generated code) it
@@ -86,12 +118,12 @@ Native execution on the Pi has not been tested yet.
 
 ## Coverage, and what comes next
 
-In that boot, 27% of compiled operations were native and the rest were
-handler calls. The next steps, in order of expected gain:
+With loads and stores, 36% of compiled operations in that boot are
+native (27% before). The ROM boot still ends bit-identical. Next, in
+order of expected gain:
 
-1. Loads and stores: real-mode and soft-TLB fast path inline, the
-   handler otherwise.
-2. Compares and CR0 updates.
-3. Branches at block end, linking blocks directly.
+1. Compares and CR0 updates (`cmp*`, `andi.`, Rc forms).
+2. Branches at block end, linking blocks directly.
+3. Keeping the instruction count in a register between handler calls.
 
 Speed can only be measured on the Pi.

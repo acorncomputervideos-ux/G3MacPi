@@ -104,6 +104,9 @@ public:
     // Blocks of kMaxOps operations that fit (more, shorter ones do).
     u32 capacity() const { return pool_bytes_ / block_bytes(kMaxOps); }
     u32 pages() const { return pages_; }
+    // Per RAM page: nonzero if blocks were built from it (for the JIT's
+    // inline stores, which must leave such pages to note_write()).
+    const u8* code_pages() const { return code_; }
 
 private:
     u32* gen_ = nullptr;    // per RAM page

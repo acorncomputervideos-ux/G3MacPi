@@ -28,7 +28,7 @@ const Golden kGolden[] = {
 
 TEST_CASE("cpu/a64/encodings_match_gnu_as")
 {
-    std::vector<u32> buf(0x20000);
+    std::vector<u32> buf(0x80000);
     u32 index = 0, bad = 0;
 #define CASE(asm_text, ...)                                                                          \
     do {                                                                                         \

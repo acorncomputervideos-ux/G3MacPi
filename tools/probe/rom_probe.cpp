@@ -514,10 +514,11 @@ int main(int argc, char** argv)
                     static_cast<unsigned long long>(st.flushes), static_cast<unsigned long long>(st.invalidations));
         const auto& js = m.cpu().jit_stats();
         if (m.jit_enabled())
-            std::printf("[probe] jit: %llu compiled, %llu runs, %llu native / %llu handler operations, %llu resets\n",
+            std::printf("[probe] jit: %llu compiled, %llu runs, %llu native / %llu handler operations, %llu resets, "
+                        "%llu loads/stores on the slow path\n",
                         static_cast<unsigned long long>(js.compiled), static_cast<unsigned long long>(js.runs),
                         static_cast<unsigned long long>(js.native_ops), static_cast<unsigned long long>(js.helper_ops),
-                        static_cast<unsigned long long>(js.resets));
+                        static_cast<unsigned long long>(js.resets), static_cast<unsigned long long>(js.memory_slow));
     }
     // Interrupt controller state at the end.
     std::printf("[pic] enabled=%016llX output=%d\n",

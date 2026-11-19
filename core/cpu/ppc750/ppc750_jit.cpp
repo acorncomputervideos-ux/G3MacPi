@@ -15,8 +15,9 @@
 //
 // Registers: x19 = the Ppc750, x20 = its CpuState, w21 = the PC at block
 // entry (a block is found by physical address and may be entered at any
-// effective address that maps to it). w8-w12 are scratch; x16 holds call
-// targets, x17 far addresses.
+// effective address that maps to it). In blocks with loads or stores:
+// x22 = guest RAM, x23 = the block cache's per-page code flags, x24 = the
+// data TLB. w8-w15 are scratch; x16 holds call targets, x17 far addresses.
 
 #include "core/cpu/ppc750/ppc750.h"
 #include "core/cpu/ppc750/jit/a64_assembler.h"
@@ -54,6 +55,15 @@ struct JitCompiler {
     static constexpr u32 gpr_off(u32 r) { return static_cast<u32>(__builtin_offsetof(CpuState, gpr)) + 4 * r; }
     static constexpr u32 pc_off() { return static_cast<u32>(__builtin_offsetof(CpuState, pc)); }
     static constexpr u32 spr_off(u32 n) { return static_cast<u32>(__builtin_offsetof(CpuState, spr)) + 4 * n; }
+    static constexpr u32 msr_off() { return static_cast<u32>(__builtin_offsetof(CpuState, msr)); }
+    static constexpr u32 tlb_tag_off = __builtin_offsetof(Ppc750::TlbEntry, tag);
+    static constexpr u32 tlb_pa_off = __builtin_offsetof(Ppc750::TlbEntry, pa_page);
+    static constexpr u32 tlb_writable_off = __builtin_offsetof(Ppc750::TlbEntry, writable);
+    static constexpr u32 tlb_changed_off = __builtin_offsetof(Ppc750::TlbEntry, changed);
+    static constexpr u32 tlb_valid = Ppc750::kTlbValid;
+    static_assert(sizeof(Ppc750::TlbEntry) == 12, "the generated TLB lookup assumes 12-byte entries");
+    static_assert(Ppc750::kTlbSize == 256, "the generated TLB lookup assumes 256 entries");
+    u32 ram_off, ram_size_off, dtlb_off, tlb_on_off, slow_off;
 
     // Base + offset into x17 when the offset does not fit the instruction.
     Reg far(Reg base, u32& off, u32 size)
@@ -185,13 +195,149 @@ struct JitCompiler {
         }
     }
 
+    void call_handler(u32 i, u32 count, const BlockOp& op, Assembler::Label& out)
+    {
+        a.mov(true, X0, X19);
+        a.mov_imm32(X1, op.insn);
+        a.mov_imm64(X16, reinterpret_cast<u64>(op.fn));
+        a.blr(X16);
+        if (i + 1 < count) {
+            u32 off = exit_off;
+            const Reg base = far(X19, off, 1);
+            a.ldrb(X8, base, off);
+            a.cbnz(false, X8, out);
+        }
+    }
+
+    // --- D-form integer loads and stores ------------------------------------------
+    // The fast path is mem_fast's: the access stays in its page; real mode
+    // or a data-TLB hit (stores: writable, C bit set); inside the RAM
+    // window; stores: not to a page holding blocks. Then the access itself,
+    // big-endian. Anything else runs the instruction's handler, which does
+    // it all over (nothing has been changed before the decision).
+    struct MemOp {
+        u32 size;
+        bool store, update;
+    };
+    static bool memory_op(u32 insn, MemOp& m)
+    {
+        switch (field::opcd(insn)) {
+        case 32: m = {4, false, false}; return true;  // lwz
+        case 33: m = {4, false, true}; return true;   // lwzu
+        case 34: m = {1, false, false}; return true;  // lbz
+        case 35: m = {1, false, true}; return true;   // lbzu
+        case 36: m = {4, true, false}; return true;   // stw
+        case 37: m = {4, true, true}; return true;    // stwu
+        case 38: m = {1, true, false}; return true;   // stb
+        case 39: m = {1, true, true}; return true;    // stbu
+        case 40: m = {2, false, false}; return true;  // lhz
+        case 41: m = {2, false, true}; return true;   // lhzu
+        case 44: m = {2, true, false}; return true;   // sth
+        case 45: m = {2, true, true}; return true;    // sthu
+        default: return false;
+        }
+    }
+    static bool has_memory_ops(const BlockCache::Block& b)
+    {
+        MemOp m;
+        for (u32 i = 0; i < b.count; ++i)
+            if (memory_op(b.ops[i].insn, m))
+                return true;
+        return false;
+    }
+    static constexpr u32 bit_of(u32 mask) { return static_cast<u32>(__builtin_ctz(mask)); }
+
+    // PC and count are already written (a memory op is a sync point).
+    void memory(u32 i, u32 count, const BlockOp& op, const MemOp& m, Assembler::Label& out)
+    {
+        const u32 insn = op.insn, rd = field::rd(insn), ra = field::ra(insn);
+        Assembler::Label slow, have_pa, done;
+        // w8 = EA
+        load_gpr_or_zero(X8, ra);
+        add_const(X8, X8, field::simm(insn));
+        if (m.size > 1) {
+            a.ubfx(X9, X8, 0, 12);
+            a.cmp_imm(false, X9, 0x1000 - m.size);
+            a.b_cond(Assembler::HI, slow);  // crosses into the next page
+        }
+        // w9 = PA
+        a.ldr(false, X10, X20, msr_off());
+        a.mov(false, X9, X8);
+        a.tbz(X10, bit_of(msr::DR), have_pa);
+        {
+            u32 off = tlb_on_off;
+            const Reg base = far(X19, off, 1);
+            a.ldrb(X11, base, off);
+            a.cbz(false, X11, slow);
+        }
+        a.lsr_imm(X11, X8, 12);                         // page
+        a.ubfx(X12, X11, 0, 8);                         // index (256 entries)
+        a.add(true, X12, X12, X12, 1);                  // * 3
+        a.add(true, X12, X24, X12, 2);                  // * 4: the entry (12 bytes)
+        a.ldr(false, X13, X12, tlb_tag_off);
+        a.ubfx(X14, X10, bit_of(msr::PR), 1);
+        a.orr(false, X14, X14, X11, 1);
+        a.mov_imm32(X15, tlb_valid);
+        a.orr(false, X14, X14, X15);                    // the tag a hit has
+        a.cmp(false, X13, X14);
+        a.b_cond(Assembler::NE, slow);
+        if (m.store) {
+            a.ldrb(X13, X12, tlb_writable_off);
+            a.cbz(false, X13, slow);
+            a.ldrb(X13, X12, tlb_changed_off);
+            a.cbz(false, X13, slow);
+        }
+        a.ldr(false, X13, X12, tlb_pa_off);
+        a.ubfx(X9, X8, 0, 12);
+        a.orr(false, X9, X13, X9);
+        a.bind(have_pa);
+        {   // inside the RAM window (which starts at 0): PA <= size - access
+            u32 off = ram_size_off;
+            const Reg base = far(X19, off, 4);
+            a.ldr(false, X13, base, off);
+        }
+        a.sub_imm(false, X13, X13, m.size);
+        a.cmp(false, X9, X13);
+        a.b_cond(Assembler::HI, slow);
+        if (m.store) {
+            a.lsr_imm(X13, X9, 12);
+            a.ldr_reg(1, X13, X23, X13);
+            a.cbnz(false, X13, slow);                   // page holds blocks: note_write's business
+            load_gpr(X10, rd);
+            if (m.size == 4) a.rev(X10, X10);
+            else if (m.size == 2) a.rev16(X10, X10);
+            a.str_reg(m.size, X10, X22, X9);
+        } else {
+            a.ldr_reg(m.size, X10, X22, X9);
+            if (m.size == 4) a.rev(X10, X10);
+            else if (m.size == 2) a.rev16(X10, X10);
+            store_gpr(X10, rd);
+        }
+        if (m.update)
+            store_gpr(X8, ra);
+        u32 one = 1;
+        sync(i + 1, one);
+        a.b(done);
+        a.bind(slow);
+        {
+            u32 off = slow_off;
+            const Reg base = far(X19, off, 8);
+            a.ldr(true, X13, base, off);
+            a.add_imm(true, X13, X13, 1);
+            a.str(true, X13, base, off);
+        }
+        call_handler(i, count, op, out);
+        a.bind(done);
+    }
+
     bool compile(BlockCache::Block& b)
     {
         Assembler::Label out;
-        a.stp_pre(X29, X30, SP, -48);
+        a.stp_pre(X29, X30, SP, -64);
         a.mov_from_sp(X29);
         a.stp(X19, X20, SP, 16);
         a.stp(X21, X22, SP, 32);
+        a.stp(X23, X24, SP, 48);
         a.mov(true, X19, X0);
         const u32 s_off = static_cast<u32>(reinterpret_cast<const u8*>(&c.s_) - reinterpret_cast<const u8*>(&c));
         if (s_off < 4096) {
@@ -201,6 +347,15 @@ struct JitCompiler {
             a.add(true, X20, X19, X20);
         }
         a.ldr(false, X21, X20, pc_off());
+        if (has_memory_ops(b)) {
+            // x22 = RAM, x23 = the cache's per-page code flags, x24 = DTLB.
+            u32 off = ram_off;
+            const Reg base = far(X19, off, 8);
+            a.ldr(true, X22, base, off);
+            a.mov_imm64(X23, reinterpret_cast<u64>(c.cache_->code_pages()));
+            a.mov_imm64(X24, dtlb_off);
+            a.add(true, X24, X19, X24);
+        }
 
         u32 pending = 0;
         for (u32 i = 0; i < b.count; ++i) {
@@ -211,23 +366,21 @@ struct JitCompiler {
                 continue;
             }
             sync(i, pending);
-            a.mov(true, X0, X19);
-            a.mov_imm32(X1, op.insn);
-            a.mov_imm64(X16, reinterpret_cast<u64>(op.fn));
-            a.blr(X16);
-            ++c.jit_stats_.helper_ops;
-            if (i + 1 < b.count) {
-                u32 off = exit_off;
-                const Reg base = far(X19, off, 1);
-                a.ldrb(X8, base, off);
-                a.cbnz(false, X8, out);
+            MemOp m;
+            if (memory_op(op.insn, m)) {
+                memory(i, b.count, op, m, out);
+                ++c.jit_stats_.native_ops;
+                continue;
             }
+            call_handler(i, b.count, op, out);
+            ++c.jit_stats_.helper_ops;
         }
         sync(b.count, pending);
         a.bind(out);
+        a.ldp(X23, X24, SP, 48);
         a.ldp(X21, X22, SP, 32);
         a.ldp(X19, X20, SP, 16);
-        a.ldp_post(X29, X30, SP, 48);
+        a.ldp_post(X29, X30, SP, 64);
         a.ret();
         return a.ok();
     }
@@ -267,9 +420,11 @@ bool Ppc750::jit_compile(BlockCache::Block* b)
         ++jit_stats_.resets;
     }
     Assembler a(jit_code_ + jit_used_, jit_words_ - jit_used_);
-    JitCompiler jc{*this, a,
-                   static_cast<u32>(reinterpret_cast<const u8*>(&instr_count_) - reinterpret_cast<const u8*>(this)),
-                   static_cast<u32>(reinterpret_cast<const u8*>(&exit_) - reinterpret_cast<const u8*>(this))};
+    auto off = [this](const void* p) {
+        return static_cast<u32>(static_cast<const u8*>(p) - reinterpret_cast<const u8*>(this));
+    };
+    JitCompiler jc{*this, a, off(&instr_count_), off(&exit_), off(&ram_), off(&ram_size_), off(&dtlb_[0]),
+                   off(&tlb_enabled_), off(&jit_stats_.memory_slow)};
     if (!jc.compile(*b))
         return false;  // out of room: the block runs without code
     sync_icache(jit_code_ + jit_used_, jit_code_ + jit_used_ + a.size());

@@ -32,6 +32,7 @@ public:
 private:
     bool fail(const char* why, const u32* pc, const void* lo);
     u64 x_[32] = {};   // x_[31]: SP
+    bool n_ = false, z_ = false, c_ = false, v_ = false;  // NZCV
     alignas(16) u8 stack_[64 * 1024];
     const char* error_ = nullptr;
     u32 error_off_ = 0;

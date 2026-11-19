@@ -137,6 +137,7 @@ public:
     bool set_jit(u32* code, u32 words, JitRunner runner, void* context);
     struct JitStats {
         u64 compiled = 0, native_ops = 0, helper_ops = 0, resets = 0, runs = 0;
+        u64 memory_slow = 0;  // generated loads/stores that took the handler
     };
     const JitStats& jit_stats() const { return jit_stats_; }
     // Ends the current run() after the instruction executing now (e.g. after a

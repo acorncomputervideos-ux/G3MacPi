@@ -596,3 +596,180 @@ BOTH(code_buffer_runs_out)
     if (g_jit)
         CHECK(t.jit_resets > 20);
 }
+
+namespace {
+// BATs for the memory tests: BAT0 maps EA 0..1 MB to PA 0, supervisor and
+// user, read/write; BAT1 maps EA 0x10000000.. (128 KB) to PA 0x40000,
+// supervisor only, read-only (BATL PP = 01).
+void map_test_bats(Machine& m)
+{
+    CpuState& s = m.cpu.state();
+    s.spr[spr::IBAT0U] = s.spr[spr::DBAT0U] = 0x0000001Fu;
+    s.spr[spr::IBAT0U + 1] = s.spr[spr::DBAT0U + 1] = 0x00000002u;
+    s.spr[spr::DBAT0U + 2] = 0x10000002u;               // BEPI 0x10000000, 128 KB, Vs only
+    s.spr[spr::DBAT0U + 3] = 0x00040001u;               // BRPN 0x40000, PP = read-only
+    s.msr |= msr::IR | msr::DR;
+    m.cpu.flush_tlb();
+}
+} // namespace
+
+BOTH(unaligned_and_page_crossing_accesses)
+{
+    // Word and halfword accesses at every offset around a page edge, in
+    // real mode and translated: those that cross go the slow way.
+    for (int translated = 0; translated < 2; ++translated) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            u32 at = 0x5000;
+            for (u32 off = 0x1FF8; off <= 0x2004; ++off) {
+                const u32 words[] = {lwz(3, off, 0), stw(4, off, 0), lhz(5, off, 0), sth(6, off, 0),
+                                     lbz(7, off, 0), stb(8, off, 0), addi(4, 4, 0x111), addi(6, 6, 0x22)};
+                for (u32 w : words) {
+                    store_be32(m->ram.data() + at, w);
+                    at += 4;
+                }
+            }
+            store_be32(m->ram.data() + at, 0x00000000u);
+            for (u32 k = 0; k < 64; ++k)
+                m->ram[0x1FE0 + k] = static_cast<u8>(k * 7 + 1);
+            m->cpu.state().pc = 0x5000;
+            m->cpu.state().msr = msr::ME;
+            m->cpu.state().gpr[4] = 0xA1B2C3D4u;
+            m->cpu.state().gpr[6] = 0x5566u;
+            m->cpu.state().gpr[8] = 0x99u;
+            if (translated)
+                map_test_bats(*m);
+            m->cpu.run((at - 0x5000) / 4);
+        }
+        CHECK(same(a, c, "page edge", translated, 0));
+        CHECK_EQ(c.cpu.state().pc, 0x5000u + 13 * 32);
+    }
+}
+
+BOTH(read_only_and_user_mode_translations)
+{
+    // A supervisor load through read-only BAT1 puts an entry in the data
+    // TLB; a store through it must still fault (DSI), and so must a user
+    // load (BAT1 is supervisor-only) although a supervisor entry exists.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lwz(3, 0, 4)},        // supervisor load: TLB entry, not writable
+            {0x5004, lwz(3, 4, 4)},        // again, a hit
+            {0x5008, stw(5, 0, 4)},        // store: DSI
+            {0x500C, 0x00000000u},
+            // DSI handler: count, then go to user mode at 0x6000.
+            {0x300, addi(30, 30, 1)},
+            {0x304, cmpwi(0, 30, 1)},
+            {0x308, bne(0x10)},            // second DSI: to 0x318
+            {0x30C, mtspr(26, 20)},        // SRR0 = r20 (0x6000)
+            {0x310, mtspr(27, 21)},        // SRR1 = r21 (user, IR, DR, ME)
+            {0x314, rfi()},
+            {0x318, b(0)},                 // stop here
+            {0x6000, lwz(6, 0, 4)},        // user load through BAT1: DSI
+            {0x6004, 0x00000000u},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[4] = 0x10000000u;
+        m->cpu.state().gpr[5] = 0xDEADBEEFu;
+        m->cpu.state().gpr[20] = 0x6000u;
+        m->cpu.state().gpr[21] = msr::PR | msr::IR | msr::DR | msr::ME;
+        store_be32(m->ram.data() + 0x40000, 0x11223344u);
+        store_be32(m->ram.data() + 0x40004, 0x55667788u);
+        map_test_bats(*m);
+        m->cpu.run(40);
+    }
+    CHECK(same(a, c, "read-only/user", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 0x55667788u);
+    CHECK_EQ(c.cpu.state().gpr[30], 2u);           // two DSIs
+    CHECK_EQ(c.cpu.state().gpr[6], 0u);            // the user load did not happen
+    CHECK_EQ(load_be32(c.ram.data() + 0x40000), 0x11223344u);  // nor the store
+    CHECK_EQ(c.cpu.state().pc, 0x318u);
+}
+
+BOTH(generated_loads_and_stores_take_the_fast_path)
+{
+    // A loop of loads and stores to RAM, translated (through BAT1's
+    // read-only window for loads and BAT0 for stores) and in real mode:
+    // after the first TLB fills, every access is done in generated code.
+    for (int translated = 0; translated < 2; ++translated) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            place(*m, {
+                {0x5000, li(7, 100)},
+                {0x5004, mtspr(9, 7)},
+                {0x5008, lwz(3, 0, 4)},
+                {0x500C, lhz(5, 6, 4)},
+                {0x5010, lbz(6, 9, 4)},
+                {0x5014, stwu(3, 4, 8)},
+                {0x5018, sth(5, 2, 8)},
+                {0x501C, stb(6, 1, 8)},
+                {0x5020, bdnz(-0x18)},
+                {0x5024, 0x00000000u},
+            });
+            m->cpu.state().pc = 0x5000;
+            m->cpu.state().msr = msr::ME;
+            m->cpu.state().gpr[4] = translated ? 0x10000000u : 0x40000u;
+            m->cpu.state().gpr[8] = 0x8000u;
+            for (u32 k = 0; k < 16; ++k)
+                m->ram[0x40000 + k] = static_cast<u8>(0xA0 + k);
+            if (translated)
+                map_test_bats(*m);
+            m->cpu.run(2 + 100 * 7);
+        }
+        CHECK(same(a, c, "fast path", translated, 0));
+        CHECK_EQ(c.cpu.state().pc, 0x5024u);
+        if (g_jit) {
+            // 600 accesses; only the first of each kind may miss the TLB.
+            CHECK(c.cpu.jit_stats().memory_slow <= 8);
+            CHECK(c.cpu.jit_stats().runs >= 99);
+        }
+    }
+}
+
+BOTH(page_crossing_access_needs_both_pages)
+{
+    // A word that crosses out of BAT1's window must fault (DSI) although
+    // its first byte is mapped; a real-mode store whose last bytes fall on
+    // a page with compiled code must drop that code.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x6000, call(0x6000, 0x5000)},   // r3 = 1: block at 0x5000 built (and compiled)
+            {0x6004, stw(11, 0, 10)},         // [0x4FFE] = 00 00 38 80: 0x5000 becomes li r4,1
+            {0x6008, call(0x6008, 0x5000)},   // r4 = 1
+            {0x600C, 0x00000000u},
+            {0x5000, li(3, 1)},
+            {0x5004, blr()},
+            {0x700, b(0)},                    // program exception: stop
+        });
+        m->cpu.state().pc = 0x6000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[10] = 0x4FFE;
+        m->cpu.state().gpr[11] = 0x00003880u;
+        m->cpu.run(7);
+    }
+    CHECK(same(a, c, "crossing store", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 1u);
+    CHECK_EQ(c.cpu.state().pc, 0x600Cu);
+
+    Machine a2(0), c2(4u << 20);
+    for (Machine* m : {&a2, &c2}) {
+        place(*m, {
+            {0x5000, lwz(3, static_cast<u32>(-2) & 0xFFFF, 9)},  // EA 0x1001FFFE: crosses out of BAT1
+            {0x5004, 0x00000000u},
+            {0x300, addi(30, 30, 1)},
+            {0x304, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[9] = 0x10020000u;
+        m->cpu.state().gpr[3] = 0x77u;
+        map_test_bats(*m);
+        m->cpu.run(4);
+    }
+    CHECK(same(a2, c2, "crossing load", 0, 0));
+    CHECK_EQ(c2.cpu.state().gpr[30], 1u);   // DSI
+    CHECK_EQ(c2.cpu.state().gpr[3], 0x77u); // not loaded
+}

@@ -157,3 +157,124 @@ TEST_CASE("cpu/a64sim/strict")
         CHECK(v != 7u);
     }
 }
+
+TEST_CASE("cpu/a64sim/compares_and_conditions")
+{
+    // For each pair and condition: a program that returns 1 in out[0] when
+    // the branch is taken; compared with the C++ comparison.
+    const u32 vals[] = {0, 1, 2, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 0xFFFFFFFE, 1234};
+    struct C { Assembler::Cond c; bool (*f)(u32, u32); };
+    const C conds[] = {
+        {Assembler::EQ, [](u32 a, u32 b) { return a == b; }},
+        {Assembler::NE, [](u32 a, u32 b) { return a != b; }},
+        {Assembler::HS, [](u32 a, u32 b) { return a >= b; }},
+        {Assembler::LO, [](u32 a, u32 b) { return a < b; }},
+        {Assembler::HI, [](u32 a, u32 b) { return a > b; }},
+        {Assembler::LS, [](u32 a, u32 b) { return a <= b; }},
+        {Assembler::GE, [](u32 a, u32 b) { return static_cast<s32>(a) >= static_cast<s32>(b); }},
+        {Assembler::LT, [](u32 a, u32 b) { return static_cast<s32>(a) < static_cast<s32>(b); }},
+        {Assembler::GT, [](u32 a, u32 b) { return static_cast<s32>(a) > static_cast<s32>(b); }},
+        {Assembler::LE, [](u32 a, u32 b) { return static_cast<s32>(a) <= static_cast<s32>(b); }},
+        {Assembler::MI, [](u32 a, u32 b) { return static_cast<s32>(a - b) < 0; }},
+        {Assembler::PL, [](u32 a, u32 b) { return static_cast<s32>(a - b) >= 0; }},
+        {Assembler::VS, [](u32 a, u32 b) { const s64 d = static_cast<s64>(static_cast<s32>(a)) - static_cast<s32>(b); return d != static_cast<s32>(d); }},
+        {Assembler::VC, [](u32 a, u32 b) { const s64 d = static_cast<s64>(static_cast<s32>(a)) - static_cast<s32>(b); return d == static_cast<s32>(d); }},
+    };
+    u32 bad = 0;
+    for (u32 a : vals)
+        for (u32 b : vals)
+            for (const C& c : conds) {
+                Prog p;
+                Assembler::Label taken, done;
+                p.a.mov_imm32(X8, a);
+                p.a.mov_imm32(X9, b);
+                p.a.cmp(false, X8, X9);
+                p.a.b_cond(c.c, taken);
+                p.a.movz(false, X10, 0, 0);
+                p.a.b(done);
+                p.a.bind(taken);
+                p.a.movz(false, X10, 1, 0);
+                p.a.bind(done);
+                p.a.str(false, X10, X0, 0);
+                p.a.ret();
+                u32 out = 7;
+                REQUIRE(p.run(reinterpret_cast<u64>(&out)));
+                bad += out != (c.f(a, b) ? 1u : 0u);
+            }
+    CHECK_EQ(bad, 0u);
+    // cmp with an immediate: HI for unsigned greater.
+    Prog p;
+    Assembler::Label hi;
+    p.a.mov_imm32(X8, 0xFFD);
+    p.a.cmp_imm(false, X8, 0xFFC);
+    p.a.b_cond(Assembler::HI, hi);
+    p.a.ret();
+    p.a.bind(hi);
+    p.a.str(false, X8, X0, 0);
+    p.a.ret();
+    u32 out = 0;
+    CHECK(p.run(reinterpret_cast<u64>(&out)));
+    CHECK_EQ(out, 0xFFDu);
+}
+
+TEST_CASE("cpu/a64sim/bitfields_bytes_and_register_offsets")
+{
+    Prog p;
+    Assembler& a = p.a;
+    a.mov_imm32(X8, 0x12345678);
+    a.lsr_imm(X9, X8, 12);          // 0x12345
+    a.ubfx(X10, X8, 4, 8);          // 0x67
+    a.ubfx(X11, X8, 0, 12);         // 0x678
+    a.rev(X12, X8);                 // 0x78563412
+    a.rev16(X13, X8);               // 0x34127856
+    a.add(true, X14, X9, X9, 1);    // 3 * 0x12345
+    a.orr(false, X15, X10, X11, 8); // 0x67 | 0x67800
+    a.str(false, X9, X0, 0);
+    a.str(false, X10, X0, 4);
+    a.str(false, X11, X0, 8);
+    a.str(false, X12, X0, 12);
+    a.str(false, X13, X0, 16);
+    a.str(false, X14, X0, 20);
+    a.str(false, X15, X0, 24);
+    // Register offsets: x1 = buffer, index 3.
+    a.add_imm(true, X1, X0, 64);
+    a.movz(true, X2, 3, 0);
+    a.str_reg(4, X8, X1, X2);       // bytes 3..6 = 78 56 34 12 (little-endian)
+    a.ldr_reg(1, X3, X1, X2);       // 0x78
+    a.ldr_reg(2, X4, X1, X2);       // 0x5678
+    a.ldr_reg(4, X5, X1, X2);       // 0x12345678
+    a.str(false, X3, X0, 28);
+    a.str(false, X4, X0, 32);
+    a.str(false, X5, X0, 36);
+    a.mov_imm32(X6, 0xAABBCCDD);
+    a.str_reg(2, X6, X1, X2);       // halfword: DD CC
+    a.str_reg(1, X6, X1, X2);       // byte: DD
+    // tbz/tbnz
+    Assembler::Label t1, t2;
+    a.movz(false, X7, 0, 0);
+    a.tbnz(X8, 4, t1);              // bit 4 of 0x...78 = 1: taken
+    a.movz(false, X7, 9, 0);
+    a.bind(t1);
+    a.tbz(X8, 3, t2);               // bit 3 = 1: not taken
+    a.add_imm(false, X7, X7, 2);
+    a.bind(t2);
+    a.str(false, X7, X0, 40);
+    a.ret();
+    u32 out[32] = {};
+    CHECK(p.run(reinterpret_cast<u64>(out)));
+    CHECK_EQ(out[0], 0x12345u);
+    CHECK_EQ(out[1], 0x67u);
+    CHECK_EQ(out[2], 0x678u);
+    CHECK_EQ(out[3], 0x78563412u);
+    CHECK_EQ(out[4], 0x34127856u);
+    CHECK_EQ(out[5], 3u * 0x12345u);
+    CHECK_EQ(out[6], 0x67867u);
+    CHECK_EQ(out[7], 0x78u);
+    CHECK_EQ(out[8], 0x5678u);
+    CHECK_EQ(out[9], 0x12345678u);
+    const u8* buf = reinterpret_cast<const u8*>(out) + 64;
+    CHECK_EQ(buf[3], 0xDDu);
+    CHECK_EQ(buf[4], 0xCCu);
+    CHECK_EQ(buf[5], 0x34u);
+    CHECK_EQ(out[10], 2u);
+}

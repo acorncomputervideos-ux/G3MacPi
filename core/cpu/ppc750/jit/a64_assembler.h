@@ -39,7 +39,7 @@ public:
     struct Label {
         u32 pos = 0;
         bool bound = false;
-        u32 pending[64];
+        u32 pending[128];
         u32 npending = 0;
     };
     void bind(Label& l);
@@ -56,11 +56,22 @@ public:
     // --- arithmetic and logic
     void add_imm(bool x, Reg rd, Reg rn, u32 imm12, bool lsl12 = false);
     void sub_imm(bool x, Reg rd, Reg rn, u32 imm12, bool lsl12 = false);
-    void add(bool x, Reg rd, Reg rn, Reg rm);
-    void sub(bool x, Reg rd, Reg rn, Reg rm);
-    void and_(bool x, Reg rd, Reg rn, Reg rm);
-    void orr(bool x, Reg rd, Reg rn, Reg rm);
-    void eor(bool x, Reg rd, Reg rn, Reg rm);
+    // Register forms; `lsl` shifts rm left first.
+    void add(bool x, Reg rd, Reg rn, Reg rm, u32 lsl = 0);
+    void sub(bool x, Reg rd, Reg rn, Reg rm, u32 lsl = 0);
+    void and_(bool x, Reg rd, Reg rn, Reg rm, u32 lsl = 0);
+    void orr(bool x, Reg rd, Reg rn, Reg rm, u32 lsl = 0);
+    void eor(bool x, Reg rd, Reg rn, Reg rm, u32 lsl = 0);
+    // Compare (SUBS to the zero register): sets NZCV.
+    void cmp(bool x, Reg rn, Reg rm);
+    void cmp_imm(bool x, Reg rn, u32 imm12);
+    // Unsigned bitfield move and its aliases.
+    void ubfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms);
+    void lsr_imm(Reg wd, Reg wn, u32 shift) { ubfm(false, wd, wn, shift & 31, 31); }
+    void ubfx(Reg wd, Reg wn, u32 lsb, u32 width) { ubfm(false, wd, wn, lsb, lsb + width - 1); }
+    // Byte reversal (32-bit): all four bytes / within each halfword.
+    void rev(Reg wd, Reg wn);
+    void rev16(Reg wd, Reg wn);
     void extr(bool x, Reg rd, Reg rn, Reg rm, u32 lsb);
     void ror_imm(Reg wd, Reg wn, u32 amount) { extr(false, wd, wn, wn, amount & 31); }
 
@@ -70,6 +81,9 @@ public:
     void str(bool x, Reg rt, Reg rn, u32 offset);
     void ldrb(Reg wt, Reg rn, u32 offset);
     void strb(Reg wt, Reg rn, u32 offset);
+    // Register offset [xn, xm] (no shift); size 1, 2 or 4 bytes, W register.
+    void ldr_reg(u32 size, Reg wt, Reg xn, Reg xm);
+    void str_reg(u32 size, Reg wt, Reg xn, Reg xm);
     static bool fits_offset(u32 offset, u32 size) { return offset % size == 0 && offset / size < 4096; }
     // Pairs of X registers: signed offset / pre-index / post-index, in bytes
     // (a multiple of 8 in [-512, 504]).
@@ -82,6 +96,12 @@ public:
     void blr(Reg rn);
     void ret();
     void cbnz(bool x, Reg rt, Label& target);
+    void cbz(bool x, Reg rt, Label& target);
+    void tbz(Reg rt, u32 bit, Label& target);
+    void tbnz(Reg rt, u32 bit, Label& target);
+    enum Cond : u32 { EQ = 0, NE = 1, HS = 2, LO = 3, MI = 4, PL = 5, VS = 6, VC = 7,
+                      HI = 8, LS = 9, GE = 10, LT = 11, GT = 12, LE = 13 };
+    void b_cond(Cond c, Label& target);
     void b(Label& target);
     void nop();
 

@@ -40,6 +40,35 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
     auto wz = [&](u32 r, u64 v, bool x) { if (r != 31) x_[r] = x ? v : (v & 0xFFFFFFFFu); };
     auto rs = [&](u32 r) -> u64 { return x_[r]; };  // r31 = SP
     auto ws = [&](u32 r, u64 v, bool x) { x_[r] = x ? v : (v & 0xFFFFFFFFu); };
+    auto mask = [](u64 v, bool x) -> u64 { return x ? v : (v & 0xFFFFFFFFu); };
+    auto low_bits = [](u32 n) -> u64 { return n >= 64 ? ~0ull : ((1ull << n) - 1); };
+    // SUBS: result and NZCV (Arm ARM AddWithCarry(a, NOT b, 1)).
+    auto subs = [&](u64 a, u64 b, bool x) -> u64 {
+        a = mask(a, x);
+        b = mask(b, x);
+        const u64 r = mask(a - b, x);
+        const u32 top = x ? 63 : 31;
+        n_ = (r >> top) & 1;
+        z_ = r == 0;
+        c_ = a >= b;  // no borrow
+        v_ = (((a ^ b) & (a ^ r)) >> top) & 1;
+        return r;
+    };
+    // ConditionHolds (Arm ARM).
+    auto holds = [&](u32 cond) -> bool {
+        bool r;
+        switch (cond >> 1) {
+        case 0: r = z_; break;
+        case 1: r = c_; break;
+        case 2: r = n_; break;
+        case 3: r = v_; break;
+        case 4: r = c_ && !z_; break;
+        case 5: r = n_ == v_; break;
+        case 6: r = n_ == v_ && !z_; break;
+        default: r = true; break;
+        }
+        return ((cond & 1) && cond != 15) ? !r : r;
+    };
 
     for (u64 steps = 0; steps < kMaxSteps; ++steps) {
         if (pc < lo || pc >= hi)
@@ -62,24 +91,70 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
             else
                 wz(rd, (rz(rd) & ~(0xFFFFull << (16 * hw))) | imm, x);
         } else if ((i & 0x1F000000u) == 0x11000000u) {         // add/sub immediate
-            if (i & (1u << 29))
-                return fail("flag-setting add/sub immediate", pc, lo);
             u64 imm = (i >> 10) & 0xFFF;
             if (i & (1u << 22))
                 imm <<= 12;
-            const u64 a = rs(rn);
-            ws(rd, (i & (1u << 30)) ? a - imm : a + imm, x);
+            const bool sub = (i & (1u << 30)) != 0;
+            if (i & (1u << 29)) {                              // SUBS/ADDS: Rn may be SP, Rd is ZR
+                if (!sub)
+                    return fail("ADDS immediate (not used)", pc, lo);
+                const u64 r = subs(rs(rn), imm, x);
+                wz(rd, r, x);
+            } else {
+                const u64 a = rs(rn);
+                ws(rd, sub ? a - imm : a + imm, x);
+            }
         } else if ((i & 0x1F200000u) == 0x0B000000u) {         // add/sub shifted register
-            if ((i & (1u << 29)) || ((i >> 22) & 3) || ((i >> 10) & 63))
+            const u32 amount = (i >> 10) & 63;
+            if (((i >> 22) & 3) || (!x && amount > 31))
                 return fail("unsupported add/sub register form", pc, lo);
-            const u64 a = rz(rn), b = rz(rm);
-            wz(rd, (i & (1u << 30)) ? a - b : a + b, x);
+            const u64 a = rz(rn), b = mask(rz(rm) << amount, x);
+            const bool sub = (i & (1u << 30)) != 0;
+            if (i & (1u << 29)) {
+                if (!sub)
+                    return fail("ADDS register (not used)", pc, lo);
+                wz(rd, subs(a, b, x), x);
+            } else {
+                wz(rd, sub ? a - b : a + b, x);
+            }
         } else if ((i & 0x1F000000u) == 0x0A000000u) {         // logical shifted register
-            const u32 opc = (i >> 29) & 3;
-            if (opc == 3 || ((i >> 21) & 7) || ((i >> 10) & 63))
+            const u32 opc = (i >> 29) & 3, amount = (i >> 10) & 63;
+            if (opc == 3 || ((i >> 21) & 7) || (!x && amount > 31))
                 return fail("unsupported logical register form", pc, lo);
-            const u64 a = rz(rn), b = rz(rm);
+            const u64 a = rz(rn), b = mask(rz(rm) << amount, x);
             wz(rd, opc == 0 ? (a & b) : opc == 1 ? (a | b) : (a ^ b), x);
+        } else if ((i & 0x7F800000u) == 0x53000000u) {         // UBFM
+            const bool n = (i >> 22) & 1;
+            const u32 immr = (i >> 16) & 63, imms = (i >> 10) & 63, size = x ? 64 : 32;
+            if (n != x || immr >= size || imms >= size)
+                return fail("bad UBFM", pc, lo);
+            const u64 src = mask(rz(rn), x);
+            u64 r;
+            if (imms >= immr)   // UBFX / LSR: bits imms..immr to the bottom
+                r = (src >> immr) & low_bits(imms - immr + 1);
+            else                // UBFIZ / LSL: bits imms..0 up to size - immr
+                r = (src & low_bits(imms + 1)) << (size - immr);
+            wz(rd, r, x);
+        } else if ((i & 0xFFFFF000u) == 0x5AC00000u && (((i >> 10) & 3) == 1 || ((i >> 10) & 3) == 2)) {  // REV16/REV (32)
+            const u32 v = static_cast<u32>(rz(rn));
+            const u32 r = ((i >> 10) & 3) == 2
+                ? (v >> 24) | ((v >> 8) & 0xFF00u) | ((v << 8) & 0xFF0000u) | (v << 24)
+                : ((v >> 8) & 0x00FF00FFu) | ((v << 8) & 0xFF00FF00u);
+            wz(rd, r, false);
+        } else if ((i & 0x3B200C00u) == 0x38200800u) {         // LDR/STR register offset
+            const u32 size = i >> 30, opc = (i >> 22) & 3, option = (i >> 13) & 7;
+            if ((i & (1u << 26)) || opc > 1 || size == 3 || option != 3 || (i & (1u << 12)))
+                return fail("unsupported register-offset load/store", pc, lo);
+            const u32 bytes = 1u << size;
+            u8* addr = reinterpret_cast<u8*>(rs(rn) + rz(rm));
+            if (opc == 1) {
+                u64 v = 0;
+                std::memcpy(&v, addr, bytes);
+                wz(rd, v, false);
+            } else {
+                const u64 v = rz(rd);
+                std::memcpy(addr, &v, bytes);
+            }
         } else if ((i & 0x7FA00000u) == 0x13800000u) {         // EXTR
             const bool n = (i >> 22) & 1;
             const u32 lsb = (i >> 10) & 63;
@@ -156,6 +231,14 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
                 next = pc + sext((i >> 5) & 0x7FFFF, 19);
         } else if ((i & 0xFC000000u) == 0x14000000u) {         // B
             next = pc + sext(i & 0x3FFFFFF, 26);
+        } else if ((i & 0xFF000010u) == 0x54000000u) {         // B.cond
+            if (holds(i & 15))
+                next = pc + sext((i >> 5) & 0x7FFFF, 19);
+        } else if ((i & 0x7E000000u) == 0x36000000u) {         // TBZ/TBNZ
+            const u32 bit = ((i >> 31) << 5) | ((i >> 19) & 31);
+            const bool set = (rz(rd) >> bit) & 1;
+            if (set == (((i >> 24) & 1) != 0))
+                next = pc + sext((i >> 5) & 0x3FFF, 14);
         } else {
             return fail("instruction outside the simulated subset", pc, lo);
         }
