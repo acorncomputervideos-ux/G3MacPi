@@ -301,3 +301,29 @@ TEST_CASE("devices/ata/dma_read_write_and_read_only")
     r.bus.write_reg(kCommand, 0x30);
     CHECK_EQ(r.bus.read_reg(kError), static_cast<u32>(ABRT));
 }
+
+TEST_CASE("devices/ata/command_trace_sees_the_taskfile")
+{
+    Rig r;
+    Disk d(64);
+    r.bus.attach(0, &d.dev);
+    std::vector<AtaBus::CommandTrace> log;
+    r.bus.set_command_trace([](void* c, const AtaBus::CommandTrace& t) {
+        static_cast<std::vector<AtaBus::CommandTrace>*>(c)->push_back(t);
+    }, &log);
+    r.lba(0x123456, 2);
+    r.bus.write_reg(kCommand, 0x20);  // READ SECTORS
+    REQUIRE(log.size() == 1u);
+    CHECK_EQ(log[0].command, 0x20u);
+    CHECK_EQ(log[0].count, 2u);
+    CHECK_EQ(log[0].lba_low, 0x56u);
+    CHECK_EQ(log[0].lba_mid, 0x34u);
+    CHECK_EQ(log[0].lba_high, 0x12u);
+    CHECK_EQ(log[0].device, 0xE0u);
+    // Commands to an absent device are seen too (drivers probe that way).
+    r.bus.write_reg(kDevice, 0xF0);
+    r.bus.write_reg(kCommand, 0xEC);
+    REQUIRE(log.size() == 2u);
+    CHECK_EQ(log[1].command, 0xECu);
+    CHECK_EQ(log[1].device, 0xF0u);
+}

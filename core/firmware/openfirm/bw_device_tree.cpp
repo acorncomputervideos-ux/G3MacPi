@@ -185,6 +185,12 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
 
     n.macio = pci_node(t, n.bridge, "mac-io", 1, m.macio_device, 0x106B, 0x0017);
     t.set_string(n.macio, "compatible", "paddington");
+    // Mac OS's heathrow-ata driver finds the chip's base by searching for a
+    // node with device_type "dbdma" or "mac-io" and reading its AAPL,address
+    // (which Mac OS derives from assigned-addresses). Without it the driver
+    // fails before touching the hardware (disassembly of the ROM driver,
+    // docs/firmware/bw-device-tree.md).
+    t.set_string(n.macio, "device_type", "mac-io");
     const u32 bar = pci_hi(kMem32, 1, m.macio_device, 0, 0x10);
     const u32 assigned[5] = {bar | 0x80000000u, 0, m.macio_base, 0, 0x80000};  // n bit: not relocatable
     t.set_ints(n.macio, "assigned-addresses", assigned, 5);
@@ -229,6 +235,13 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     for (u32 i = 0; i < 2; ++i) {
         n.ata[i] = cell(t, n.macio, n.pic, "ata", "ata", ata_reg[i], 4, ata_irq[i], 2);
         t.set_string(n.ata[i], "compatible", "heathrow-ata");
+        // Read by Mac OS's heathrow-ata driver: it fails without at least five
+        // AAPL,pio-timing words, and the ATA Manager reads AAPL,bus-id. Values
+        // as OpenBIOS gives these nodes (to verify against a real B&W; the
+        // emulated controller ignores timing).
+        const u32 pio_timing[8] = {0x526, 0x85, 0x25, 0x25, 0x25, 0, 0, 0};
+        t.set_ints(n.ata[i], "AAPL,pio-timing", pio_timing, 8);
+        t.set_int(n.ata[i], "AAPL,bus-id", i);
         t.set_int(n.ata[i], "#address-cells", 1);
         t.set_int(n.ata[i], "#size-cells", 0);
         n.disk[i] = t.add_node(n.ata[i], "disk", "0");

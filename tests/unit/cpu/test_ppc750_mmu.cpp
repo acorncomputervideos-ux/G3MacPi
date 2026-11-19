@@ -468,3 +468,25 @@ TEST_CASE("cpu/mmu/fetch_sees_stores_to_its_own_page")
     m.cpu.run(4);
     CHECK_EQ(m.s().gpr[7], 9u);
 }
+
+TEST_CASE("cpu/code_watch_reports_page_entries")
+{
+    // b to a watched page, run there, branch back: one report per entry.
+    MmuMachine m;
+    m.s().msr = 0;
+    m.w32(0x1000, b(0x2000 - 0x1000));   // -> 0x2000
+    m.w32(0x2000, li(7, 1));
+    m.w32(0x2004, b(0x1004 - 0x2004));   // -> 0x1004
+    m.w32(0x1004, b(0x2008 - 0x1004));   // -> 0x2008
+    m.w32(0x2008, b(0));                 // spin
+    struct Log { u32 n = 0; u32 first = 0; } log;
+    m.cpu.set_code_watch(0x2000, 0x2FFF, [](void* c, u32 pc) {
+        auto* l = static_cast<Log*>(c);
+        if (!l->n++) l->first = pc;
+    }, &log);
+    m.s().pc = 0x1000;
+    m.cpu.run(10);
+    CHECK_EQ(log.first, 0x2000u);
+    CHECK_EQ(log.n, 2u);          // entered twice; the spin stays on the cached page
+    CHECK_EQ(m.s().gpr[7], 1u);
+}

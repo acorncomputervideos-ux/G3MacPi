@@ -99,6 +99,19 @@ public:
         time_hook_ = h;
         time_ctx_ = ctx;
     }
+    // Diagnostics: called when instruction fetch enters a 4 KB page that
+    // overlaps the effective range [lo, hi] (pc = the instruction about to
+    // run). Checked only when the fetch-page cache misses, so it reports
+    // page entries, not every instruction; it costs nothing on cache hits.
+    using CodeWatch = void (*)(void* context, u32 pc);
+    void set_code_watch(u32 lo, u32 hi, CodeWatch cb, void* ctx)
+    {
+        watch_lo_ = lo & ~0xFFFu;
+        watch_hi_ = hi;
+        watch_cb_ = cb;
+        watch_ctx_ = ctx;
+        fetch_host_ = nullptr;
+    }
     // Ends the current run() after the instruction executing now (e.g. after a
     // decrementer write, so the next expiry is planned again).
     void break_run() { break_run_ = true; }
@@ -291,6 +304,9 @@ private:
     // fetch_msr_ (MSR[IR|PR]). Dropped by flush_tlb() and at run() start.
     const u8* fetch_host_ = nullptr;
     u32 fetch_page_ = 0, fetch_msr_ = 0;
+    u32 watch_lo_ = 0, watch_hi_ = 0;
+    CodeWatch watch_cb_ = nullptr;
+    void* watch_ctx_ = nullptr;
     CpuState s_;
     u32 pvr_;
     u32 next_pc_ = 0;        // set by execute(); exceptions/branches overwrite

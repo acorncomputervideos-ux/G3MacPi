@@ -96,3 +96,28 @@ calls and its own debug output (root `AAPL,debug`):
 - **`/rtas`**: see rtas.md.
 - **Path lookup**: a component may be `@unit` with no name, matching any
   child at that address (IEEE 1275). The loader looks up `/cpus/@0`.
+
+## What Mac OS's ATA driver needs
+
+Found by disassembling the Mac OS ROM's `heathrow-ata` driver (a PEF
+container at ROM 0xFFDF6970; its data section decompressed with the PEF
+pattern-initialised-data rules) and watching it run (`G3_CODEWATCH`):
+
+- **mac-io `device_type "mac-io"`.** The driver searches for a node with
+  device_type "dbdma" or "mac-io" and reads its `AAPL,address` (Mac OS
+  derives that from `assigned-addresses`). Without it the driver returns
+  error -56 before touching the controller.
+- **ata nodes:** `AAPL,address` (8 bytes, derived by Mac OS from `reg`),
+  `AAPL,interrupt-vectors` or `AAPL,interrupts` (8 bytes, derived from
+  `interrupts`), **`AAPL,pio-timing` (at least 5 words)**, `driver-ist`
+  (24 bytes, made by the loader). `AAPL,pio-timing` and `AAPL,bus-id`
+  carry the values OpenBIOS gives these nodes (to verify on a real B&W).
+- With these, Mac OS sends IDENTIFY DEVICE, INITIALIZE DEVICE PARAMETERS
+  and READ SECTORS (block 0, the driver descriptor map) to a disk on
+  channel 0.
+
+A real B&W has one mac-io ATA channel (CD-ROM, Zip; Linux: "Heathrow ATA
+controller (macio), bus ID 0", irq 13) and its hard disk on a CMD646 PCI
+controller (`/pci@80000000/pci-bridge@d/pci-ata@1/ata-4@0`). We model
+two mac-io channels and no CMD646 yet; Mac OS drives a disk on the mac-io
+channel through the ROM's heathrow-ata driver.

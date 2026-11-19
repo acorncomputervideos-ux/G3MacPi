@@ -76,6 +76,14 @@ public:
     u32 dma_write(const u8* in, u32 len);
     bool dma_pending() const { return mode_ == Mode::DmaIn || mode_ == Mode::DmaOut; }
 
+    // Diagnostics: called for every command written to the Command
+    // register, with the taskfile as written (before the command runs).
+    struct CommandTrace {
+        u8 command, features, count, lba_low, lba_mid, lba_high, device;
+    };
+    using CommandTraceFn = void (*)(void* context, const CommandTrace& t);
+    void set_command_trace(CommandTraceFn fn, void* context) { trace_ = fn; trace_ctx_ = context; }
+
     bool irq_asserted() const { return irq_line_; }
     u32 selected() const { return (device_ & ata::DEV_SLAVE) ? 1 : 0; }
 
@@ -133,6 +141,8 @@ private:
     void* irq_ctx_ = nullptr;
     DmaCallback dma_cb_ = nullptr;
     void* dma_ctx_ = nullptr;
+    CommandTraceFn trace_ = nullptr;
+    void* trace_ctx_ = nullptr;
 };
 
 } // namespace g3

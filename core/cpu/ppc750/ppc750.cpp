@@ -110,6 +110,8 @@ void Ppc750::step()
         execute(insn);
         return;
     }
+    if (watch_cb_ && s_.pc >= watch_lo_ && s_.pc <= watch_hi_)
+        watch_cb_(watch_ctx_, s_.pc);
     u32 pa;
     if (!translate(s_.pc, Access::Fetch, pa)) {  // raises ISI
         s_.pc = next_pc_;

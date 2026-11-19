@@ -12,7 +12,9 @@
 #include "core/cpu/ppc750/disasm.h"
 #include "core/machine/bw_firmware.h"
 #include "core/machine/bw_nvram.h"
+#include "core/storage/block_device.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -173,6 +175,65 @@ int main(int argc, char** argv)
             r->when[r->pos % r->e.size()] = r->m->cpu().instructions_executed();
             r->e[r->pos++ % r->e.size()] = x;
         }, &via);
+    }
+    // G3_DISK=image[,channel]: a disk image (loaded into memory, writable)
+    // as the master device on mac-io ATA channel 0 (or 1).
+    static std::vector<u8> disk_bytes;
+    static RamBlockDevice* disk_dev = nullptr;
+    if (const char* dp = std::getenv("G3_DISK")) {
+        std::string path(dp);
+        u32 channel = 0;
+        if (const size_t comma = path.rfind(','); comma != std::string::npos) {
+            channel = static_cast<u32>(std::strtoul(path.c_str() + comma + 1, nullptr, 0)) & 1;
+            path.resize(comma);
+        }
+        if (FILE* f = std::fopen(path.c_str(), "rb")) {
+            std::fseek(f, 0, SEEK_END);
+            disk_bytes.resize(static_cast<size_t>(std::ftell(f)));
+            std::fseek(f, 0, SEEK_SET);
+            if (std::fread(disk_bytes.data(), 1, disk_bytes.size(), f) != disk_bytes.size())
+                disk_bytes.clear();
+            std::fclose(f);
+        }
+        if (disk_bytes.empty()) {
+            std::fprintf(stderr, "cannot read disk image %s\n", path.c_str());
+            return 1;
+        }
+        disk_dev = new RamBlockDevice(disk_bytes.data(), disk_bytes.size());
+        m.macio().ide(channel).bus().attach(0, disk_dev);
+        std::printf("[probe] disk %s (%zu sectors) on ATA channel %u\n", path.c_str(),
+                    disk_bytes.size() / 512, channel);
+    }
+    // G3_ATA: print every ATA command (both mac-io channels).
+    if (std::getenv("G3_ATA")) {
+        static YosemiteMachine* am = &m;
+        for (u32 ch = 0; ch < 2; ++ch) {
+            m.macio().ide(ch).bus().set_command_trace([](void* c, const AtaBus::CommandTrace& t) {
+                const u32 lba = (static_cast<u32>(t.device & 0x0F) << 24) | (t.lba_high << 16) |
+                                (t.lba_mid << 8) | t.lba_low;
+                std::printf("[ata%u] cmd %02X feat %02X count %3u lba %07X dev %02X  pc=%08X at %llu\n",
+                            static_cast<u32>(reinterpret_cast<uintptr_t>(c)), t.command, t.features,
+                            t.count, lba, t.device, am->cpu().state().pc,
+                            static_cast<unsigned long long>(am->cpu().instructions_executed()));
+            }, reinterpret_cast<void*>(static_cast<uintptr_t>(ch)));
+        }
+    }
+    // G3_CODEWATCH=lo,hi: report (up to G3_CODEWATCH_MAX, default 40, times) when code runs in a 4 KB
+    // page overlapping [lo, hi] (effective addresses).
+    if (const char* cw = std::getenv("G3_CODEWATCH")) {
+        char* end = nullptr;
+        const u32 lo = static_cast<u32>(std::strtoul(cw, &end, 16));
+        const u32 hi = (end && *end == ',') ? static_cast<u32>(std::strtoul(end + 1, nullptr, 16)) : lo;
+        static YosemiteMachine* wm = &m;
+        static u32 reports = 0, max_reports = 40;
+        if (const char* mx = std::getenv("G3_CODEWATCH_MAX"))
+            max_reports = static_cast<u32>(std::strtoul(mx, nullptr, 0));
+        m.cpu().set_code_watch(lo, hi, [](void*, u32 pc) {
+            if (reports++ < max_reports)
+                std::printf("[watch] pc=%08X lr=%08X r24=%08X at %llu\n", pc,
+                            wm->cpu().state().spr[ppc::spr::LR], wm->cpu().state().gpr[24],
+                            static_cast<unsigned long long>(wm->cpu().instructions_executed()));
+        }, nullptr);
     }
     // G3_CUDA: print every Cuda packet (host -> Cuda and Cuda -> host).
     if (std::getenv("G3_CUDA")) {

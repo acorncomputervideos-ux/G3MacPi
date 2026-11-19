@@ -110,6 +110,8 @@ void AtaBus::write_reg(u32 reg, u8 value)
         update_irq();  // the other device may now drive INTRQ
         return;
     case kCommand:
+        if (trace_)
+            trace_(trace_ctx_, CommandTrace{value, features_, nsect_, lbal_, lbam_, lbah_, device_});
         if (value == 0x90) {  // EXECUTE DEVICE DIAGNOSTIC: both devices
             if (present(0) || present(1)) {
                 reset_drives();

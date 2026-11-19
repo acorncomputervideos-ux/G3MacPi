@@ -225,7 +225,13 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
         CHECK(cells(t, ata, "interrupts") ==
               std::vector<u32>({Paddington::kIdeIrq[i], Paddington::kIdeDmaIrq[i]}));
         CHECK(cells(t, ata, "interrupt-parent") == std::vector<u32>({b.n.pic}));
+        // What Mac OS's heathrow-ata driver requires (>= 5 timing words) and
+        // the ATA Manager reads.
+        CHECK(cells(t, ata, "AAPL,pio-timing").size() >= 5u);
+        CHECK(cells(t, ata, "AAPL,bus-id") == std::vector<u32>({i}));
     }
+    // ... and the driver finds the chip's base through mac-io's device_type.
+    CHECK(str(t, b.n.macio, "device_type") == "mac-io");
     // MESH SCSI: named "scsi" (Apple's loader), type + compatible as Linux matches.
     REQUIRE(b.n.scsi != kNone);
     CHECK(std::string(t.name(b.n.scsi)) == "scsi");
