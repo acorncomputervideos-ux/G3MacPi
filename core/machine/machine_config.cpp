@@ -367,4 +367,24 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     return o.len;
 }
 
+u32 choose_boot_drive(const MachineConfig& c, const bool has_image[MachineConfig::kDrives])
+{
+    auto first = [&](MachineConfig::DriveType t) {
+        for (u32 i = 0; i < MachineConfig::kDrives; ++i)
+            if (c.drive[i].type == t && has_image[i])
+                return i;
+        return MachineConfig::kDrives;
+    };
+    using T = MachineConfig::DriveType;
+    switch (c.boot) {
+    case MachineConfig::Boot::CdRom: return first(T::CdRom);
+    case MachineConfig::Boot::Disk: return first(T::Disk);
+    case MachineConfig::Boot::Auto:
+    default: {
+        const u32 d = first(T::Disk);
+        return d < MachineConfig::kDrives ? d : first(T::CdRom);
+    }
+    }
+}
+
 } // namespace g3

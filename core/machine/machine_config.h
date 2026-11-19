@@ -88,6 +88,12 @@ struct ConfigParseReport {
 // anything the text does not set).
 void parse_machine_config(const char* text, u32 len, MachineConfig& config, ConfigParseReport& report);
 
+// The drive to start up from (0..kDrives-1), or kDrives if none: with
+// boot = cdrom the first CD-ROM drive with a disc, with boot = disk the
+// first hard disk with an image, with auto a hard disk first, else a CD.
+// `has_image[i]`: drive i has a disc / image.
+u32 choose_boot_drive(const MachineConfig& config, const bool has_image[MachineConfig::kDrives]);
+
 // Writes the configuration as INI text (with a header comment). Returns the
 // length written, or 0 if `cap` is too small.
 u32 write_machine_config(const MachineConfig& config, char* out, u32 cap);

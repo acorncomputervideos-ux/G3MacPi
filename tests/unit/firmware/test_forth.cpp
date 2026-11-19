@@ -118,6 +118,24 @@ TEST_CASE("forth/memory_is_guest_memory")
     CHECK(r.stack("400 3 5A fill 401 c@ 300 300 3 comp 300 400 1 comp") == V({0x5A, 0, -1}));
     r.ram[0x500] = 2; r.ram[0x501] = 'h'; r.ram[0x502] = 'i';
     CHECK(r.output("500 count type") == "hi");
+    // adler32 ( adler addr len -- adler' ): RFC 1950's example, "Wikipedia" = 0x11E60398;
+    // continuing over a split gives the same value; length 0 keeps the start value.
+    const char* w = "Wikipedia";
+    for (u32 i = 0; i < 9; ++i)
+        r.ram[0x600 + i] = static_cast<u8>(w[i]);
+    CHECK(r.stack("hex 1 600 9 adler32") == V({0x11E60398}));
+    CHECK(r.stack("1 600 4 adler32 604 5 adler32") == V({0x11E60398}));
+    CHECK(r.stack("1 600 0 adler32") == V({1}));
+    // Long enough for both sums to wrap modulo 65521: 5000 bytes of FF
+    // (reference: Python zlib.adler32(b"\xff" * 5000) = 0x54B27596).
+    for (u32 i = 0; i < 5000; ++i)
+        r.ram[0x1000 + i] = 0xFF;
+    CHECK(r.stack("hex 1 1000 1388 adler32") == V({0x54B27596}));
+    // eval = evaluate; the boot script reads its checksum as " h# 4D446A5F" with ['] eval catch.
+    const char* num = " h# 4D446A5F";
+    for (u32 i = 0; i < 12; ++i)
+        r.ram[0x700 + i] = static_cast<u8>(num[i]);
+    CHECK(r.stack("hex 700 c ['] eval catch") == V({0x4D446A5F, 0}));
     CHECK(!r.run("hex 7FFFFFF0 @"));                         // nothing mapped there
     CHECK_EQ(r.f->error_code(), Forth::kInvalidAddress);
 }
@@ -190,6 +208,18 @@ TEST_CASE("forth/strings_and_output")
     CHECK(r.output("( a comment ) .( shown) \\ ignored to the end\n") == "shown");
     CHECK(r.stack("s\" 1 2 +\" evaluate") == V({3}));
     CHECK(r.output("decimal 5 binary . decimal 9 octal . decimal") == "101 11 ");
+}
+
+TEST_CASE("forth/line_ends_cr_lf_crlf")
+{
+    // \ comments end at the end of the line, whichever way lines end: the
+    // Mac OS 9.2 ROM's boot script uses CR alone.
+    Rig r;
+    r.run("decimal");
+    CHECK(r.stack("1 \\ comment 2\r3 \\ more\r4") == V({1, 3, 4}));
+    CHECK(r.stack("1 \\ comment 2\n3") == V({1, 3}));
+    CHECK(r.stack("1 \\ comment 2\r\n3") == V({1, 3}));
+    CHECK(r.stack("5 \\ to the very end") == V({5}));
 }
 
 TEST_CASE("forth/errors_catch_throw")

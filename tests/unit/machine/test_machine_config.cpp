@@ -183,3 +183,24 @@ TEST_CASE("machine/config/jit_option")
     CHECK_EQ(r3.ignored, 1u);
     CHECK(back.jit);  // unchanged
 }
+
+TEST_CASE("machine/config/choose_boot_drive")
+{
+    MachineConfig c;
+    using T = MachineConfig::DriveType;
+    c.drive[0].type = T::CdRom;
+    c.drive[2].type = T::Disk;
+    bool img[4] = {true, false, true, false};
+    c.boot = MachineConfig::Boot::Auto;
+    CHECK_EQ(choose_boot_drive(c, img), 2u);         // a hard disk first
+    c.boot = MachineConfig::Boot::CdRom;
+    CHECK_EQ(choose_boot_drive(c, img), 0u);
+    c.boot = MachineConfig::Boot::Disk;
+    CHECK_EQ(choose_boot_drive(c, img), 2u);
+    img[2] = false;                                  // no disk image
+    CHECK_EQ(choose_boot_drive(c, img), MachineConfig::kDrives);
+    c.boot = MachineConfig::Boot::Auto;
+    CHECK_EQ(choose_boot_drive(c, img), 0u);         // then the CD
+    img[0] = false;
+    CHECK_EQ(choose_boot_drive(c, img), MachineConfig::kDrives);
+}

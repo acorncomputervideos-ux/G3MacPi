@@ -28,7 +28,7 @@ enum Prim : u32 {
     P_BETWEEN, P_TRUE, P_FALSE, P_BL, P_CELLADD, P_CELLS, P_CHARADD, P_CHARS, P_ALIGNED,
     // memory
     P_FETCH, P_STORE, P_CFETCH, P_CSTORE, P_WFETCH, P_WSTORE, P_LFETCH, P_LSTORE, P_PSTORE,
-    P_HERE, P_ALLOT, P_COMMA, P_CCOMMA, P_WCOMMA, P_LCOMMA, P_ALIGN, P_MOVE, P_FILL, P_COMP, P_3DROP, P_BOUNDS, P_STREQ, P_DFIND,
+    P_HERE, P_ALLOT, P_COMMA, P_CCOMMA, P_WCOMMA, P_LCOMMA, P_ALIGN, P_MOVE, P_FILL, P_COMP, P_ADLER32, P_3DROP, P_BOUNDS, P_STREQ, P_DFIND,
     P_COUNT,
     // output
     P_TYPE, P_EMIT, P_CR, P_SPACE, P_SPACES, P_DOT, P_UDOT, P_DOTS, P_DOTR, P_UDOTR, P_DOTD,
@@ -77,7 +77,7 @@ const PrimDef kPrims[] = {
     {"here", P_HERE, false}, {"allot", P_ALLOT, false}, {",", P_COMMA, false},
     {"c,", P_CCOMMA, false}, {"w,", P_WCOMMA, false}, {"l,", P_LCOMMA, false},
     {"align", P_ALIGN, false}, {"move", P_MOVE, false}, {"cmove", P_MOVE, false},
-    {"fill", P_FILL, false}, {"comp", P_COMP, false}, {"3drop", P_3DROP, false},
+    {"fill", P_FILL, false}, {"comp", P_COMP, false}, {"adler32", P_ADLER32, false}, {"3drop", P_3DROP, false},
     {"bounds", P_BOUNDS, false}, {"$=", P_STREQ, false}, {"$find", P_DFIND, false}, {"count", P_COUNT, false},
     {"type", P_TYPE, false}, {"emit", P_EMIT, false}, {"cr", P_CR, false},
     {"space", P_SPACE, false}, {"spaces", P_SPACES, false}, {".", P_DOT, false},
@@ -85,7 +85,9 @@ const PrimDef kPrims[] = {
     {"u.r", P_UDOTR, false}, {".d", P_DOTD, false}, {".h", P_DOTH, false},
     {"base", P_BASE, false}, {"decimal", P_DECIMAL, false}, {"hex", P_HEX, false},
     {"octal", P_OCTAL, false}, {"binary", P_BINARY, false},
-    {"execute", P_EXECUTE, false}, {"evaluate", P_EVALUATE, false}, {"throw", P_THROW, false},
+    {"execute", P_EXECUTE, false}, {"evaluate", P_EVALUATE, false},
+    {"eval", P_EVALUATE, false},  // Open Firmware's short name (the Mac OS ROM boot script uses it)
+    {"throw", P_THROW, false},
     {"catch", P_CATCH, false}, {"abort", P_ABORT, false},
     {":", P_COLON, false}, {";", P_SEMI, true}, {"if", P_IF, true}, {"else", P_ELSE, true},
     {"then", P_THEN, true}, {"begin", P_BEGIN, true}, {"until", P_UNTIL, true},
@@ -106,6 +108,8 @@ const PrimDef kPrims[] = {
 };
 
 bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f'; }
+// Lines end at CR, LF or CR LF (Mac OS ROM boot scripts use CR alone).
+bool is_eol(char c) { return c == '\r' || c == '\n'; }
 char lower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
 s32 sgn(Cell v) { return static_cast<s32>(v); }
 Cell flag(bool b) { return b ? 0xFFFFFFFFu : 0; }
@@ -384,11 +388,14 @@ bool Forth::rest_of_line(const char*& str, u32& len)
     while (s.pos < s.len && (s.text[s.pos] == ' ' || s.text[s.pos] == '\t'))
         ++s.pos;
     const u32 start = s.pos;
-    while (s.pos < s.len && s.text[s.pos] != '\n')
+    while (s.pos < s.len && !is_eol(s.text[s.pos]))
         ++s.pos;
     u32 end = s.pos;
-    if (s.pos < s.len)
-        ++s.pos;  // the newline
+    if (s.pos < s.len) {
+        if (s.text[s.pos] == '\r' && s.pos + 1 < s.len && s.text[s.pos + 1] == '\n')
+            ++s.pos;
+        ++s.pos;  // the line end
+    }
     while (end > start && is_space(s.text[end - 1]))
         --end;
     str = s.text + start;
@@ -1038,6 +1045,22 @@ bool Forth::primitive(u32 id)
         push(static_cast<Cell>(r));
         break;
     }
+    case P_ADLER32: {  // ( adler addr len -- adler' ): Adler-32 (RFC 1950), continued from `adler`
+        // The Mac OS ROM boot script checks the loaded image with it:
+        // "1 load-base load-size 14 - adler32" against the number in its last bytes.
+        c = pop(); b = pop(); a = pop();
+        u32 s1 = a & 0xFFFF, s2 = (a >> 16) & 0xFFFF;
+        for (u32 i = 0; i < c && !error_; ++i) {
+            Cell x;
+            if (!rd(b + i, 1, x))
+                break;
+            s1 = (s1 + (x & 0xFF)) % 65521;
+            s2 = (s2 + s1) % 65521;
+        }
+        if (!error_)
+            push((s2 << 16) | s1);
+        break;
+    }
     case P_3DROP: pop(); pop(); pop(); break;
     case P_BOUNDS:  // ( addr len -- addr+len addr )
         b = pop(); a = pop(); push(a + b); push(a); break;
@@ -1272,13 +1295,28 @@ bool Forth::primitive(u32 id)
         u32 len;
         if (!parse_name(w, len)) break;
         const s32 idx = find(w, len);
-        if (idx < 0) { fail(kUndefined, "undefined word"); break; }
+        if (idx < 0) {  // name it, as interpret does: "word ?"
+            char msg[48];
+            u32 n = 0;
+            for (; n < len && n < 40; ++n)
+                msg[n] = w[n];
+            msg[n++] = ' ';
+            msg[n++] = '?';
+            msg[n] = '\0';
+            fail(kUndefined, msg);
+            break;
+        }
         if (id == P_BRACKET_TICK && state_) { emit_cell(OP_LIT); emit_cell(kXtBase + static_cast<u32>(idx)); }
         else push(kXtBase + static_cast<u32>(idx));
         break;
     }
     case P_PAREN: { const char* s; u32 len; parse_until(')', s, len); break; }
-    case P_BACKSLASH: { const char* s; u32 len; parse_until('\n', s, len); break; }
+    case P_BACKSLASH: {  // to the end of the line (CR or LF)
+        Source& src = src_[src_depth_ - 1];
+        while (src.pos < src.len && !is_eol(src.text[src.pos]))
+            ++src.pos;
+        break;
+    }
     case P_DOTPAREN: { const char* s; u32 len; parse_until(')', s, len); emit_text(s, len); break; }
     case P_DOTQUOTE:
     case P_SQUOTE:

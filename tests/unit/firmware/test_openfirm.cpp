@@ -615,7 +615,8 @@ TEST_CASE("storage/apm/read_map")
     CHECK(map.partition(4) == nullptr);
     CHECK_EQ(map.find_type("Apple_HFS"), 2u);
     CHECK_EQ(map.find_type("Apple_UFS"), 0u);
-    // Not a map: bad signature, or 2048-byte blocks.
+    // Not a map: bad signature, or a block size other than 512 or 2048
+    // (2048: a CD, whose map is still in 512-byte entries; read).
     std::vector<u8> bad = img;
     bad[0] = 0;
     RamBlockDevice bd(bad.data(), bad.size());
@@ -623,7 +624,10 @@ TEST_CASE("storage/apm/read_map")
     std::vector<u8> cd = img;
     be16(cd, 2, 2048);
     RamBlockDevice cdd(cd.data(), cd.size());
+    CHECK(map.read(cdd));
+    be16(cd, 2, 4096);
     CHECK(!map.read(cdd));
+    CHECK(map.read(disk));  // (map is used again below)
     // A partition window.
     BlockWindow w(disk, 64, 32);
     u8 sec[512];

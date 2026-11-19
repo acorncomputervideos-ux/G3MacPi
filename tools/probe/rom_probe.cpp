@@ -279,6 +279,19 @@ int main(int argc, char** argv)
                         drive_bytes[i].size() / 512, d.read_only ? ", read-only" : "");
         }
     }
+    // The start-up disk, as MacSession chooses it: /chosen bootpath and the
+    // loaded file's path.
+    {
+        bool has_image[MachineConfig::kDrives];
+        for (u32 i = 0; i < MachineConfig::kDrives; ++i)
+            has_image[i] = drive_dev[i] != nullptr;
+        const u32 bd = choose_boot_drive(mc, has_image);
+        char bp[256];
+        if (bd < MachineConfig::kDrives && fw.set_boot_device(bd, *drive_dev[bd], bp, sizeof bp)) {
+            fw.place_file(file.data(), static_cast<u32>(file.size()), bp);
+            std::printf("[probe] start-up disk: %s\n", bp);
+        }
+    }
     // G3_DISK=image[,channel]: a disk image (loaded into memory, writable)
     // as the master device on mac-io ATA channel 0 (or 1).
     static std::vector<u8> disk_bytes;

@@ -157,7 +157,17 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     const u8* rom = host.load_file(config.rom, rom_size);
     if (!rom || rom_size == 0)
         return fail(Error::NoRom, config.rom);
-    if (!fw_->place_file(rom, rom_size, kBootPath))
+    // The start-up disk (boot = auto/cdrom/disk): /chosen bootpath, and the
+    // same path for the loaded file. Without one the Mac shows the "?" disk
+    // (or Mac OS 9.2 reports that it cannot find its bootpath).
+    bool has_image[MachineConfig::kDrives];
+    for (u32 i = 0; i < MachineConfig::kDrives; ++i)
+        has_image[i] = image_[i] != nullptr;
+    const u32 boot = choose_boot_drive(config, has_image);
+    char boot_path[256];
+    const bool booting = boot < MachineConfig::kDrives &&
+                         fw_->set_boot_device(boot, *image_[boot], boot_path, sizeof boot_path);
+    if (!fw_->place_file(rom, rom_size, booting ? boot_path : kBootPath))
         return fail(Error::RomTooBig, config.rom);
     if (!fw_->command("init-program") || !fw_->client_started())
         return fail(Error::BootFailed, fw_ ? fw_->forth().error_text() : "");

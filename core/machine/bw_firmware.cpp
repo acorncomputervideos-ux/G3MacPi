@@ -3,6 +3,7 @@
 // core/machine/bw_firmware.cpp — see bw_firmware.h.
 
 #include "core/machine/bw_firmware.h"
+#include "core/storage/apple_partition_map.h"
 
 #include "core/machine/bw_nvram.h"
 
@@ -331,6 +332,45 @@ bool BwFirmware::command(const char* text)
     if (!ok_)
         return false;
     return forth_.interpret(text, cstr::length(text));
+}
+
+bool BwFirmware::set_boot_device(u32 drive, BlockDevice& image, char* out, u32 cap)
+{
+    const of::Phandle node = drive == 0 ? nodes_.disk[0] : drive == 2 ? nodes_.cmd646_disk : of::kNone;
+    if (node == of::kNone)
+        return false;
+    ApplePartitionMap map;
+    if (!map.read(image))
+        return false;
+    u32 part = map.find_type("Apple_HFS");
+    if (!part)
+        part = map.find_type("Apple_HFSX");
+    if (!part)
+        return false;
+    char path[256];
+    u32 n = tree_.path_of(node, path, sizeof path);
+    if (n == 0 || n + 20 >= sizeof path)
+        return false;
+    path[n++] = ':';
+    char digits[12];
+    u32 k = 0;
+    do {
+        digits[k++] = static_cast<char>('0' + part % 10);
+        part /= 10;
+    } while (part);
+    while (k)
+        path[n++] = digits[--k];
+    const char tail[] = ",\\\\:tbxi";
+    for (u32 i = 0; tail[i]; ++i)
+        path[n++] = tail[i];
+    path[n] = 0;
+    if (out && cap) {
+        u32 i = 0;
+        for (; path[i] && i + 1 < cap; ++i)
+            out[i] = path[i];
+        out[i] = 0;
+    }
+    return tree_.set_string(nodes_.chosen, "bootpath", path);
 }
 
 } // namespace g3

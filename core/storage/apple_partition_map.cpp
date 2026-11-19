@@ -30,8 +30,9 @@ bool ApplePartitionMap::read(BlockDevice& disk)
     u8 blk[BlockDevice::kSectorSize];
     if (disk.sector_count() < 2 || !disk.read(0, 1, blk))
         return false;
-    if (be16(blk) != 0x4552 || be16(blk + 2) != BlockDevice::kSectorSize)
-        return false;
+    const u16 declared = be16(blk + 2);
+    if (be16(blk) != 0x4552 || (declared != BlockDevice::kSectorSize && declared != 2048))
+        return false;  // (2048: a CD; its map is still in 512-byte entries, checked next)
     if (!disk.read(1, 1, blk) || be16(blk) != 0x504D)
         return false;
     u32 entries = be32(blk + 4);

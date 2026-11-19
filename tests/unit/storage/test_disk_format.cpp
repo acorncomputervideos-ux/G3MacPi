@@ -174,3 +174,21 @@ TEST_CASE("storage/disk_format/larger_disks_and_rejects")
     CHECK(!format_hfs(ok.data(), ok.size(), bad));
     CHECK(!format_hfs(ok.data(), ok.size() - 1, opt));       // not whole sectors
 }
+
+TEST_CASE("storage/apm/cd_maps_with_2048_byte_blocks")
+{
+    // Apple CDs declare 2048-byte blocks but keep the map in 512-byte
+    // entries (the Mac OS 9.2.1 CD); such maps are read, other sizes not.
+    const u32 sectors = 65536;
+    std::vector<u8> disk(static_cast<size_t>(sectors) * 512, 0);
+    HfsFormatOptions opt;
+    opt.volume_name = "CD";
+    REQUIRE(format_apm_hfs(disk.data(), disk.size(), opt));
+    store_be16(&disk[2], 2048);
+    RamBlockDevice dev(disk.data(), disk.size());
+    ApplePartitionMap apm;
+    CHECK(apm.read(dev));
+    CHECK_EQ(apm.find_type("Apple_HFS"), 2u);
+    store_be16(&disk[2], 1024);
+    CHECK(!apm.read(dev));
+}

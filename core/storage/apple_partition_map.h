@@ -17,8 +17,12 @@
 //    is usually the map itself, "Apple_partition_map") — to verify with
 //    Apple's firmware; Linux's mac partition code numbers them the same way.
 //
-// Only 512-byte blocks are supported (hard disk images). CD images with
-// 2048-byte blocks are refused.
+// Map entries and partition positions are in 512-byte blocks. Apple CDs
+// declare 2048-byte blocks in the Driver Descriptor Map (sbBlkSize) but keep
+// the map in 512-byte entries at 512-byte offsets, with starts and lengths in
+// 512-byte units (seen in the Mac OS 9.2.1 install CD: its Apple_HFS
+// partition starts at 968, i.e. byte 495616, where the HFS volume is); such
+// maps are read too. Other block sizes are refused.
 
 #ifndef G3_CORE_STORAGE_APPLE_PARTITION_MAP_H
 #define G3_CORE_STORAGE_APPLE_PARTITION_MAP_H

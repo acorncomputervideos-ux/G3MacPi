@@ -18,6 +18,7 @@
 #define G3_CORE_MACHINE_BW_FIRMWARE_H
 
 #include "core/firmware/forth/forth.h"
+#include "core/storage/block_device.h"
 #include "core/firmware/openfirm/bw_device_tree.h"
 #include "core/firmware/openfirm/display_driver.h"
 #include "core/firmware/openfirm/firmware.h"
@@ -79,6 +80,15 @@ public:
 
     // Puts a file at load-base as `load` would (see FirmwareWords::place_file).
     bool place_file(const u8* data, u32 len, const char* path) { return words_.place_file(data, len, path); }
+    // The start-up disk: sets /chosen "bootpath" to the device path of
+    // `drive` (0 = mac-io ATA master, 2 = CMD646 master; the slaves have no
+    // device node yet), the number of the first HFS partition in `image`'s
+    // partition map, and "\\:tbxi" (the blessed folder's file of type
+    // tbxi), e.g. ".../ata@20000/disk@0:9,\\:tbxi". Mac OS 9.2's loader
+    // stops without it ("MacOS: unable to find bootpath"). Writes the path
+    // to `out` too. False if the drive has no node or the image no HFS
+    // partition.
+    bool set_boot_device(u32 drive, BlockDevice& image, char* out = nullptr, u32 cap = 0);
 
     bool client_started() const { return started_; }
     bool client_exited() const { return fw_.client_exited(); }
