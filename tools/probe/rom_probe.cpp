@@ -529,6 +529,14 @@ int main(int argc, char** argv)
                     std::printf("[pc68] %llu pc=%08X d0=%08X d1=%08X a0=%08X a1=%08X a7=%08X",
                                 static_cast<unsigned long long>(p->cpu->instructions_executed()), pc, s.gpr[8],
                                 s.gpr[9], s.gpr[16], s.gpr[17], s.gpr[1]);
+                    if (std::getenv("G3_PC68_A6ARGS")) {  // longs at a6+8 and a6+12 (Pascal-style arguments)
+                        for (u32 k = 8; k <= 12; k += 4) {
+                            u32 pa = 0, v = 0;
+                            if (p->cpu->probe_translate(s.gpr[22] + k, false, pa) && pa + 4 <= p->ram_size)
+                                v = load_be32(p->ram + pa);
+                            std::printf(" [a6+%u]=%08X", k, v);
+                        }
+                    }
                     if (std::getenv("G3_PC68_A1STR")) {  // the bytes a1 points to, as text
                         std::printf("  a1->\"");
                         for (u32 i = 0; i < 40; ++i) {
@@ -574,6 +582,30 @@ int main(int argc, char** argv)
                     p->first_pc[p->n++] = s.pc;
                 }
             }, &pp);
+        }
+        // G3_PCHIST=lo,hi,from,to: instructions executed per 64-byte block of
+        // [lo, hi] (effective addresses) while the count is in [from, to).
+        struct PcHist { u32 lo = 0, hi = 0; u64 from = 0, to = ~0ull; ppc::Ppc750* cpu = nullptr; u32 counts[65536] = {}; };
+        static PcHist ph;
+        if (const char* hs = std::getenv("G3_PCHIST")) {
+            unsigned long long a = 0, b = 0, c = 0, d = ~0ull;
+            std::sscanf(hs, "%llx,%llx,%llu,%llu", &a, &b, &c, &d);
+            ph.lo = static_cast<u32>(a);
+            ph.hi = static_cast<u32>(b);
+            ph.from = c;
+            ph.to = d;
+            ph.cpu = &m.cpu();
+            m.cpu().set_step_hook([](void* ctx, const ppc::CpuState& s) {
+                auto* h = static_cast<PcHist*>(ctx);
+                if (s.pc < h->lo || s.pc > h->hi)
+                    return;
+                const u64 k = h->cpu->instructions_executed();
+                if (k < h->from || k >= h->to)
+                    return;
+                const u32 i = (s.pc - h->lo) >> 6;
+                if (i < 65536)
+                    ++h->counts[i];
+            }, &ph);
         }
         // G3_REGSAT=pc: print the registers the first time the CPU is about
         // to execute that address.
@@ -665,6 +697,11 @@ int main(int argc, char** argv)
             }
         } else {
             m.run_for(ms * 1000000000ull);  // picoseconds
+        }
+        if (ph.cpu) {
+            for (u32 i = 0; i < 65536; ++i)
+                if (ph.counts[i])
+                    std::printf("[pchist] %08X %u\n", ph.lo + (i << 6), ph.counts[i]);
         }
         if (pp.cpu) {
             std::printf("[ppages] %u pages\n", pp.n);
