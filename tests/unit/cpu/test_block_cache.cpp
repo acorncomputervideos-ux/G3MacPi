@@ -773,3 +773,37 @@ BOTH(page_crossing_access_needs_both_pages)
     CHECK_EQ(c2.cpu.state().gpr[30], 1u);   // DSI
     CHECK_EQ(c2.cpu.state().gpr[3], 0x77u); // not loaded
 }
+
+BOTH(branch_forms)
+{
+    // bcctr with BO[2] = 0 (an invalid form: the interpreter does not
+    // decrement CTR), bclrl (target is the old LR), absolute bc/b, and a
+    // decrementing bc that falls through when CTR reaches zero.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, X(19, 0, 0, 0, 528)},            // bcctr BO=0 (CR bit 0 clear: taken), CTR kept
+            {0x6000, mtspr(8, 12)},                   // LR = 0x7000
+            {0x6004, X(19, 20, 0, 0, 16, 1)},         // bclrl: to 0x7000, LR = 0x6008
+            {0x7000, mfspr(13, 8)},                   // r13 = 0x6008
+            {0x7004, bc(20, 0, 0x7100, true)},        // bca always: 0x7100
+            {0x7100, li(14, 2)},
+            {0x7104, mtspr(9, 14)},                   // CTR = 2
+            {0x7108, addi(15, 15, 1)},
+            {0x710C, bc(16, 0, -4)},                  // bdnz back to 0x7108 while CTR != 0
+            {0x7110, b(0x7200, true)},                // ba 0x7200
+            {0x7200, 0x00000000u},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().ctr() = 0x6000;
+        m->cpu.state().gpr[12] = 0x7000;
+        m->cpu.run(1);
+        CHECK_EQ(m->cpu.state().ctr(), 0x6000u);
+        m->cpu.run(11);
+    }
+    CHECK(same(a, c, "branches", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[13], 0x6008u);
+    CHECK_EQ(c.cpu.state().gpr[15], 2u);
+    CHECK_EQ(c.cpu.state().pc, 0x7200u);
+}

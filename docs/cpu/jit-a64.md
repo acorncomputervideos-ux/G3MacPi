@@ -18,6 +18,10 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
     field is set with `cset` and `bfi` from the AArch64 flags, plus
     XER[SO];
   - `mflr`, `mfctr`;
+  - branches at the end of a block: `b`, `bc`, `bclr`, `bcctr`, with
+    LK and AA. The CTR decrement and test, the CR bit test, and the
+    target read before LK updates LR are as in the interpreter. Then the
+    PC and the whole count are written;
   - the D-form integer loads and stores (`lwz`, `lbz`, `lhz`, `stw`,
     `stb`, `sth` and their update forms; see below).
 - **Everything else** calls its stage-1 block handler, the same function
@@ -122,7 +126,10 @@ Native execution on the Pi has not been tested yet.
 ## Coverage, and what comes next
 
 Native share of compiled operations in that boot: 27% at first, 36% with
-loads and stores, 39% with compares and CR0. The ROM boot still ends
+loads and stores, 39% with compares and CR0, 77% with branches. The
+branch code had 11 sabotages. Ten were caught by the existing tests;
+the eleventh (`bcctr` with BO[2] = 0 decrementing CTR) needed a new
+directed test, `branch_forms`. The ROM boot still ends
 bit-identical. The CR code had 9 sabotages. Eight were caught. The
 ninth (compiling OE forms natively) is impossible by construction: OE
 is part of the 10-bit extended opcode, so OE forms never match the
@@ -130,9 +137,9 @@ native cases.
 
 Next:
 
-1. Branches at block end. Nearly every block ends in a handler call for
-   its branch.
-2. Linking blocks directly.
-3. Keeping the instruction count in a register between handler calls.
+1. Linking blocks directly, without returning to the C++ loop.
+2. Keeping the instruction count in a register between handler calls.
+3. More instructions natively (`mtspr` LR/CTR, `lha`, indexed loads and
+   stores, `mullw`, shifts).
 
 Speed can only be measured on the Pi.

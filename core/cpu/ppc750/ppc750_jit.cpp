@@ -257,6 +257,80 @@ struct JitCompiler {
         }
     }
 
+    // --- branches (always a block's last operation) -------------------------------
+    // As op_b / op_bc / op_bclr_bcctr: CTR decrement and test, CR bit test,
+    // the target read before LK updates LR. Then PC and the whole pending
+    // count are written; the block ends.
+    static bool is_branch(u32 insn)
+    {
+        const u32 op = field::opcd(insn);
+        return op == 16 || op == 18 || (op == 19 && (field::xo10(insn) == 16 || field::xo10(insn) == 528));
+    }
+    void branch(u32 i, u32 insn, u32& pending)
+    {
+        ++pending;  // the branch itself
+        const u32 here = 4 * i;  // offset of the branch from the entry PC
+        const u32 op = field::opcd(insn), bo = field::rd(insn), bi = field::ra(insn);
+        const bool lk = field::lk(insn);
+        auto set_lr = [&] {
+            add_const(X9, X21, here + 4);
+            a.str(false, X9, X20, spr_off(spr::LR));
+        };
+        if (op == 18) {  // b
+            const u32 li = static_cast<u32>(sign_extend(insn & 0x03FFFFFCu, 26));
+            if (field::aa(insn))
+                a.mov_imm32(X8, li);
+            else
+                add_const(X8, X21, here + li);
+            if (lk)
+                set_lr();
+        } else {
+            const bool to_ctr = op == 19 && field::xo10(insn) == 528;
+            if (op == 19) {  // target first: bclrl uses the old LR
+                a.ldr(false, X11, X20, spr_off(to_ctr ? spr::CTR : spr::LR));
+                a.mov_imm32(X12, ~3u);
+                a.and_(false, X11, X11, X12);
+            }
+            if (lk)
+                set_lr();
+            Assembler::Label not_taken;
+            add_const(X8, X21, here + 4);  // not taken: the next instruction
+            if (!to_ctr && !(bo & 0x04)) {  // decrement CTR, test it
+                a.ldr(false, X9, X20, spr_off(spr::CTR));
+                a.sub_imm(false, X9, X9, 1);
+                a.str(false, X9, X20, spr_off(spr::CTR));
+                if (bo & 0x02)
+                    a.cbnz(false, X9, not_taken);  // branch if CTR == 0
+                else
+                    a.cbz(false, X9, not_taken);
+            }
+            if (!(bo & 0x10)) {  // test CR bit bi
+                a.ldr(false, X10, X20, cr_off());
+                if (bo & 0x08)
+                    a.tbz(X10, 31 - bi, not_taken);
+                else
+                    a.tbnz(X10, 31 - bi, not_taken);
+            }
+            if (op == 19) {
+                a.mov(false, X8, X11);
+            } else {
+                const u32 bd = static_cast<u32>(sign_extend(insn & 0xFFFCu, 16));
+                if (field::aa(insn))
+                    a.mov_imm32(X8, bd);
+                else
+                    add_const(X8, X21, here + bd);
+            }
+            a.bind(not_taken);
+        }
+        a.str(false, X8, X20, pc_off());
+        u32 off = cnt_off;
+        const Reg base = far(X19, off, 8);
+        a.ldr(true, X9, base, off);
+        a.add_imm(true, X9, X9, pending);
+        a.str(true, X9, base, off);
+        pending = 0;
+    }
+
     void call_handler(u32 i, u32 count, const BlockOp& op, Assembler::Label& out)
     {
         a.mov(true, X0, X19);
@@ -424,6 +498,11 @@ struct JitCompiler {
             const BlockOp& op = b.ops[i];
             if (native(op.insn)) {
                 ++pending;
+                ++c.jit_stats_.native_ops;
+                continue;
+            }
+            if (i + 1 == b.count && is_branch(op.insn)) {
+                branch(i, op.insn, pending);
                 ++c.jit_stats_.native_ops;
                 continue;
             }
