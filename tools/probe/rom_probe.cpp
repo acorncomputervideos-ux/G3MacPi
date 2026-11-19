@@ -511,25 +511,69 @@ int main(int argc, char** argv)
         }
         // G3_PC68=lo,hi: each entry of the 68K PC (r24) into [lo, hi], with
         // d0, d1, a0, a1, a7 (first 300).
-        struct Pc68 { u32 lo = 0, hi = 0; bool in = false; u32 shown = 0; ppc::Ppc750* cpu = nullptr; };
+        struct Pc68 { u32 lo = 0, hi = 0; bool in = false; u32 shown = 0; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0; };
         static Pc68 p68;
         if (const char* pr = std::getenv("G3_PC68")) {
             char* end = nullptr;
             p68.lo = static_cast<u32>(std::strtoul(pr, &end, 16));
             p68.hi = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 16)) : p68.lo;
             p68.cpu = &m.cpu();
+            p68.ram = ram.data();
+            p68.ram_size = static_cast<u32>(ram.size());
             m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
                 auto* p = static_cast<Pc68*>(c);
                 const u32 pc = s.gpr[24];
                 const bool in = pc >= p->lo && pc <= p->hi;
                 if (in && !p->in && p->shown < 300) {
                     ++p->shown;
-                    std::printf("[pc68] %llu pc=%08X d0=%08X d1=%08X a0=%08X a1=%08X a7=%08X\n",
+                    std::printf("[pc68] %llu pc=%08X d0=%08X d1=%08X a0=%08X a1=%08X a7=%08X",
                                 static_cast<unsigned long long>(p->cpu->instructions_executed()), pc, s.gpr[8],
                                 s.gpr[9], s.gpr[16], s.gpr[17], s.gpr[1]);
+                    if (std::getenv("G3_PC68_A1STR")) {  // the bytes a1 points to, as text
+                        std::printf("  a1->\"");
+                        for (u32 i = 0; i < 40; ++i) {
+                            u32 pa = 0;
+                            if (!p->cpu->probe_translate(s.gpr[17] + i, false, pa) || pa >= p->ram_size)
+                                break;
+                            const u8 ch = p->ram[pa];
+                            std::printf("%c", ch >= 32 && ch < 127 ? ch : '.');
+                        }
+                        std::printf("\"");
+                    }
+                    std::printf("\n");
                 }
                 p->in = in;
             }, &p68);
+        }
+        // G3_PPAGES=from,to: the physical code pages executed while the
+        // instruction count is in [from, to), with the first PC of each.
+        struct PPages { u64 from = 0, to = 0; ppc::Ppc750* cpu = nullptr; u32 last = ~0u; u32 pages[4096]; u32 first_pc[4096]; u32 n = 0; };
+        static PPages pp;
+        if (const char* ps = std::getenv("G3_PPAGES")) {
+            char* end = nullptr;
+            pp.from = std::strtoull(ps, &end, 0);
+            pp.to = end && *end == ',' ? std::strtoull(end + 1, nullptr, 0) : ~0ull;
+            pp.cpu = &m.cpu();
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* p = static_cast<PPages*>(c);
+                const u64 k = p->cpu->instructions_executed();
+                if (k < p->from || k >= p->to)
+                    return;
+                u32 pa = s.pc;
+                if (s.msr & ppc::msr::IR)
+                    p->cpu->probe_translate(s.pc, false, pa);  // (data translation; for listing only)
+                const u32 page = pa >> 12;
+                if (page == p->last)
+                    return;
+                p->last = page;
+                for (u32 i = 0; i < p->n; ++i)
+                    if (p->pages[i] == page)
+                        return;
+                if (p->n < 4096) {
+                    p->pages[p->n] = page;
+                    p->first_pc[p->n++] = s.pc;
+                }
+            }, &pp);
         }
         // G3_REGSAT=pc: print the registers the first time the CPU is about
         // to execute that address.
@@ -621,6 +665,11 @@ int main(int argc, char** argv)
             }
         } else {
             m.run_for(ms * 1000000000ull);  // picoseconds
+        }
+        if (pp.cpu) {
+            std::printf("[ppages] %u pages\n", pp.n);
+            for (u32 i = 0; i < pp.n; ++i)
+                std::printf("[ppages] pa %08X  first pc %08X\n", pp.pages[i] << 12, pp.first_pc[i]);
         }
         if (tr.cpu) {
             const u32 show = std::getenv("G3_TRACE68_N") ? static_cast<u32>(std::strtoul(std::getenv("G3_TRACE68_N"), nullptr, 10)) : 300;
