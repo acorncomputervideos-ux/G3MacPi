@@ -229,3 +229,15 @@ many seconds to minutes of host time.
    time, Mac OS draws its start-up screen: grey desktop, pointer, and the
    flashing "?" disk. That is the right result with no system disk
    attached. Next: a disk holding a Mac OS system folder.
+8. **Disk controller.** Mac OS loaded its heathrow-ata driver but never
+   touched the controller. Disassembling the driver (and decompressing its
+   PEF data section) showed why: it finds the chip through a node of
+   device_type "mac-io" and needs `AAPL,pio-timing` on the ata nodes. With
+   both it sends IDENTIFY, INITIALIZE DEVICE PARAMETERS and READ SECTORS.
+   It then reads the disk's driver descriptor map and stops unless the disk
+   has Apple's ATA driver (docs/storage/disk-format.md). The real B&W keeps
+   its hard disk on a CMD646 PCI controller (`pci-ata@1/ata-4@0`), and the
+   mac-io channel holds the CD-ROM. Not modelled yet.
+9. **Speed.** Release build: 22.5 s -> 13.0 s for the first 4 s of guest
+   time (docs/cpu/performance.md). Earlier timings in this log were made
+   with the AddressSanitizer build, about 6x slower.
