@@ -48,3 +48,26 @@ caught.
 - Collision handling (Cuda wants to send while the host starts): the host
   side is implemented by Linux; the Cuda only starts unsolicited packets
   when idle — autopoll packets will need this when ADB arrives.
+
+## More commands (what Mac OS 9's ROM sends)
+
+Facts from DingusPPC's Cuda model, which follows Apple's Cuda ERS
+(read for facts only); checked against the commands Mac OS 9 sends at
+start-up (probe `G3_CUDA`). Tests: `tests/unit/devices/test_via_cuda.cpp`.
+
+| Command | Reply |
+|---|---|
+| 0x00 WARM START | OK; stops autopoll and one-second packets |
+| 0x02 READ MCU MEMORY (addr16) | header, then Cuda memory from addr, **open-ended** (until the host negates TIP). PRAM is at 0x100-0x1FF; other addresses read 0 (a real Cuda's ROM at 0xF00 holds its version; not modelled) |
+| 0x08 WRITE MCU MEMORY (addr16, data) | PRAM range written; elsewhere ignored; OK |
+| 0x1B ONE SECOND MODE (mode) | OK; then a packet each RTC second while the link is idle |
+| 0x22 I2C, 0x25 combined I2C | ERROR_PACKET code 5 (no acknowledge): no device on our I2C bus. A real B&W has the DIMMs' SPD EEPROMs at 0x50-0x53 (DingusPPC); Mac OS's start-up probes other addresses (0x14, 0x20, 0x27, 0x38, 0x40, 0x48, 0x4E, 0x5A, 0x60) |
+| 0x0B, 0x0D, 0x13, 0x21, 0x23, 0x24, 0x26 | OK (power-up time, monostable reset, file server flag, power messages, wake-up, timer tickle, PB0) |
+
+One-second packets: mode 1 `01 00 03 tttttttt`; mode 2 `01 00 03`; mode 3
+(what Mac OS sets) a one-byte TIMER_PACKET `03`, except the first after a
+mode change, the one after a missed second (link busy) and those after a
+second that is a multiple of 4, which carry the full time.
+
+Error codes: 1 bad packet type, 2 bad command, 3 bad size, 4 bad
+parameter, 5 I2C error (earlier versions of this model used 5 for sizes).

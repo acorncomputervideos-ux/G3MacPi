@@ -125,6 +125,7 @@ struct LinuxCudaHost {
     size_t data_index = 0;
     bool reply_expected = false, done = false, reading_reply = false;
     bool req_pending = false;  // Linux: current_req queued but not yet sent
+    size_t max_reply = 0;      // > 0: end the reply after that many bytes (as Mac OS does)
 
     bool treq_asserted() { return !(r.in(B) & TREQ); }
     void assert_tip() { r.out(B, r.in(B) & ~TIP); }
@@ -231,7 +232,7 @@ struct LinuxCudaHost {
             break;
         case St::reading:
             (reading_reply ? reply : unsolicited).push_back(r.in(SR));
-            if (!treq_asserted()) {
+            if (!treq_asserted() || (reading_reply && max_reply && reply.size() >= max_reply)) {
                 negate_tip_and_tack();
                 state = St::read_done;
             } else {
@@ -444,4 +445,100 @@ TEST_CASE("devices/cuda/packet_trace_sees_requests_and_replies")
     CHECK(log.in[0] == std::vector<u8>({Cuda::kCudaPacket, Cuda::kGetAutoRate}));
     REQUIRE(log.out.size() == 1u);
     CHECK(log.out[0] == c.host.reply);
+}
+
+TEST_CASE("devices/cuda/mcu_memory_read_is_open_ended")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    c.cuda.pram()[0x10] = 0x11;
+    c.cuda.pram()[0x11] = 0x22;
+    c.cuda.pram()[0x12] = 0x33;
+    // PRAM at Cuda address 0x110: the host takes 3 data bytes, then ends it.
+    c.host.max_reply = 6;
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGet6805Addr, 0x01, 0x10}));
+    REQUIRE(c.host.reply.size() == 6u);
+    CHECK_EQ(c.host.reply[0], Cuda::kCudaPacket);
+    CHECK_EQ(c.host.reply[2], Cuda::kGet6805Addr);
+    CHECK_EQ(c.host.reply[3], 0x11u);
+    CHECK_EQ(c.host.reply[5], 0x33u);
+    // Elsewhere: zeros (address 0x00A1, as Mac OS asks).
+    c.host.max_reply = 5;
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGet6805Addr, 0x00, 0xA1}));
+    REQUIRE(c.host.reply.size() == 5u);
+    CHECK_EQ(c.host.reply[3], 0u);
+    // The link is back in step: an ordinary request still works.
+    c.host.max_reply = 0;
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGetAutoRate}));
+    CHECK_EQ(c.host.reply.size(), 4u);
+    CHECK(c.host.unsolicited.empty());
+}
+
+TEST_CASE("devices/cuda/mcu_memory_write")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kSet6805Addr, 0x01, 0x20, 0xAA, 0xBB}));
+    CHECK_EQ(c.host.reply.size(), 3u);
+    CHECK_EQ(c.cuda.pram()[0x20], 0xAAu);
+    CHECK_EQ(c.cuda.pram()[0x21], 0xBBu);
+    // Outside PRAM (Mac OS writes 0x0202): acknowledged, no effect.
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kSet6805Addr, 0x02, 0x02, 0x01}));
+    CHECK_EQ(c.host.reply[0], Cuda::kCudaPacket);
+    for (u32 i = 0; i < Cuda::kPramSize; ++i)
+        if (i != 0x20 && i != 0x21)
+            CHECK_EQ(c.cuda.pram()[i], 0u);
+}
+
+TEST_CASE("devices/cuda/one_second_mode_packets")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    c.cuda.set_rtc(0x1000);                     // a multiple of 4: predictable pattern
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kOneSecondMode, 3}));
+    CHECK_EQ(c.cuda.one_second_mode(), 3u);
+    c.service_until(c.rig.sched.now() + 5100000000000ull);  // 5.1 s
+    // Seconds 0x1001 (first: full), 0x1002-0x1004 (ticks), 0x1005 (the
+    // previous second was a multiple of 4: full).
+    const std::vector<u8>& u = c.host.unsolicited;
+    REQUIRE(u.size() == 7u + 1 + 1 + 1 + 7);
+    CHECK(std::vector<u8>(u.begin(), u.begin() + 7) ==
+          std::vector<u8>({Cuda::kCudaPacket, 0, Cuda::kGetTime, 0x00, 0x00, 0x10, 0x01}));
+    CHECK_EQ(u[7], Cuda::kTimerPacket);
+    CHECK_EQ(u[9], Cuda::kTimerPacket);
+    CHECK_EQ(u[16], 0x05u);                     // the time 0x1005
+    // Warm start stops them.
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kWarmStart}));
+    CHECK_EQ(c.cuda.one_second_mode(), 0u);
+    const size_t before = u.size();
+    c.service_until(c.rig.sched.now() + 3000000000000ull);
+    CHECK_EQ(u.size(), before);
+}
+
+TEST_CASE("devices/cuda/i2c_and_error_codes")
+{
+    CudaRig c;
+    REQUIRE(c.host.init_via());
+    // Mac OS probes I2C devices a B&W does not have: no acknowledge.
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGetSetIic, 0x41}));
+    REQUIRE(c.host.reply.size() == 4u);
+    CHECK_EQ(c.host.reply[0], Cuda::kErrorPacket);
+    CHECK_EQ(c.host.reply[1], Cuda::kErrI2c);
+    CHECK_EQ(c.host.reply[3], Cuda::kGetSetIic);
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kCombinedIic, 0x28, 0x00, 0x29}));
+    CHECK_EQ(c.host.reply[1], Cuda::kErrI2c);
+    // Too few arguments: bad size; a bad value: bad parameter; an unknown
+    // packet type: bad packet.
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kSetTime, 1}));
+    CHECK_EQ(c.host.reply[1], Cuda::kErrBadSize);
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kGetPram, 0x01, 0x00}));
+    CHECK_EQ(c.host.reply[1], Cuda::kErrBadParam);
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kSetAutoRate, 0}));
+    CHECK_EQ(c.host.reply[1], Cuda::kErrBadParam);
+    REQUIRE(c.host.request({0x07, 0x01}));
+    CHECK_EQ(c.host.reply[1], Cuda::kErrBadPacket);
+    // Acknowledged commands with nothing to emulate.
+    REQUIRE(c.host.request({Cuda::kCudaPacket, Cuda::kTimerTickle, 0x20}));
+    CHECK_EQ(c.host.reply[0], Cuda::kCudaPacket);
+    CHECK_EQ(c.host.reply.size(), 3u);
 }

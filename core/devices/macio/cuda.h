@@ -43,14 +43,21 @@ public:
     static constexpr u8 kTACK = 0x10;
     static constexpr u8 kTIP = 0x20;
     // Packet types (Linux include/uapi/linux/adb.h).
-    static constexpr u8 kAdbPacket = 0, kCudaPacket = 1, kErrorPacket = 2;
+    static constexpr u8 kAdbPacket = 0, kCudaPacket = 1, kErrorPacket = 2, kTimerPacket = 3;
+    // Error codes in ERROR_PACKET replies (DingusPPC's Cuda model, after
+    // Apple's Cuda ERS).
+    static constexpr u8 kErrBadPacket = 1, kErrBadCommand = 2, kErrBadSize = 3, kErrBadParam = 4, kErrI2c = 5;
+    // Cuda memory: PRAM appears at 0x100-0x1FF (READ/WRITE MCU MEMORY).
+    static constexpr u32 kPramInMcu = 0x100;
     // Commands (Linux include/uapi/linux/cuda.h).
     enum Command : u8 {
         kWarmStart = 0x00, kAutopoll = 0x01, kGet6805Addr = 0x02, kGetTime = 0x03,
         kGetPram = 0x07, kSet6805Addr = 0x08, kSetTime = 0x09, kPowerDown = 0x0A,
         kPowerUpTime = 0x0B, kSetPram = 0x0C, kMsReset = 0x0D, kSendDfac = 0x0E,
-        kResetSystem = 0x11, kSetIpl = 0x12, kSetAutoRate = 0x14, kGetAutoRate = 0x16,
-        kSetDeviceList = 0x19, kGetDeviceList = 0x1A, kGetSetIic = 0x22,
+        kResetSystem = 0x11, kSetIpl = 0x12, kFileServerFlag = 0x13, kSetAutoRate = 0x14,
+        kGetAutoRate = 0x16, kSetDeviceList = 0x19, kGetDeviceList = 0x1A, kOneSecondMode = 0x1B,
+        kSetPowerMessages = 0x21, kGetSetIic = 0x22, kToggleWakeup = 0x23, kTimerTickle = 0x24,
+        kCombinedIic = 0x25, kOutPb0 = 0x26,
     };
     static constexpr u32 kPramSize = 256;  // to verify for the B&W's Cuda
     static constexpr u32 kMaxPacket = 64;
@@ -68,6 +75,7 @@ public:
     void set_power_callbacks(EventCallback power_down, EventCallback reset, void* context);
     void attach_adb(AdbBus* bus) { adb_ = bus; }
     bool autopoll_enabled() const { return autopoll_; }
+    u8 one_second_mode() const { return one_sec_mode_; }
     // Diagnostics: called with each packet the host sent (to_host false)
     // and each packet queued for the host (to_host true).
     using PacketTrace = void (*)(void* context, const u8* bytes, u32 len, bool to_host);
@@ -91,6 +99,9 @@ private:
     void load_next_out_byte();
     void schedule_autopoll();
     static void autopoll_event(void* ctx, u64 now);
+    void schedule_second();
+    static void second_event(void* ctx, u64 now);
+    u8 mcu_byte(u32 addr) const;
 
     Via6522& via_;
     Scheduler& sched_;
@@ -104,6 +115,8 @@ private:
     u8 out_[kMaxPacket] = {};
     u32 out_len_ = 0, out_pos_ = 0;
     bool out_pending_ = false;
+    bool open_ended_ = false;   // after out_, keep sending Cuda memory from mcu_addr_
+    u32 mcu_addr_ = 0;
 
     u64 rtc_base_ps_ = 0;
     u32 rtc_base_seconds_ = 0;
@@ -113,6 +126,11 @@ private:
     u16 device_list_ = 0;
     AdbBus* adb_ = nullptr;
     Scheduler::Handle autopoll_event_ = Scheduler::kInvalidHandle;
+    // One-second mode (0 = off): a packet every RTC second when idle.
+    u8 one_sec_mode_ = 0;
+    bool one_sec_first_ = true, one_sec_missed_ = false;
+    u32 last_second_ = 0;
+    Scheduler::Handle second_event_ = Scheduler::kInvalidHandle;
     EventCallback power_down_ = nullptr, reset_ = nullptr;
     void* power_ctx_ = nullptr;
     PacketTrace trace_ = nullptr;

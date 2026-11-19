@@ -241,3 +241,15 @@ many seconds to minutes of host time.
 9. **Speed.** Release build: 22.5 s -> 13.0 s for the first 4 s of guest
    time (docs/cpu/performance.md). Earlier timings in this log were made
    with the AddressSanitizer build, about 6x slower.
+10. **CMD646.** Mac OS's cmd646-ata ROM driver binds to the channel node
+    (`ata-4`, compatible "cmd646-ata") and needs the PCI-to-PCI bridge's
+    `ranges`: without them Mac OS left the CMD646's I/O addresses as bare
+    port numbers and the driver wrote its reset to RAM (found by stopping
+    at the driver's first register write). With both it identifies the
+    disk and reads its driver descriptor map, as on mac-io.
+11. **Cuda.** Memory reads/writes, one-second mode (timer packets now
+    flow) and I2C (no device: the right answer for Mac OS's probes) are
+    answered; Mac OS gets no "bad command" replies any more.
+12. **Pi.** The kernel runs the Mac through MacSession (Start the Mac in
+    the settings menu); g3_host runs the same session on Linux and reaches
+    the start-up screen. Not yet run on a Pi.

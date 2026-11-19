@@ -60,12 +60,26 @@ void Cuda::sr_event(void* ctx, u64)
     c->via_.raise_interrupt(Via6522::SR_INT);
 }
 
+u8 Cuda::mcu_byte(u32 addr) const
+{
+    // PRAM is visible at 0x100-0x1FF; elsewhere we have nothing to show
+    // (DingusPPC sends zeros there too).
+    if (addr >= kPramInMcu && addr < kPramInMcu + kPramSize)
+        return pram_[addr - kPramInMcu];
+    return 0;
+}
+
 void Cuda::load_next_out_byte()
 {
-    via_.set_shift_register(out_pos_ < out_len_ ? out_[out_pos_] : 0);
+    if (out_pos_ < out_len_)
+        via_.set_shift_register(out_[out_pos_]);
+    else
+        via_.set_shift_register(open_ended_ ? mcu_byte(mcu_addr_++) : 0);
     ++out_pos_;
-    if (out_pos_ >= out_len_)
-        set_treq(false);  // TREQ is negated together with the last byte
+    // TREQ is negated together with the last byte; an open-ended reply
+    // goes on until the host ends the transaction (TIP negated).
+    if (out_pos_ >= out_len_ && !open_ended_)
+        set_treq(false);
 }
 
 void Cuda::via_port_b_changed(u8 value, u8 driven)
@@ -110,6 +124,7 @@ void Cuda::via_port_b_changed(u8 value, u8 driven)
         if (state_ == State::Sending) {
             state_ = State::Idle;
             out_pending_ = false;
+            open_ended_ = false;
             set_treq(false);
             signal_byte();  // the host reads SR once more (read_done)
             return;
@@ -169,10 +184,58 @@ void Cuda::autopoll_event(void* ctx, u64)
     c->schedule_autopoll();
 }
 
+// --- one-second mode ----------------------------------------------------------------
+// Apple's Cuda ERS as DingusPPC implements it: each RTC second, when the link
+// is idle, mode 1 sends (CUDA_PACKET, 0, GET_TIME, time), mode 2 the header
+// only, mode 3 a one-byte TIMER_PACKET; the first packet after a mode
+// change, one after a missed second, and every fourth second in modes 2
+// and 3 carry the full time.
+
+void Cuda::schedule_second()
+{
+    if (second_event_ != Scheduler::kInvalidHandle) {
+        sched_.cancel(second_event_);
+        second_event_ = Scheduler::kInvalidHandle;
+    }
+    if (one_sec_mode_ == 0)
+        return;
+    const u64 elapsed = sched_.now() - rtc_base_ps_;
+    const u64 next = rtc_base_ps_ + (elapsed / kPsPerSecond + 1) * kPsPerSecond;
+    second_event_ = sched_.schedule_at(next, second_event, this);
+}
+
+void Cuda::second_event(void* ctx, u64)
+{
+    auto* c = static_cast<Cuda*>(ctx);
+    c->second_event_ = Scheduler::kInvalidHandle;
+    const u32 t = c->rtc();
+    if (c->state_ != State::Idle || c->out_pending_ || c->tip_) {
+        c->one_sec_missed_ = true;  // busy: this second is lost
+    } else {
+        const bool full = c->one_sec_first_ || c->one_sec_missed_ || c->one_sec_mode_ == 1 ||
+                          (c->last_second_ & 3) == 0;
+        u8 buf[7] = {kCudaPacket, 0, kGetTime, static_cast<u8>(t >> 24), static_cast<u8>(t >> 16),
+                     static_cast<u8>(t >> 8), static_cast<u8>(t)};
+        if (full)
+            c->queue_reply(buf, 7);
+        else if (c->one_sec_mode_ == 2)
+            c->queue_reply(buf, 3);
+        else {
+            const u8 tick = kTimerPacket;
+            c->queue_reply(&tick, 1);
+        }
+        c->one_sec_first_ = false;
+        c->one_sec_missed_ = false;
+        c->last_second_ = t;
+    }
+    c->schedule_second();
+}
+
 // --- commands ----------------------------------------------------------------------
 
 void Cuda::queue_reply(const u8* bytes, u32 len)
 {
+    open_ended_ = false;
     out_len_ = len > kMaxPacket ? kMaxPacket : len;
     for (u32 i = 0; i < out_len_; ++i)
         out_[i] = bytes[i];
@@ -222,7 +285,7 @@ void Cuda::process_packet()
         return;
     }
     if (type != kCudaPacket || in_len_ < 2) {
-        reply_error(2, in_len_ > 1 ? in_[1] : 0);
+        reply_error(type != kCudaPacket ? kErrBadPacket : kErrBadSize, in_len_ > 1 ? in_[1] : 0);
         return;
     }
     const u8 cmd = in_[1];
@@ -231,7 +294,7 @@ void Cuda::process_packet()
 
     switch (cmd) {
     case kAutopoll:
-        if (nargs < 1) { reply_error(5, cmd); return; }
+        if (nargs < 1) { reply_error(kErrBadSize, cmd); return; }
         autopoll_ = args[0] != 0;
         schedule_autopoll();
         reply_cuda(cmd, nullptr, 0);
@@ -244,7 +307,7 @@ void Cuda::process_packet()
         return;
     }
     case kSetTime: {
-        if (nargs < 4) { reply_error(5, cmd); return; }
+        if (nargs < 4) { reply_error(kErrBadSize, cmd); return; }
         set_rtc((static_cast<u32>(args[0]) << 24) | (static_cast<u32>(args[1]) << 16) |
                 (static_cast<u32>(args[2]) << 8) | args[3]);
         reply_cuda(cmd, nullptr, 0);
@@ -253,14 +316,14 @@ void Cuda::process_packet()
     case kGetPram: {
         // Address is 16 bits; returns the byte at that address.
         // (Byte count of real Cuda replies: to verify.)
-        if (nargs < 2) { reply_error(5, cmd); return; }
+        if (nargs < 2) { reply_error(kErrBadSize, cmd); return; }
         const u32 addr = (static_cast<u32>(args[0]) << 8) | args[1];
-        if (addr >= kPramSize) { reply_error(5, cmd); return; }
+        if (addr >= kPramSize) { reply_error(kErrBadParam, cmd); return; }
         reply_cuda(cmd, &pram_[addr], 1);
         return;
     }
     case kSetPram: {
-        if (nargs < 3) { reply_error(5, cmd); return; }
+        if (nargs < 3) { reply_error(kErrBadSize, cmd); return; }
         const u32 addr = (static_cast<u32>(args[0]) << 8) | args[1];
         for (u32 i = 2; i < nargs; ++i)
             if (addr + i - 2 < kPramSize)
@@ -269,7 +332,8 @@ void Cuda::process_packet()
         return;
     }
     case kSetAutoRate:
-        if (nargs < 1 || args[0] == 0) { reply_error(5, cmd); return; }
+        if (nargs < 1) { reply_error(kErrBadSize, cmd); return; }
+        if (args[0] == 0) { reply_error(kErrBadParam, cmd); return; }
         autopoll_rate_ms_ = args[0];
         reply_cuda(cmd, nullptr, 0);
         return;
@@ -277,7 +341,7 @@ void Cuda::process_packet()
         reply_cuda(cmd, &autopoll_rate_ms_, 1);
         return;
     case kSetDeviceList:
-        if (nargs < 2) { reply_error(5, cmd); return; }
+        if (nargs < 2) { reply_error(kErrBadSize, cmd); return; }
         device_list_ = static_cast<u16>((args[0] << 8) | args[1]);
         reply_cuda(cmd, nullptr, 0);
         return;
@@ -296,8 +360,57 @@ void Cuda::process_packet()
         if (reset_)
             reset_(power_ctx_);
         return;
+    case kWarmStart:  // stops the asynchronous packets
+        autopoll_ = false;
+        schedule_autopoll();
+        one_sec_mode_ = 0;
+        one_sec_first_ = true;
+        schedule_second();
+        reply_cuda(cmd, nullptr, 0);
+        return;
+    case kGet6805Addr: {  // READ MCU MEMORY: open-ended, from the address given
+        if (nargs < 2) { reply_error(kErrBadSize, cmd); return; }
+        reply_cuda(cmd, nullptr, 0);
+        open_ended_ = true;
+        mcu_addr_ = (static_cast<u32>(args[0]) << 8) | args[1];
+        return;
+    }
+    case kSet6805Addr: {  // WRITE MCU MEMORY: PRAM is writable, the rest ignores writes
+        if (nargs < 2) { reply_error(kErrBadSize, cmd); return; }
+        const u32 addr = (static_cast<u32>(args[0]) << 8) | args[1];
+        for (u32 i = 2; i < nargs; ++i) {
+            const u32 a = addr + i - 2;
+            if (a >= kPramInMcu && a < kPramInMcu + kPramSize)
+                pram_[a - kPramInMcu] = args[i];
+        }
+        reply_cuda(cmd, nullptr, 0);
+        return;
+    }
+    case kOneSecondMode:
+        if (nargs < 1) { reply_error(kErrBadSize, cmd); return; }
+        one_sec_mode_ = args[0];
+        one_sec_first_ = true;
+        one_sec_missed_ = false;
+        reply_cuda(cmd, nullptr, 0);
+        schedule_second();
+        return;
+    case kGetSetIic:    // I2C: no device on our Cuda's bus acknowledges
+    case kCombinedIic:  // (the B&W's SPD EEPROMs are not modelled)
+        if (nargs < (cmd == kCombinedIic ? 3u : 1u)) { reply_error(kErrBadSize, cmd); return; }
+        reply_error(kErrI2c, cmd);
+        return;
+    // Accepted and acknowledged; nothing to emulate (as DingusPPC).
+    case kPowerUpTime:
+    case kMsReset:
+    case kFileServerFlag:
+    case kSetPowerMessages:
+    case kToggleWakeup:
+    case kTimerTickle:
+    case kOutPb0:
+        reply_cuda(cmd, nullptr, 0);
+        return;
     default:
-        reply_error(2, cmd);
+        reply_error(kErrBadCommand, cmd);
         return;
     }
 }
