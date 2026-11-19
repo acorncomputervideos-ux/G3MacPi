@@ -609,19 +609,34 @@ int main(int argc, char** argv)
         }
         // G3_REGSAT=pc: print the registers the first time the CPU is about
         // to execute that address.
-        struct RegsAt { u32 pc = 0; bool done = false; };
+        struct RegsAt { u32 pc = 0; bool done = false; u64 from = 0; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0; };
         static RegsAt ra;
         if (const char* rs = std::getenv("G3_REGSAT")) {
-            ra.pc = static_cast<u32>(std::strtoul(rs, nullptr, 16));
+            char* rend = nullptr;
+            ra.pc = static_cast<u32>(std::strtoul(rs, &rend, 16));
+            if (rend && *rend == ',')  // G3_REGSAT=pc,from: the first time at or after that instruction count
+                ra.from = std::strtoull(rend + 1, nullptr, 0);
+            ra.cpu = &m.cpu();
+            ra.ram = ram.data();
+            ra.ram_size = static_cast<u32>(ram.size());
             m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
                 auto* r = static_cast<RegsAt*>(c);
-                if (r->done || s.pc != r->pc)
+                if (r->done || s.pc != r->pc || r->cpu->instructions_executed() < r->from)
                     return;
                 r->done = true;
-                std::printf("[regs] at %08X msr=%08X lr=%08X ctr=%08X\n", s.pc, s.msr, s.lr(), s.ctr());
+                std::printf("[regs] at %08X msr=%08X lr=%08X ctr=%08X  (instruction %llu)\n", s.pc, s.msr, s.lr(), s.ctr(),
+                            static_cast<unsigned long long>(r->cpu->instructions_executed()));
                 for (u32 i = 0; i < 32; i += 8)
                     std::printf("[regs] r%-2u %08X %08X %08X %08X %08X %08X %08X %08X\n", i, s.gpr[i], s.gpr[i + 1],
                                 s.gpr[i + 2], s.gpr[i + 3], s.gpr[i + 4], s.gpr[i + 5], s.gpr[i + 6], s.gpr[i + 7]);
+                std::printf("[regs] stack at r1:");  // 32 words, through the data translation
+                for (u32 k = 0; k < 128; k += 4) {
+                    u32 pa = 0, v = 0;
+                    if (r->cpu->probe_translate(s.gpr[1] + k, false, pa) && pa + 4 <= r->ram_size)
+                        v = load_be32(r->ram + pa);
+                    std::printf("%s%08X", k % 32 ? " " : "\n[regs]   ", v);
+                }
+                std::printf("\n");
             }, &ra);
         }
         // G3_MEMWATCH=physaddr: report every change of that byte of RAM
