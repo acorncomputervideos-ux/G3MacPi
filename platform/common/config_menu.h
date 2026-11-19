@@ -64,7 +64,7 @@ public:
         char text[kRows][kCols + 1];
         Attr attr[kRows];
     };
-    enum class Action : u8 { None, Save, Start, MediaChanged };
+    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest };
 
     // `disks_dir`/`rom_dir`: where the file pickers start (e.g. "/g3macpi/disks").
     ConfigMenu(const MachineConfig& config, DirectoryLister& lister, const char* disks_dir,
@@ -88,7 +88,7 @@ public:
 private:
     enum class Page : u8 { Main, Drive, Files };
     enum MainItem : u8 { kRam, kRom, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kMode,
-                         kDepth, kSave, kStart, kMainItems };
+                         kDepth, kSave, kStart, kSelfTest, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kBack, kDriveItems };
 
     Action key_main(u8 usage);

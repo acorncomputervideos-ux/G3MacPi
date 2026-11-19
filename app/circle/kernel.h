@@ -67,6 +67,7 @@ private:
 	// The emulated Mac
 	void StartMac (void);
 	void StopMac (void);
+	void RunSelfTest (void);
 	void RunMac (void);
 	static void DiscEjected (void *pContext, u32 nDrive);
 
@@ -132,6 +133,7 @@ private:
 	u8			*m_pVram;
 	u32			*m_pPixels;		// screen conversion buffer
 	u8			*m_pBlocks;		// the CPU's block cache (with jit = yes)
+	u8			*m_pSelfTestWork;	// memory for the CPU self-test
 	boolean			m_bMacRunning;
 	unsigned		m_nLastDrawTicks;
 	unsigned		m_nLastStatsTicks;

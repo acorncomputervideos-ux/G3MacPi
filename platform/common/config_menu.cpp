@@ -222,6 +222,8 @@ ConfigMenu::Action ConfigMenu::key_main(u8 usage)
             return Action::Save;
         if (sel_ == kStart)
             return Action::Start;
+        if (sel_ == kSelfTest)
+            return Action::SelfTest;
         change_main(sel_, 1);
         return Action::None;
     default:
@@ -525,6 +527,9 @@ void ConfigMenu::render(Screen& s) const
                 line(s, row, item_attr(sel, false),
                      !running_ ? "Start the Mac"
                      : needs_restart() ? "Restart the Mac (applies the * changes)" : "Resume the Mac");
+                continue;
+            } else if (i == kSelfTest) {
+                line(s, row, item_attr(sel, false), "CPU self-test (checks the JIT, measures speed)");
                 continue;
             }
             line(s, row, item_attr(sel, chg), label, buf);

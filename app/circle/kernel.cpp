@@ -22,6 +22,7 @@
 #include "core/common/endian.h"
 #include "core/common/version.h"
 #include "ndrv_data.h"
+#include "platform/common/cpu_selftest.h"
 
 #include <circle/new.h>
 
@@ -41,6 +42,20 @@ asm (".section .text_g3jit, \"awx\", %progbits\n"
      ".previous\n");
 extern "C" u32 g3_jit_code[];
 #define s_JitCode g3_jit_code
+
+// The CPU self-test's own code buffer (the Mac's may be in use), 512 KB.
+static const unsigned SelfTestCodeWords = 128 * 1024;
+asm (".section .text_g3jit, \"awx\", %progbits\n"
+     ".balign 65536\n"
+     "g3_selftest_code:\n"
+     ".zero 524288\n"
+     ".previous\n");
+extern "C" u32 g3_selftest_code[];
+
+static u64 SelfTestClock (void *)
+{
+	return CTimer::GetClockTicks64 ();	// 1 MHz (CLOCKHZ)
+}
 static const unsigned BlockCacheSize = 8 << 20;
 
 #define SD_DRIVE	"SD:"
@@ -79,6 +94,7 @@ CKernel::CKernel (void)
 	m_pVram (0),
 	m_pPixels (0),
 	m_pBlocks (0),
+	m_pSelfTestWork (0),
 	m_bMacRunning (FALSE),
 	m_nLastDrawTicks (0),
 	m_nLastStatsTicks (0),
@@ -595,6 +611,10 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 		}
 		break; }
 
+	case g3::ConfigMenu::Action::SelfTest:
+		RunSelfTest ();
+		break;
+
 	case g3::ConfigMenu::Action::None:
 		break;
 	}
@@ -602,6 +622,48 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 	g3::ConfigMenu::Screen Screen;
 	m_pMenu->render (Screen);
 	DrawSettings (&m_Screen, Screen);
+}
+
+void CKernel::RunSelfTest (void)
+{
+	// docs/cpu/selftest.md. The Mac (if running) waits while the menu shows.
+	m_pMenu->set_status ("CPU self-test running (about 10 seconds)...");
+	{
+		g3::ConfigMenu::Screen Screen;
+		m_pMenu->render (Screen);
+		DrawSettings (&m_Screen, Screen);
+	}
+	if (m_pSelfTestWork == 0)
+	{
+		m_pSelfTestWork = new (HEAP_HIGH) u8[g3::CpuSelfTest::kWorkBytes];
+	}
+	if (m_pSelfTestWork == 0)
+	{
+		m_pMenu->set_status ("CPU self-test: not enough memory.");
+		return;
+	}
+	g3::CpuSelfTest::Setup Setup;
+	Setup.work = m_pSelfTestWork;
+	Setup.code = g3_selftest_code;
+	Setup.code_words = SelfTestCodeWords;
+	Setup.clock_us = SelfTestClock;
+	m_Logger.Write (FromKernel, LogNotice, "CPU self-test: %u random programs, then the speed benchmark",
+			Setup.programs);
+	const u64 nStart = CTimer::GetClockTicks64 ();
+	const g3::CpuSelfTest::Result Result = g3::CpuSelfTest::run (Setup);
+	const unsigned nMs = (unsigned) ((CTimer::GetClockTicks64 () - nStart) / 1000);
+
+	char Line1[160], Line2[160];
+	g3::CpuSelfTest::describe (Result, Line1, sizeof Line1, Line2, sizeof Line2);
+	m_Logger.Write (FromKernel, Result.ok () ? LogNotice : LogError, "%s", Line1);
+	m_Logger.Write (FromKernel, LogNotice, "%s", Line2);
+	m_Logger.Write (FromKernel, LogNotice, "CPU self-test: %u instructions compared, %u block runs in generated code, %u ms",
+			(unsigned) Result.instructions, (unsigned) Result.jit_block_runs, nMs);
+	WriteLogFile ();
+
+	CString Status;
+	Status.Format ("%s %s", Result.ok () ? "Self-test PASS." : "Self-test FAIL (see log).", Line2);
+	m_pMenu->set_status (Status);
 }
 
 void CKernel::StartMac (void)

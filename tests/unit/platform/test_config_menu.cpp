@@ -115,7 +115,11 @@ TEST_CASE("platform/menu/navigation_skips_floppy")
     r.press(kUp);
     CHECK(r.selected().find("Hard disk bus slave") != std::string::npos);
     r.press(kEnd);
+    CHECK(r.selected().find("CPU self-test") != std::string::npos);
+    r.press(kUp);
     CHECK(r.selected().find("Start the Mac") != std::string::npos);
+    r.press(kDown);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::SelfTest);
     r.press(kHome);
     CHECK(r.selected().find("Memory") != std::string::npos);
     r.press(kUp);                                      // stays at the top

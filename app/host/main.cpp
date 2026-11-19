@@ -5,10 +5,17 @@
 // screenshot. Headless; for checking start-up without a Pi.
 //
 //   g3_host <g3macpi.ini> <seconds of guest time> [screen.ppm] [display driver .pef]
+//   g3_host --selftest [programs]   the Pi's CPU self-test (generated code on
+//                                   the A64 simulator unless on AArch64)
 //
 // Paths in the .ini are host paths. Progress goes to stdout once per
 // second of guest time.
 
+#include "platform/common/cpu_selftest.h"
+#include "tools/a64sim/a64_sim.h"
+
+#include <chrono>
+#include <cstring>
 #include "platform/common/mac_session.h"
 
 #include <chrono>
@@ -83,8 +90,39 @@ bool write_ppm(const char* path, MacSession& s)
 
 } // namespace
 
+static u64 clock_us(void*)
+{
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+static int selftest(int argc, char** argv)
+{
+    static std::vector<u8> work(CpuSelfTest::kWorkBytes);
+    static std::vector<u32> code(128 * 1024);
+    static const void* range[2] = {code.data(), code.data() + code.size()};
+    CpuSelfTest::Setup s;
+    s.work = work.data();
+    s.code = code.data();
+    s.code_words = static_cast<u32>(code.size());
+#if !defined(__aarch64__)
+    s.runner = a64::simulate_jit_block;  // the generated code runs on the simulator (slow)
+    s.runner_context = range;
+#endif
+    s.clock_us = clock_us;
+    if (argc > 2)
+        s.programs = static_cast<u32>(std::strtoul(argv[2], nullptr, 10));
+    const CpuSelfTest::Result r = CpuSelfTest::run(s);
+    char l1[160], l2[160];
+    CpuSelfTest::describe(r, l1, sizeof l1, l2, sizeof l2);
+    std::printf("%s\n%s\n", l1, l2);
+    return r.ok() ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
+    if (argc > 1 && std::strcmp(argv[1], "--selftest") == 0)
+        return selftest(argc, argv);
     if (argc < 3) {
         std::fprintf(stderr, "usage: g3_host <g3macpi.ini> <seconds> [screen.ppm] [driver.pef]\n");
         return 2;
