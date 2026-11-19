@@ -675,8 +675,11 @@ void CKernel::DiscEjected (void *pContext, u32 nDrive)
 
 void CKernel::RunMac (void)
 {
-	m_Session.run (10ull * 1000000000ull);	// 10 ms of guest time
-	m_nGuestMs += 10;
+	// 2 ms of guest time per pass: on the Pi that takes several times longer
+	// in real time, and input, USB plug-and-play and the screen are served
+	// between passes.
+	m_Session.run (2ull * 1000000000ull);
+	m_nGuestMs += 2;
 
 	if (m_Session.powered_off () || m_Session.halted ())
 	{
