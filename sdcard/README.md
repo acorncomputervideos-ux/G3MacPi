@@ -31,5 +31,15 @@ menu and the log view; Ctrl+Alt+Delete reboots). On first start it creates:
 The menu sets memory, the ROM file, the four ATA drive positions (CD-ROM
 or hard disk, with an image from `/g3macpi/disks`), the start-up disk and
 the screen mode. The Blue & White G3 has no floppy drive, so the floppy
-line is greyed out. Starting the Mac from the menu is not in this build
-yet: the emulator core does not run on the Pi so far.
+line is greyed out.
+
+"Start the Mac" boots the emulated Mac with those settings. Its screen is
+centred on HDMI, scaled up by a whole factor where it fits. The keyboard
+and mouse go to the Mac. F12 opens the menu again and pauses the Mac:
+insert or eject a CD there, then "Resume". Changes marked `*` apply
+through "Restart the Mac". The UART log reports the emulation speed every
+10 seconds.
+
+Not yet tested on a Raspberry Pi; please report what you see. Known: the
+Pi 400 has no battery clock, so the Mac's clock starts at 2001-01-01; the
+emulation is several times slower than a real G3.

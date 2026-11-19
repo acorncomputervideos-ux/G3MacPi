@@ -40,6 +40,14 @@ jobs:
       - name: Core portability rules (incl. freestanding AArch64 compile)
         run: tools/check-core.sh
 
+      - name: Build our Mac OS display driver (PowerPC, embedded in the kernel)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-powerpc-linux-gnu binutils-powerpc-linux-gnu
+          cmake -S . -B build/host -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/host --target g3_ndrv -j"$(nproc)"
+          test -s build/host/guest/g3_ndrv.pef
+
       - name: Build SD card image
         run: tools/build-pi.sh
 

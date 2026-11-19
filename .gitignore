@@ -29,3 +29,4 @@ platform/**/*.o
 platform/**/*.d
 core/**/*.o
 core/**/*.d
+app/circle/ndrv_data.cpp

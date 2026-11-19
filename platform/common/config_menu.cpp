@@ -109,6 +109,15 @@ void ConfigMenu::set_running(bool running)
 
 void ConfigMenu::set_status(const char* message) { scopy(status_, sizeof status_, message); }
 
+void ConfigMenu::disc_ejected(u32 drive)
+{
+    if (drive >= MachineConfig::kDrives || cfg_.drive[drive].type != DriveType::CdRom)
+        return;
+    cfg_.drive[drive].image[0] = 0;
+    running_cfg_.drive[drive].image[0] = 0;
+    dirty_ = true;
+}
+
 bool ConfigMenu::restart_differs(u32 item) const
 {
     if (!running_)
@@ -513,7 +522,9 @@ void ConfigMenu::render(Screen& s) const
                 line(s, row, item_attr(sel, false), dirty_ ? "Save settings (unsaved changes)" : "Save settings");
                 continue;
             } else if (i == kStart) {
-                line(s, row, item_attr(sel, false), running_ ? "Resume the Mac" : "Start the Mac");
+                line(s, row, item_attr(sel, false),
+                     !running_ ? "Start the Mac"
+                     : needs_restart() ? "Restart the Mac (applies the * changes)" : "Resume the Mac");
                 continue;
             }
             line(s, row, item_attr(sel, chg), label, buf);

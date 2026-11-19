@@ -23,7 +23,8 @@ if [[ "${1:-}" == "clean" ]]; then
     (cd "$CIRCLE" && ./makeall clean) || true
     make -C "$APP" clean || true
     rm -f "$ROOT"/platform/common/*.o "$ROOT"/platform/common/*.d
-    rm -f "$ROOT"/core/machine/machine_config.o "$ROOT"/core/machine/machine_config.d
+    find "$ROOT/core" \( -name '*.o' -o -name '*.d' \) -delete
+    rm -f "$APP/ndrv_data.cpp"
     make -C "$CIRCLE/addon/SDCard" clean || true
     make -C "$CIRCLE/addon/fatfs" clean || true
     make -C "$CIRCLE/boot/armstub" clean || true
@@ -55,6 +56,15 @@ make -s -C "$CIRCLE/addon/fatfs" -j"$JOBS"
 
 echo "==> Building armstub8-rpi4.bin"
 make -s -C "$CIRCLE/boot/armstub" armstub8-rpi4.bin
+
+echo "==> Embedding our Mac OS display driver"
+# Built by the host build (needs powerpc-linux-gnu-gcc): cmake --build build/host --target g3_ndrv
+NDRV="${NDRV:-$ROOT/build/host/guest/g3_ndrv.pef}"
+if [[ ! -f "$NDRV" && -d "$ROOT/build/host" ]]; then
+    cmake --build "$ROOT/build/host" --target g3_ndrv >/dev/null 2>&1 || true
+fi
+[[ -f "$NDRV" ]] || echo "warning: $NDRV not found: the kernel will have no display driver (Mac OS cannot draw)" >&2
+python3 "$ROOT/tools/embed_ndrv.py" "$NDRV" "$APP/ndrv_data.cpp"
 
 echo "==> Building G3MacPi kernel"
 make -s -C "$APP" -j"$JOBS"

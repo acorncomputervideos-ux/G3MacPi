@@ -258,6 +258,8 @@ TEST_CASE("platform/menu/running_mac_cd_swap_and_restart_marks")
     CHECK(r.menu.needs_restart());
     CHECK(r.has("*Memory"));
     CHECK(r.has("takes effect when the Mac restarts"));
+    CHECK(r.has("Restart the Mac"));
+    CHECK(!r.has("Resume the Mac"));
     r.press(kLeft);
     CHECK(!r.menu.needs_restart());
     // A hard disk is never swapped live.
@@ -345,4 +347,19 @@ TEST_CASE("platform/menu/long_file_names_keep_the_size_column")
     }
     CHECK(found_iso);
     CHECK(found_long);
+}
+
+TEST_CASE("platform/menu/disc_ejected_by_the_mac")
+{
+    FakeFs fs = sample_fs();
+    MachineConfig cfg;
+    REQUIRE(cfg.set_image(0, "/g3macpi/disks/Mac OS 9.iso"));
+    ConfigMenu menu(cfg, fs, "/g3macpi/disks", "/g3macpi/rom");
+    menu.set_running(true);
+    menu.disc_ejected(0);
+    CHECK(menu.config().drive[0].image[0] == 0);
+    CHECK(!menu.needs_restart());        // nothing waits for a restart
+    CHECK(menu.dirty());                 // but the saved file still names the disc
+    menu.disc_ejected(2);                // not a CD-ROM drive: no effect
+    CHECK(menu.config().drive[2].type == MachineConfig::DriveType::None);
 }

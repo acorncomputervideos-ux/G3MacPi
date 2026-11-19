@@ -28,6 +28,8 @@
 #include "platform/common/hid_keyboard.h"
 #include "platform/common/config_menu.h"
 #include "platform/common/input_events.h"
+#include "mac_host.h"
+#include "platform/common/mac_session.h"
 #include "settings.h"
 #include "teedevice.h"
 
@@ -61,6 +63,12 @@ private:
 	void SetUpSettings (void);
 	void ShowMenu (boolean bShow);
 	void HandleMenuKey (u8 ucUsage);
+
+	// The emulated Mac
+	void StartMac (void);
+	void StopMac (void);
+	void RunMac (void);
+	static void DiscEjected (void *pContext, u32 nDrive);
 
 	// USB input test
 	void AttachInputDevices (void);
@@ -115,6 +123,18 @@ private:
 	CFatFsLister		m_Lister;
 	g3::ConfigMenu		*m_pMenu;
 	boolean			m_bMenuShown;
+
+	// The emulated Mac (memory comes from the high heap: above 1 GB)
+	g3::MacSession		m_Session;
+	CCircleMacHost		m_MacHost;
+	u8			*m_pRam;
+	u32			m_nRamSize;
+	u8			*m_pVram;
+	u32			*m_pPixels;		// screen conversion buffer
+	boolean			m_bMacRunning;
+	unsigned		m_nLastDrawTicks;
+	unsigned		m_nLastStatsTicks;
+	u64			m_nGuestMs;		// guest time run so far
 
 	static CKernel		*s_pThis;
 };

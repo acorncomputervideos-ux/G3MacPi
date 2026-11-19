@@ -19,7 +19,7 @@
 //
 // While the Mac is running (set_running(true)), changes that need a restart
 // (memory, ROM, drive types, screen) are marked with '*' and reported by
-// needs_restart(); inserting or ejecting a CD image takes effect at once
+// needs_restart(), and the last item reads "Restart the Mac"; inserting or ejecting a CD image takes effect at once
 // (Action::MediaChanged, with media_changed_drive()).
 
 #ifndef G3_PLATFORM_COMMON_CONFIG_MENU_H
@@ -82,6 +82,8 @@ public:
     void mark_saved() { dirty_ = false; }
     u32 media_changed_drive() const { return media_drive_; }
     void set_status(const char* message);  // one line under the menu (e.g. "Settings saved")
+    // The running Mac ejected the disc in `drive` itself: forget its image.
+    void disc_ejected(u32 drive);
 
 private:
     enum class Page : u8 { Main, Drive, Files };

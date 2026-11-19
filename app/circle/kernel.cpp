@@ -21,6 +21,9 @@
 #include "core/common/bitops.h"
 #include "core/common/endian.h"
 #include "core/common/version.h"
+#include "ndrv_data.h"
+
+#include <circle/new.h>
 
 static const char FromKernel[] = "g3macpi";
 
@@ -54,7 +57,15 @@ CKernel::CKernel (void)
 	m_nLastMouseLogTicks (0),
 	m_ShutdownMode (ShutdownNone),
 	m_pMenu (0),
-	m_bMenuShown (FALSE)
+	m_bMenuShown (FALSE),
+	m_pRam (0),
+	m_nRamSize (0),
+	m_pVram (0),
+	m_pPixels (0),
+	m_bMacRunning (FALSE),
+	m_nLastDrawTicks (0),
+	m_nLastStatsTicks (0),
+	m_nGuestMs (0)
 {
 	s_pThis = this;
 	m_ActLED.Blink (3);	// visible sign of life before the screen is up
@@ -395,7 +406,11 @@ void CKernel::ProcessInputEvents (void)
 				}
 			}
 
-			if (!m_bMenuShown)
+			if (m_bMacRunning && !m_bMenuShown)
+			{
+				m_Session.key (Usage, Event.key.pressed);	// to the Mac's ADB keyboard
+			}
+			else if (!m_bMenuShown)
 			{
 				m_Logger.Write (FromKernel, LogNotice, "Key %-4s usage 0x%02X  %s",
 						Event.key.pressed ? "down" : "up", (unsigned) Usage,
@@ -413,6 +428,10 @@ void CKernel::ProcessInputEvents (void)
 				m_Logger.Write (FromKernel, LogNotice, "Ctrl+Alt+Delete: rebooting");
 				m_ShutdownMode = ShutdownReboot;
 			}
+		}
+		else if (m_bMacRunning && !m_bMenuShown)
+		{
+			m_Session.mouse (Event.mouse.dx, Event.mouse.dy, Event.mouse.buttons);
 		}
 		else if (!m_bMenuShown)
 		{
@@ -501,6 +520,12 @@ void CKernel::ShowMenu (boolean bShow)
 		m_pMenu->render (Screen);
 		DrawSettings (&m_Screen, Screen);
 	}
+	else if (m_bMacRunning)
+	{
+		static const char Hide[] = "\x1b[?25l";
+		m_Screen.Write (Hide, sizeof Hide - 1);
+		m_nLastDrawTicks = 0;	// redraw the Mac's screen at once
+	}
 	else
 	{
 		static const char Back[] = "\x1b[?25hLog view. F12: settings menu.\n";
@@ -526,11 +551,33 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 		break;
 
 	case g3::ConfigMenu::Action::Start:
-		// Not yet: the emulator core runs on the Linux host only so far.
-		m_pMenu->set_status ("Starting the Mac comes with the next milestone (not in this build).");
+		if (!m_bMacRunning || m_pMenu->needs_restart ())
+		{
+			StartMac ();		// shows the Mac on success, else a status line
+		}
+		else
+		{
+			ShowMenu (FALSE);	// resume
+		}
+		if (!m_bMenuShown)
+		{
+			return;
+		}
 		break;
 
-	case g3::ConfigMenu::Action::MediaChanged:	// only while a Mac is running
+	case g3::ConfigMenu::Action::MediaChanged: {
+		const u32 nDrive = m_pMenu->media_changed_drive ();
+		const char *pImage = m_pMenu->config ().drive[nDrive].image;
+		if (!m_Session.change_disc (nDrive, pImage))
+		{
+			m_pMenu->set_status ("Could not open that disc image.");
+		}
+		else
+		{
+			m_pMenu->set_status (pImage[0] ? "Disc inserted." : "Disc ejected.");
+		}
+		break; }
+
 	case g3::ConfigMenu::Action::None:
 		break;
 	}
@@ -538,6 +585,128 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 	g3::ConfigMenu::Screen Screen;
 	m_pMenu->render (Screen);
 	DrawSettings (&m_Screen, Screen);
+}
+
+void CKernel::StartMac (void)
+{
+	StopMac ();
+	const g3::MachineConfig &Config = m_pMenu->config ();
+
+	// Memory: the Mac's RAM, video memory and a screen conversion buffer,
+	// above 1 GB where there is room (HEAP_HIGH returns 0 when full).
+	const u32 nRamSize = Config.ram_mb << 20;
+	if (m_pRam == 0 || m_nRamSize != nRamSize)
+	{
+		delete [] m_pRam;
+		m_pRam = new (HEAP_HIGH) u8[nRamSize];
+		m_nRamSize = m_pRam != 0 ? nRamSize : 0;
+	}
+	const u32 nVramSize = 8u << 20;
+	if (m_pVram == 0)
+	{
+		m_pVram = new (HEAP_HIGH) u8[nVramSize];
+	}
+	if (m_pPixels == 0)
+	{
+		m_pPixels = new (HEAP_HIGH) u32[1600 * 1200];
+	}
+	if (m_pRam == 0 || m_pVram == 0 || m_pPixels == 0)
+	{
+		m_pMenu->set_status ("Not enough memory for that much Mac RAM.");
+		return;
+	}
+	memset (m_pRam, 0, nRamSize);
+	memset (m_pVram, 0, nVramSize);
+
+	// The Pi 400 has no battery clock: without network time the Mac starts in 2001.
+	u64 nTime = m_Timer.GetUniversalTime ();
+	if (nTime < 1577836800u)	// before 2020: not set
+	{
+		nTime = 978307200u;	// 2001-01-01
+	}
+
+	g3::MacSession::Memory Memory;
+	Memory.ram = m_pRam;
+	Memory.ram_size = nRamSize;
+	Memory.vram = m_pVram;
+	Memory.vram_size = nVramSize;
+	m_MacHost.SetEjectHandler (DiscEjected, this);
+
+	m_Logger.Write (FromKernel, LogNotice, "Starting the Mac: %u MB, ROM %s", Config.ram_mb, Config.rom);
+	const g3::MacSession::Error Error = m_Session.start (Config, m_MacHost, Memory, g_NdrvData, g_NdrvSize, nTime);
+	if (Error != g3::MacSession::Error::None)
+	{
+		CString Status;
+		Status.Format ("Cannot start: %s%s%s", g3::MacSession::error_text (Error),
+			       m_Session.detail ()[0] ? ": " : "", m_Session.detail ());
+		m_Logger.Write (FromKernel, LogError, "%s", (const char *) Status);
+		m_pMenu->set_status (Status);
+		return;
+	}
+	if (g_NdrvSize == 0)
+	{
+		m_Logger.Write (FromKernel, LogWarning, "No display driver built in: Mac OS will not draw");
+	}
+
+	m_bMacRunning = TRUE;
+	m_nGuestMs = 0;
+	m_nLastStatsTicks = m_Timer.GetTicks ();
+	m_pMenu->set_running (TRUE);
+	m_pMenu->set_status ("");
+	ShowMenu (FALSE);
+}
+
+void CKernel::StopMac (void)
+{
+	if (m_bMacRunning)
+	{
+		m_Session.stop ();	// closes (and flushes) the images
+		m_bMacRunning = FALSE;
+		m_pMenu->set_running (FALSE);
+	}
+}
+
+void CKernel::DiscEjected (void *pContext, u32 nDrive)
+{
+	CKernel *pThis = static_cast<CKernel *> (pContext);
+	pThis->m_pMenu->disc_ejected (nDrive);
+	pThis->m_Logger.Write (FromKernel, LogNotice, "The Mac ejected the disc in drive %u", nDrive);
+}
+
+void CKernel::RunMac (void)
+{
+	m_Session.run (10ull * 1000000000ull);	// 10 ms of guest time
+	m_nGuestMs += 10;
+
+	if (m_Session.powered_off () || m_Session.halted ())
+	{
+		const boolean bHalted = m_Session.halted ();
+		StopMac ();
+		m_pMenu->set_status (bHalted ? "The emulated CPU stopped (checkstop); see the log."
+					     : "The Mac was shut down.");
+		ShowMenu (TRUE);
+		return;
+	}
+	if (m_Session.reboot_requested ())
+	{
+		StartMac ();
+		return;
+	}
+
+	unsigned nNow = m_Timer.GetTicks ();
+	if (nNow - m_nLastDrawTicks >= HZ / 25)		// up to 25 frames per second
+	{
+		DrawMacScreen (&m_Screen, m_Session, m_pPixels);
+		m_nLastDrawTicks = nNow;
+	}
+	if (nNow - m_nLastStatsTicks >= 10 * HZ)	// speed, to the log (UART)
+	{
+		m_Logger.Write (FromKernel, LogNotice, "Mac: %u ms guest time, %u ms real, %u M instructions",
+				(unsigned) m_nGuestMs, (unsigned) ((nNow - m_nLastStatsTicks) * (1000 / HZ)),
+				(unsigned) (m_Session.instructions () / 1000000));
+		m_nGuestMs = 0;
+		m_nLastStatsTicks = nNow;
+	}
 }
 
 TShutdownMode CKernel::Run (void)
@@ -576,11 +745,19 @@ TShutdownMode CKernel::Run (void)
 			nLastThrottleTicks = nNow;
 		}
 
-		// Sleep until the next interrupt (timer tick at 100 Hz or USB):
-		// keeps core 0 cool while idle.
-		asm volatile ("wfi");
+		if (m_bMacRunning && !m_bMenuShown)
+		{
+			RunMac ();
+		}
+		else
+		{
+			// Sleep until the next interrupt (timer tick at 100 Hz or
+			// USB): keeps core 0 cool while idle.
+			asm volatile ("wfi");
+		}
 	}
 
+	StopMac ();	// flushes writable disk images
 	WriteLogFile ();
 
 	return m_ShutdownMode;

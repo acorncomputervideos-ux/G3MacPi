@@ -81,6 +81,7 @@ public:
     // Emulates `picoseconds` of guest time.
     void run(u64 picoseconds);
     bool halted() const;              // the CPU checkstopped
+    u64 instructions() const;         // executed so far (speed statistics)
     bool powered_off() const;         // Mac OS shut down (RTAS power-off)
     bool reboot_requested() const;    // Mac OS restarted (RTAS system-reboot)
 

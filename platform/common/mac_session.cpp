@@ -163,6 +163,7 @@ void MacSession::run(u64 picoseconds)
 }
 
 bool MacSession::halted() const { return m_ && m_->cpu().checkstopped(); }
+u64 MacSession::instructions() const { return m_ ? m_->cpu().instructions_executed() : 0; }
 bool MacSession::powered_off() const { return fw_ && fw_->powered_off(); }
 bool MacSession::reboot_requested() const { return fw_ && fw_->reboot_requested(); }
 
