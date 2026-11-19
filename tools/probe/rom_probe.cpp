@@ -469,6 +469,7 @@ int main(int argc, char** argv)
         // routine (FFC046C0..FFC046F0); printed at the end.
         struct Trace68 {
             u64 from = 0, to = ~0ull;  // G3_TRACE68_TO: stop recording there
+            u32 a7_hi = 0;             // G3_TRACE68_A7=hex: freeze when a7's top 16 bits become this
             u64 count = 0;
             ppc::Ppc750* cpu = nullptr;
             bool frozen = false;
@@ -490,7 +491,7 @@ int main(int argc, char** argv)
             m.bus().set_mmio_trace([](void* c, u32 addr, u32 size, bool write, u32 value) {
                 auto* l = static_cast<MmioLog*>(c);
                 const u64 n = l->cpu->instructions_executed();
-                if (n < l->from || n >= l->to || l->shown >= 3000)
+                if (n < l->from || n >= l->to || l->shown >= (std::getenv("G3_MMIO_MAX") ? std::strtoul(std::getenv("G3_MMIO_MAX"), nullptr, 10) : 3000))
                     return;
                 if (!write && !l->last_write && addr == l->last_addr && value == l->last_value) {
                     ++l->repeats;  // the same read again (a polling loop): counted, not printed
@@ -507,6 +508,28 @@ int main(int argc, char** argv)
                 std::printf("[mmio] %llu %s %08X/%u = %08X  pc=%08X r24=%08X\n", static_cast<unsigned long long>(n),
                             write ? "W" : "R", addr, size, value, st.pc, st.gpr[24]);
             }, &ml);
+        }
+        // G3_PC68=lo,hi: each entry of the 68K PC (r24) into [lo, hi], with
+        // d0, d1, a0, a1, a7 (first 300).
+        struct Pc68 { u32 lo = 0, hi = 0; bool in = false; u32 shown = 0; ppc::Ppc750* cpu = nullptr; };
+        static Pc68 p68;
+        if (const char* pr = std::getenv("G3_PC68")) {
+            char* end = nullptr;
+            p68.lo = static_cast<u32>(std::strtoul(pr, &end, 16));
+            p68.hi = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 16)) : p68.lo;
+            p68.cpu = &m.cpu();
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* p = static_cast<Pc68*>(c);
+                const u32 pc = s.gpr[24];
+                const bool in = pc >= p->lo && pc <= p->hi;
+                if (in && !p->in && p->shown < 300) {
+                    ++p->shown;
+                    std::printf("[pc68] %llu pc=%08X d0=%08X d1=%08X a0=%08X a1=%08X a7=%08X\n",
+                                static_cast<unsigned long long>(p->cpu->instructions_executed()), pc, s.gpr[8],
+                                s.gpr[9], s.gpr[16], s.gpr[17], s.gpr[1]);
+                }
+                p->in = in;
+            }, &p68);
         }
         // G3_REGSAT=pc: print the registers the first time the CPU is about
         // to execute that address.
@@ -552,6 +575,8 @@ int main(int argc, char** argv)
             tr.from = std::strtoull(t68, nullptr, 0);
             if (const char* tt = std::getenv("G3_TRACE68_TO"))
                 tr.to = std::strtoull(tt, nullptr, 0);
+            if (const char* ta = std::getenv("G3_TRACE68_A7"))
+                tr.a7_hi = static_cast<u32>(std::strtoul(ta, nullptr, 16));
             tr.cpu = &m.cpu();
             m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
                 auto* t = static_cast<Trace68*>(c);
@@ -577,6 +602,8 @@ int main(int argc, char** argv)
                 if (t->used < 4096)
                     ++t->used;
                 if (e.pc >= 0xFFC046C0u && e.pc <= 0xFFC046F0u)
+                    t->frozen = true;
+                if (t->a7_hi && (e.a7 >> 16) == t->a7_hi)
                     t->frozen = true;
             }, &tr);
         }
