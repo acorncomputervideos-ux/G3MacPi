@@ -135,6 +135,9 @@ struct Built {
     {
         m.ram_size = 128u << 20;
         m.pvr = 0x00083214u;
+        const u32 io[5] = {0x1440, 0x1430, 0x1448, 0x1434, 0x1400};  // as the firmware assigns
+        for (u32 i = 0; i < 5; ++i)
+            m.cmd646_io[i] = io[i];
         ok = build_bw_device_tree(*t, m, n);
     }
 };
@@ -309,4 +312,54 @@ TEST_CASE("firmware/bw-tree/pci_nodes_follow_the_pci_binding")
     REQUIRE(aa.size() == 5);
     REQUIRE(translate(*t2, n2.macio, {aa[0], aa[1], aa[2]}, a));
     CHECK_EQ(a, 0x81000000u);
+}
+
+TEST_CASE("firmware/bw-tree/cmd646_node_and_io_translation")
+{
+    Built b;
+    REQUIRE(b.ok);
+    const DeviceTree& t = *b.t;
+    REQUIRE(b.n.cmd646 != kNone);
+    CHECK_EQ(t.parent(b.n.cmd646), b.n.bridge);
+    CHECK(std::string(t.name(b.n.cmd646)) == "pci-ata");
+    CHECK(std::strcmp(t.unit(b.n.cmd646), "1") == 0);
+    CHECK_EQ(cell_or(t, b.n.cmd646, "vendor-id", 0), 0x1095u);
+    CHECK_EQ(cell_or(t, b.n.cmd646, "device-id", 0), 0x646u);
+    CHECK(cells(t, b.n.cmd646, "interrupts") == std::vector<u32>({26}));
+    CHECK(cells(t, b.n.cmd646, "interrupt-parent") == std::vector<u32>({b.n.pic}));
+    // The channel node carries the driver's compatible (Mac OS binds there).
+    REQUIRE(b.n.cmd646_channel != kNone);
+    CHECK(std::string(t.name(b.n.cmd646_channel)) == "ata-4");
+    CHECK(compatible_with(t, b.n.cmd646_channel, "cmd646-ata"));
+    CHECK(str(t, b.n.cmd646_disk, "device_type") == "block");
+    // Every I/O BAR translates through the bridge's and the host's ranges
+    // to PCI I/O space at 0xFE000000 (what Mac OS uses as AAPL,address).
+    const auto aa = cells(t, b.n.cmd646, "assigned-addresses");
+    REQUIRE(aa.size() == 25u);
+    const u32 want[5] = {0x1440, 0x1430, 0x1448, 0x1434, 0x1400};
+    for (u32 i = 0; i < 5; ++i) {
+        CHECK_EQ(aa[5 * i] & 0x03000000u, 0x01000000u);      // I/O space
+        u32 a = 0;
+        REQUIRE(translate(t, b.n.cmd646, {aa[5 * i], aa[5 * i + 1], aa[5 * i + 2]}, a));
+        CHECK_EQ(a, 0xFE000000u + want[i]);
+    }
+    // The Grackle node names its model; the bridge forwards the windows.
+    CHECK(str(t, b.n.pci, "model") == "MOT,MPC106");
+    // The bridge's ranges must cover what is behind it: Mac OS does not
+    // translate through a bridge without them (the CMD646 driver then
+    // wrote to RAM). Entry: child (3), parent (3), size (2).
+    const auto br = cells(t, b.n.bridge, "ranges");
+    REQUIRE(br.size() == 16u);
+    CHECK_EQ(br[0] & 0x03000000u, 0x01000000u);              // I/O window
+    for (u32 port : want)
+        CHECK(port >= br[2] && port - br[2] < br[7]);
+    CHECK_EQ(br[8] & 0x03000000u, 0x02000000u);              // memory window
+    CHECK(b.m.macio_base >= br[10] && b.m.macio_base + 0x80000u - br[10] <= br[15]);
+    // Without a CMD646 there is no node.
+    Built none;
+    none.m.cmd646_io[0] = 0;
+    auto t2 = std::make_unique<DeviceTree>();
+    BwNodes n2;
+    REQUIRE(build_bw_device_tree(*t2, none.m, n2));
+    CHECK(n2.cmd646 == kNone);
 }

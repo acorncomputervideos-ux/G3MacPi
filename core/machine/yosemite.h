@@ -27,6 +27,7 @@
 #include "core/devices/video/framebuffer.h"
 #include "core/machine/execution_loop.h"
 #include "core/mem/physical_bus.h"
+#include "core/devices/ata/cmd646.h"
 #include "core/sched/scheduler.h"
 
 namespace g3 {
@@ -49,6 +50,10 @@ public:
     static constexpr u32 kRomBase = 0xFFF00000u;
     static constexpr u32 kBridgeDevfn = 0x0D << 3;   // * to verify
     static constexpr u32 kMacIoDevfn = 0x05 << 3;    // * to verify (behind the bridge)
+    // The CMD646 hard-disk controller: 01:01.0 (Linux lspci on a B&W), its
+    // INTA wired to Paddington input 26 (Linux log; DingusPPC).
+    static constexpr u32 kCmd646Devfn = 0x01 << 3;
+    static constexpr u32 kCmd646Irq = 26;
     // The display device (our own; docs/hardware/framebuffer.md): video
     // memory and registers in PCI memory space, outside any PCI BAR.
     static constexpr u32 kVramBase = 0x90000000u;
@@ -71,6 +76,7 @@ public:
     Grackle& grackle() { return grackle_; }
     PciToPciBridge& bridge() { return bridge_; }
     Paddington& macio() { return macio_; }
+    Cmd646& cmd646() { return cmd646_; }
     AdbKeyboard& keyboard() { return keyboard_; }
     AdbMouse& mouse() { return mouse_; }
     Framebuffer& display() { return display_; }
@@ -85,6 +91,7 @@ private:
     Grackle grackle_;
     PciToPciBridge bridge_;
     Paddington macio_;
+    Cmd646 cmd646_;
     AdbBus adb_;
     AdbKeyboard keyboard_;
     AdbMouse mouse_;

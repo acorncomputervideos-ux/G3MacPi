@@ -120,7 +120,9 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
             if (!image_[i])
                 return fail(Error::Image, d.image);
         }
-        AtaBus& bus = m_->macio().ide(i / 2).bus();
+        // ata0: the mac-io ATA channel (the B&W's CD-ROM bus); ata1: the
+        // CMD646's primary channel (its hard-disk bus).
+        AtaBus& bus = i / 2 == 0 ? m_->macio().ide(0).bus() : m_->cmd646().channel(0);
         if (cd) {
             is_cd_[i] = true;
             eject_slot_[i] = EjectSlot{this, i};
@@ -129,8 +131,8 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
             cd_[i].insert(image_[i]);  // nullptr: an empty drive
         } else if (image_[i]) {
             bus.attach(i % 2, image_[i]);
-            if (i % 2 == 0)
-                fc.disk[i / 2] = image_[i];  // Open Firmware's view of the channel's master disk
+            if (i == 0)
+                fc.disk[0] = image_[i];  // Open Firmware's "hd": the mac-io master disk
         }
     }
 

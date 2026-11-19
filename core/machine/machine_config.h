@@ -19,11 +19,11 @@
 //   image = /g3macpi/disks/Mac OS 9.iso
 //   readonly = yes       ; disks only; CD-ROMs are always read-only
 //
-// Drive positions are the two mac-io ATA channels, master and slave. A real
-// Blue & White has its CD-ROM as master on mac-io channel 0 and its hard
-// disk on a separate CMD646 controller, not emulated yet; mac-io channel 1
-// stands in for it. The B&W has no floppy drive: a [floppy] section is
-// accepted and reported, but has no effect.
+// Drive positions, as on a real Blue & White: ata0 is the mac-io ATA
+// channel (the CD-ROM bus: CD-ROM as master, often a Zip as slave), ata1
+// the primary channel of the CMD646 Ultra ATA controller (the hard-disk
+// bus). The B&W has no floppy drive: a [floppy] section is accepted and
+// reported, but has no effect.
 
 #ifndef G3_CORE_MACHINE_MACHINE_CONFIG_H
 #define G3_CORE_MACHINE_MACHINE_CONFIG_H

@@ -108,12 +108,12 @@ TEST_CASE("platform/menu/main_page_and_memory")
 TEST_CASE("platform/menu/navigation_skips_floppy")
 {
     Rig r;
-    r.press(kDown, 5);                                 // Memory, ROM, 4 drives -> ATA 1 slave
-    CHECK(r.selected().find("ATA 1 slave") != std::string::npos);
+    r.press(kDown, 5);                                 // Memory, ROM, 4 drives -> Hard disk bus slave
+    CHECK(r.selected().find("Hard disk bus slave") != std::string::npos);
     r.press(kDown);                                    // over the floppy line
     CHECK(r.selected().find("Start-up disk") != std::string::npos);
     r.press(kUp);
-    CHECK(r.selected().find("ATA 1 slave") != std::string::npos);
+    CHECK(r.selected().find("Hard disk bus slave") != std::string::npos);
     r.press(kEnd);
     CHECK(r.selected().find("Start the Mac") != std::string::npos);
     r.press(kHome);
@@ -125,9 +125,9 @@ TEST_CASE("platform/menu/navigation_skips_floppy")
 TEST_CASE("platform/menu/insert_a_cd_image")
 {
     Rig r;
-    r.press(kDown, 2);                                 // ATA 0 master (the CD-ROM)
+    r.press(kDown, 2);                                 // CD bus master (the CD-ROM)
     r.press(kEnter);
-    CHECK(r.has("Drive: ATA 0 master"));
+    CHECK(r.has("Drive: CD bus master"));
     CHECK(r.has("CD-ROM"));
     r.press(kDown);                                    // Disc image
     r.press(kEnter);                                   // file picker in /g3macpi/disks
@@ -143,7 +143,7 @@ TEST_CASE("platform/menu/insert_a_cd_image")
     CHECK(r.selected().find("Mac OS 9.iso") != std::string::npos);
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);  // not running: no live media change
     CHECK(std::strcmp(r.menu.config().drive[0].image, "/g3macpi/disks/Mac OS 9.iso") == 0);
-    CHECK(r.has("Drive: ATA 0 master"));               // back on the drive page
+    CHECK(r.has("Drive: CD bus master"));               // back on the drive page
     r.press(kEscape);
     CHECK(r.has("CD-ROM: Mac OS 9.iso"));
 }
@@ -165,13 +165,13 @@ TEST_CASE("platform/menu/folders_and_parent")
     CHECK(r.has("g3macpi.ini"));
     r.press(kEscape);                                  // cancel: nothing chosen
     CHECK(r.menu.config().drive[0].image[0] == 0);
-    CHECK(r.has("Drive: ATA 0 master"));
+    CHECK(r.has("Drive: CD bus master"));
 }
 
 TEST_CASE("platform/menu/drive_type_readonly_and_eject")
 {
     Rig r;
-    r.press(kDown, 4);                                 // ATA 1 master: no drive
+    r.press(kDown, 4);                                 // Hard disk bus master: no drive
     r.press(kEnter);
     CHECK(r.has("No drive"));
     r.press(kDown);                                    // image/eject/read-only disabled: lands on Back
@@ -263,7 +263,7 @@ TEST_CASE("platform/menu/running_mac_cd_swap_and_restart_marks")
     r.press(kLeft);
     CHECK(!r.menu.needs_restart());
     // A hard disk is never swapped live.
-    r.press(kDown, 4);                                 // ATA 1 master
+    r.press(kDown, 4);                                 // Hard disk bus master
     r.press(kEnter);
     r.press(kRight);                                   // -> Hard disk
     r.press(kDown);
@@ -296,7 +296,7 @@ TEST_CASE("platform/menu/running_mac_hard_disk_image_needs_restart")
     REQUIRE(cfg.set_image(2, "/g3macpi/disks/zeta.img"));
     ConfigMenu menu(cfg, fs, "/g3macpi/disks", "/g3macpi/rom");
     menu.set_running(true);
-    menu.key(kDown); menu.key(kDown); menu.key(kDown); menu.key(kDown);  // ATA 1 master
+    menu.key(kDown); menu.key(kDown); menu.key(kDown); menu.key(kDown);  // Hard disk bus master
     menu.key(kEnter);
     menu.key(kDown);                                   // Disk image
     menu.key(kEnter);

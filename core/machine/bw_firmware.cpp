@@ -51,10 +51,29 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
 
     // PCI resources, as firmware assigns them at power-on.
     m.bridge().config_write(0x18, (1u << 16) | (1u << 8) | 0u, 0x7);  // subordinate 1, secondary 1, primary 0
+    // Forwarding windows (PCI-to-PCI Bridge Architecture 3.2.5): I/O base and
+    // limit in 4 KB units (0x1C/0x1D), memory base and limit in 1 MB units
+    // (0x20/0x22); the device tree's bridge "ranges" describe the same.
+    const of::BridgeWindows w = of::bridge_windows(c.macio_base);
+    m.bridge().config_write(0x1C, (((w.io_base + w.io_size - 1) >> 8) & 0xF0) << 8 | ((w.io_base >> 8) & 0xF0), 0x3);
+    m.bridge().config_write(0x20, (((w.mem_base + w.mem_size - 1) >> 16) & 0xFFF0) << 16 | ((w.mem_base >> 16) & 0xFFF0),
+                            0xF);
+    m.bridge().config_write(0x04, 0x0007, 0x3);  // I/O, memory, bus master
     Paddington& mio = m.macio();
     mio.config_write(0x10, c.macio_base, 0xF);
     mio.config_write(0x04, 0x0006, 0x3);       // memory space + bus master
     if (mio.mapped_base() != c.macio_base)
+        return;
+    // The CMD646: I/O BARs at the addresses a real B&W's firmware gives it
+    // (Linux log: command block 0x1440, control 0x1430, bus master 0x1400;
+    // the secondary channel's are ours), I/O decoding and bus mastering on.
+    static constexpr u32 kCmd646Io[5] = {0x1440, 0x1430, 0x1448, 0x1434, 0x1400};
+    Cmd646& ide = m.cmd646();
+    for (u32 i = 0; i < 5; ++i)
+        ide.config_write(0x10 + 4 * i, kCmd646Io[i], 0xF);
+    ide.config_write(0x3C, YosemiteMachine::kCmd646Irq, 0x1);  // interrupt line (for software)
+    ide.config_write(0x04, 0x0005, 0x3);
+    if (ide.io_base(0) == 0)
         return;
 
     // The device tree.
@@ -64,6 +83,8 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     desc.bus_hz = static_cast<u32>(m.bus_hz());
     desc.pvr = m.cpu().state().spr[ppc::spr::PVR];
     desc.macio_base = c.macio_base;
+    for (u32 i = 0; i < 5; ++i)
+        desc.cmd646_io[i] = kCmd646Io[i];
     if (m.has_display()) {
         Framebuffer& fb = m.display();
         if (!fb.set_mode(c.width, c.height, c.depth))

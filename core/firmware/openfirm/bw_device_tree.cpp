@@ -161,6 +161,7 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     n.pci = t.add_node(n.root, "pci", "80000000");
     t.set_string(n.pci, "device_type", "pci");
     t.set_string(n.pci, "compatible", "grackle");
+    t.set_string(n.pci, "model", "MOT,MPC106");  // as OpenBIOS names Grackle; Mac OS's PCI code knows the model
     t.set_int(n.pci, "#address-cells", 3);
     t.set_int(n.pci, "#size-cells", 2);
     const u32 pci_reg[2] = {0x80000000u, 0x7F000000u};
@@ -182,6 +183,17 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     t.set_int(n.bridge, "#size-cells", 2);
     const u32 bridge_range[2] = {1, 1};
     t.set_ints(n.bridge, "bus-range", bridge_range, 2);
+    // The windows the bridge forwards (programmed by the firmware into its
+    // I/O and memory base/limit registers), 1:1. Mac OS translates the
+    // addresses of devices behind the bridge through these; without them
+    // the CMD646's I/O addresses stayed bare port numbers and its driver
+    // wrote to RAM (docs/hardware/cmd646.md).
+    const BridgeWindows w = bridge_windows(m.macio_base);
+    const u32 bridge_ranges[] = {
+        pci_hi(kIo, 0, 0, 0, 0), 0, w.io_base, pci_hi(kIo, 0, 0, 0, 0), 0, w.io_base, 0, w.io_size,
+        pci_hi(kMem32, 0, 0, 0, 0), 0, w.mem_base, pci_hi(kMem32, 0, 0, 0, 0), 0, w.mem_base, 0, w.mem_size,
+    };
+    t.set_ints(n.bridge, "ranges", bridge_ranges, sizeof bridge_ranges / 4);
 
     n.macio = pci_node(t, n.bridge, "mac-io", 1, m.macio_device, 0x106B, 0x0017);
     t.set_string(n.macio, "compatible", "paddington");
@@ -198,6 +210,46 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     t.set_int(n.macio, "#size-cells", 1);
     const u32 macio_ranges[5] = {0, bar, 0, m.macio_base, 0x80000};
     t.set_ints(n.macio, "ranges", macio_ranges, 5);
+
+    // The CMD646 hard-disk controller (a PCI function next to mac-io). A
+    // real B&W boots its hard disk from /pci@80000000/pci-bridge@d/pci-ata@1/
+    // ata-4@0/@0 (users' boot-device paths); Mac OS's ROM driver for it is
+    // "cmd646-ata" and reads reg, AAPL,address (from assigned-addresses)
+    // and the interrupt (driver-ist). docs/hardware/cmd646.md.
+    if (m.cmd646_io[0]) {
+        n.cmd646 = pci_node(t, n.bridge, "pci-ata", 1, m.cmd646_device, 0x1095, 0x0646);
+        t.set_string(n.cmd646, "compatible", "cmd646-ata");
+        t.set_string(n.cmd646, "device_type", "pci-ide");
+        t.set_int(n.cmd646, "revision-id", 0x07);
+        t.set_int(n.cmd646, "class-code", 0x01018F);
+        static const u32 kSizes[5] = {8, 4, 8, 4, 16};
+        u32 reg[5 * 6], ide_assigned[5 * 5];
+        reg[0] = pci_hi(kConfig, 1, m.cmd646_device, 0, 0);
+        reg[1] = reg[2] = reg[3] = reg[4] = 0;
+        for (u32 i = 0; i < 5; ++i) {
+            const u32 hi = pci_hi(kIo, 1, m.cmd646_device, 0, 0x10 + 4 * i);
+            u32* r = reg + 5 + 5 * i;
+            r[0] = hi; r[1] = 0; r[2] = 0; r[3] = 0; r[4] = kSizes[i];
+            u32* a = ide_assigned + 5 * i;
+            a[0] = hi | 0x80000000u; a[1] = 0; a[2] = m.cmd646_io[i]; a[3] = 0; a[4] = kSizes[i];
+        }
+        t.set_ints(n.cmd646, "reg", reg, 5 * 6);
+        t.set_ints(n.cmd646, "assigned-addresses", ide_assigned, 5 * 5);
+        t.set_int(n.cmd646, "#address-cells", 1);
+        t.set_int(n.cmd646, "#size-cells", 0);
+        n.cmd646_channel = t.add_node(n.cmd646, "ata-4", "0");
+        t.set_string(n.cmd646_channel, "device_type", "ata");
+        // Mac OS's ATA Manager binds the cmd646-ata driver to the channel.
+        t.set_string(n.cmd646_channel, "compatible", "cmd646-ata");
+        t.set_int(n.cmd646_channel, "reg", 0);
+        t.set_int(n.cmd646_channel, "#address-cells", 1);
+        t.set_int(n.cmd646_channel, "#size-cells", 0);
+        n.cmd646_disk = t.add_node(n.cmd646_channel, "disk", "0");
+        t.set_string(n.cmd646_disk, "device_type", "block");
+        t.set_int(n.cmd646_disk, "reg", 0);
+    } else {
+        n.cmd646 = n.cmd646_channel = n.cmd646_disk = kNone;
+    }
 
     // Paddington's interrupt controller as its own node, which is how Apple's
     // Mac OS ROM loader finds it: a node of device_type "interrupt-controller"
@@ -218,6 +270,12 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     t.set_ints(n.pic, "reg", pic_reg, 2);
     t.set_property(n.pic, "interrupt-controller", nullptr, 0);
     t.set_int(n.pic, "#interrupt-cells", 1);
+    if (n.cmd646 != kNone) {
+        // INTA of the CMD646 is Paddington input 26 (the interrupt Linux
+        // reports for it on a B&W); named directly, as for the mac-io cells.
+        t.set_int(n.cmd646, "interrupts", 26);
+        t.set_int(n.cmd646, "interrupt-parent", n.pic);
+    }
 
     // --- mac-io cells (offsets and interrupts as emulated: Paddington)
     const u32 cuda_reg[2] = {0x16000, 0x2000}, cuda_irq[1] = {18};

@@ -10,7 +10,7 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
     : cpu_(bus_),
       loop_(cpu_, sched_, CpuTiming{c.cpu_hz, c.bus_hz / 4, 1}),
       bridge_(PciToPciBridge::dec21154()),
-      macio_(bus_, sched_), display_(c.vram, c.vram_size)
+      macio_(bus_, sched_), cmd646_(bus_), display_(c.vram, c.vram_size)
 {
     bool ok = c.ram && c.ram_size > 0 && bus_.map_ram(0, c.ram, c.ram_size);
     ram_size_ = c.ram_size;
@@ -19,7 +19,11 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
     if (ok && c.rom)
         ok = bus_.map_rom(kRomBase, c.rom, c.rom_size);
     ok = ok && grackle_.attach(bus_) && grackle_.pci_bus().attach(kBridgeDevfn, &bridge_) &&
-         bridge_.secondary_bus().attach(kMacIoDevfn, &macio_);
+         bridge_.secondary_bus().attach(kMacIoDevfn, &macio_) &&
+         bridge_.secondary_bus().attach(kCmd646Devfn, &cmd646_);
+    cmd646_.set_irq([](void* pic, bool a) {
+        static_cast<HeathrowPic*>(pic)->set_input(kCmd646Irq, a);
+    }, &macio_.pic());
     macio_.pic().set_output([](void* cpu, bool a) {
         static_cast<ppc::Ppc750*>(cpu)->set_external_interrupt(a);
     }, &cpu_);

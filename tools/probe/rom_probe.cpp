@@ -221,7 +221,7 @@ int main(int argc, char** argv)
         const MachineConfig::Drive& d = mc.drive[i];
         if (d.type == MachineConfig::DriveType::None)
             continue;
-        AtaBus& bus = m.macio().ide(i / 2).bus();
+        AtaBus& bus = i / 2 == 0 ? m.macio().ide(0).bus() : m.cmd646().channel(0);  // as MacSession
         if (d.image[0]) {
             if (!load_file(d.image, drive_bytes[i]) || drive_bytes[i].size() < 512) {
                 std::fprintf(stderr, "cannot read image %s\n", d.image);
@@ -283,8 +283,9 @@ int main(int argc, char** argv)
     // G3_ATA: print every ATA command (both mac-io channels).
     if (std::getenv("G3_ATA")) {
         static YosemiteMachine* am = &m;
-        for (u32 ch = 0; ch < 2; ++ch) {
-            m.macio().ide(ch).bus().set_command_trace([](void* c, const AtaBus::CommandTrace& t) {
+        for (u32 ch = 0; ch < 3; ++ch) {
+            AtaBus& traced = ch < 2 ? m.macio().ide(ch).bus() : m.cmd646().channel(0);
+            traced.set_command_trace([](void* c, const AtaBus::CommandTrace& t) {
                 const u32 lba = (static_cast<u32>(t.device & 0x0F) << 24) | (t.lba_high << 16) |
                                 (t.lba_mid << 8) | t.lba_low;
                 std::printf("[ata%u] cmd %02X feat %02X count %3u lba %07X dev %02X  pc=%08X at %llu\n",
@@ -352,6 +353,21 @@ int main(int argc, char** argv)
                             vector, srr0, srr1, st.spr[ppc::spr::DAR], st.spr[ppc::spr::DSISR], st.lr(),
                             st.spr[ppc::spr::DEC], static_cast<unsigned long long>(x->cpu->instructions_executed()));
             }, &exc);
+        }
+        if (const char* ps = std::getenv("G3_PCSTOP")) {  // TEMP
+            char* e = nullptr;
+            const u32 pc = static_cast<u32>(std::strtoul(ps, &e, 16));
+            const u64 after = std::strtoull(e + 1, nullptr, 10);
+            while (m.cpu().instructions_executed() < after) m.run_for(100000000ull);
+            for (u64 i = 0; i < 400000000ull; ++i) {
+                if (m.cpu().state().pc == pc) {
+                    auto& st = m.cpu().state();
+                    std::printf("[pcstop] pc=%08X at %llu r10=%08X r11=%08X r12=%08X\n", st.pc, (unsigned long long)m.cpu().instructions_executed(), st.gpr[10], st.gpr[11], st.gpr[12]);
+                    break;
+                }
+                m.run_for(2857);
+            }
+            return 0;
         }
         if (std::getenv("G3_STEP")) {
             // Step by step (no device time passes), reporting each exception

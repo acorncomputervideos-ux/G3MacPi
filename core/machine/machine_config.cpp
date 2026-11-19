@@ -151,7 +151,8 @@ const char* MachineConfig::drive_name(u32 i)
 
 const char* MachineConfig::drive_label(u32 i)
 {
-    static const char* const labels[kDrives] = {"ATA 0 master", "ATA 0 slave", "ATA 1 master", "ATA 1 slave"};
+    static const char* const labels[kDrives] = {"CD bus master", "CD bus slave", "Hard disk bus master",
+                                                 "Hard disk bus slave"};
     return i < kDrives ? labels[i] : "";
 }
 
