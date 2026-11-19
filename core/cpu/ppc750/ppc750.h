@@ -148,6 +148,16 @@ public:
         exit_ = 1;
     }
 
+    // Debugging: called after every instruction run() executes (the block
+    // cache is not used while one is set). Checked once per run(): free
+    // when unset.
+    using StepHook = void (*)(void* context, const CpuState& state);
+    void set_step_hook(StepHook h, void* ctx)
+    {
+        step_hook_ = h;
+        step_ctx_ = ctx;
+    }
+
     // Observer told of every exception taken (debugging tools); null = none.
     using ExceptionHook = void (*)(void* context, u32 vector, u32 srr0, u32 srr1);
     void set_exception_hook(ExceptionHook h, void* ctx)
@@ -349,6 +359,8 @@ private:
 
     MemoryInterface& mem_;
     BlockCache* cache_ = nullptr;
+    StepHook step_hook_ = nullptr;
+    void* step_ctx_ = nullptr;
     // --- JIT (ppc750_jit.cpp)
     bool jit_compile(BlockCache::Block* b);
     void jit_run(BlockCache::Block* b);

@@ -85,6 +85,15 @@ public:
             observer_(observer_ctx_, pa, len);
     }
 
+    // Debugging: told of every device-register access (after it, with the
+    // value read or written); nullptr = none.
+    using MmioTrace = void (*)(void* context, u32 addr, u32 size, bool write, u32 value);
+    void set_mmio_trace(MmioTrace cb, void* context)
+    {
+        mmio_trace_ = cb;
+        mmio_trace_ctx_ = context;
+    }
+
     // Diagnostics.
     u64 unmapped_accesses() const { return unmapped_count_; }
     u32 last_unmapped_address() const { return last_unmapped_; }
@@ -100,6 +109,8 @@ private:
         MmioDevice* device;   // MMIO
     };
 
+    MmioTrace mmio_trace_ = nullptr;
+    void* mmio_trace_ctx_ = nullptr;
     WriteObserver observer_ = nullptr;
     void* observer_ctx_ = nullptr;
 

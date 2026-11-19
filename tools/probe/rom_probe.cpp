@@ -462,6 +462,125 @@ int main(int argc, char** argv)
                     std::printf("\n");
                 }
             }
+        }
+        // G3_TRACE68=first-instruction: from there on, every change of the
+        // 68K emulator's PC (r24) with d0-d7 (r8-r15), a0 (r16) and a7 (r1),
+        // in a ring of 4096; frozen when the PC reaches the ROM's fatal-error
+        // routine (FFC046C0..FFC046F0); printed at the end.
+        struct Trace68 {
+            u64 from = 0, to = ~0ull;  // G3_TRACE68_TO: stop recording there
+            u64 count = 0;
+            ppc::Ppc750* cpu = nullptr;
+            bool frozen = false;
+            u32 last = 0;
+            struct E { u64 n; u32 pc, d[8], a0, a1, a7; } ring[4096];
+            u32 pos = 0, used = 0;
+        };
+        static Trace68 tr;
+        // G3_MMIO=from,to: device-register accesses while the instruction
+        // count is in [from, to), with the PC and the 68K PC (r24).
+        struct MmioLog { u64 from = 0, to = 0; ppc::Ppc750* cpu = nullptr; u32 shown = 0;
+                         u32 last_addr = 0, last_value = 0; bool last_write = false; u64 repeats = 0; };
+        static MmioLog ml;
+        if (const char* mm = std::getenv("G3_MMIO")) {
+            char* end = nullptr;
+            ml.from = std::strtoull(mm, &end, 0);
+            ml.to = end && *end == ',' ? std::strtoull(end + 1, nullptr, 0) : ~0ull;
+            ml.cpu = &m.cpu();
+            m.bus().set_mmio_trace([](void* c, u32 addr, u32 size, bool write, u32 value) {
+                auto* l = static_cast<MmioLog*>(c);
+                const u64 n = l->cpu->instructions_executed();
+                if (n < l->from || n >= l->to || l->shown >= 3000)
+                    return;
+                if (!write && !l->last_write && addr == l->last_addr && value == l->last_value) {
+                    ++l->repeats;  // the same read again (a polling loop): counted, not printed
+                    return;
+                }
+                if (l->repeats)
+                    std::printf("[mmio]   (the read above %llu more times)\n", static_cast<unsigned long long>(l->repeats));
+                l->repeats = 0;
+                l->last_addr = addr;
+                l->last_value = value;
+                l->last_write = write;
+                ++l->shown;
+                const auto& st = l->cpu->state();
+                std::printf("[mmio] %llu %s %08X/%u = %08X  pc=%08X r24=%08X\n", static_cast<unsigned long long>(n),
+                            write ? "W" : "R", addr, size, value, st.pc, st.gpr[24]);
+            }, &ml);
+        }
+        // G3_REGSAT=pc: print the registers the first time the CPU is about
+        // to execute that address.
+        struct RegsAt { u32 pc = 0; bool done = false; };
+        static RegsAt ra;
+        if (const char* rs = std::getenv("G3_REGSAT")) {
+            ra.pc = static_cast<u32>(std::strtoul(rs, nullptr, 16));
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* r = static_cast<RegsAt*>(c);
+                if (r->done || s.pc != r->pc)
+                    return;
+                r->done = true;
+                std::printf("[regs] at %08X msr=%08X lr=%08X ctr=%08X\n", s.pc, s.msr, s.lr(), s.ctr());
+                for (u32 i = 0; i < 32; i += 8)
+                    std::printf("[regs] r%-2u %08X %08X %08X %08X %08X %08X %08X %08X\n", i, s.gpr[i], s.gpr[i + 1],
+                                s.gpr[i + 2], s.gpr[i + 3], s.gpr[i + 4], s.gpr[i + 5], s.gpr[i + 6], s.gpr[i + 7]);
+            }, &ra);
+        }
+        // G3_MEMWATCH=physaddr: report every change of that byte of RAM
+        // (checked after each instruction) with the PC and the 68K PC (r24).
+        struct MemWatch { const u8* p = nullptr; u8 last = 0; ppc::Ppc750* cpu = nullptr; u32 shown = 0; };
+        static MemWatch mw;
+        if (const char* mws = std::getenv("G3_MEMWATCH")) {
+            const u32 pa = static_cast<u32>(std::strtoul(mws, nullptr, 16));
+            mw.p = pa < ram.size() ? ram.data() + pa : nullptr;
+            mw.cpu = &m.cpu();
+            if (mw.p) {
+                mw.last = *mw.p;
+                std::printf("[memwatch] %08X starts as %02X\n", pa, mw.last);
+                m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                    auto* w = static_cast<MemWatch*>(c);
+                    if (*w->p == w->last || w->shown >= 200)
+                        return;
+                    std::printf("[memwatch] %02X -> %02X after pc=%08X (lr=%08X r24=%08X) at %llu\n", w->last, *w->p,
+                                s.pc, s.lr(), s.gpr[24],
+                                static_cast<unsigned long long>(w->cpu->instructions_executed()));
+                    w->last = *w->p;
+                    ++w->shown;
+                }, &mw);
+            }
+        }
+        if (const char* t68 = std::getenv("G3_TRACE68")) {
+            tr.from = std::strtoull(t68, nullptr, 0);
+            if (const char* tt = std::getenv("G3_TRACE68_TO"))
+                tr.to = std::strtoull(tt, nullptr, 0);
+            tr.cpu = &m.cpu();
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* t = static_cast<Trace68*>(c);
+                if (t->frozen || s.gpr[24] == t->last)
+                    return;
+                const u64 n = t->cpu->instructions_executed();
+                t->last = s.gpr[24];
+                if (n < t->from)
+                    return;
+                if (n >= t->to) {
+                    t->frozen = true;
+                    return;
+                }
+                Trace68::E& e = t->ring[t->pos];
+                e.n = n;
+                e.pc = s.gpr[24];
+                for (u32 i = 0; i < 8; ++i)
+                    e.d[i] = s.gpr[8 + i];
+                e.a0 = s.gpr[16];
+                e.a1 = s.gpr[17];
+                e.a7 = s.gpr[1];
+                t->pos = (t->pos + 1) % 4096;
+                if (t->used < 4096)
+                    ++t->used;
+                if (e.pc >= 0xFFC046C0u && e.pc <= 0xFFC046F0u)
+                    t->frozen = true;
+            }, &tr);
+        }
+        if (false) {
         } else if (const char* every = std::getenv("G3_SAMPLE_MS")) {
             // Run in slices, printing where the CPU is after each one.
             const u64 slice = std::strtoull(every, nullptr, 10);
@@ -475,6 +594,17 @@ int main(int argc, char** argv)
             }
         } else {
             m.run_for(ms * 1000000000ull);  // picoseconds
+        }
+        if (tr.cpu) {
+            const u32 show = std::getenv("G3_TRACE68_N") ? static_cast<u32>(std::strtoul(std::getenv("G3_TRACE68_N"), nullptr, 10)) : 300;
+            const u32 n = tr.used < show ? tr.used : show;
+            std::printf("[t68] %s; the last %u PC changes:\n", tr.frozen ? "reached the fatal-error routine" : "not frozen", n);
+            for (u32 i = 0; i < n; ++i) {
+                const Trace68::E& e = tr.ring[(tr.pos + 4096 - n + i) % 4096];
+                std::printf("[t68] %llu pc=%08X d0=%08X d1=%08X d2=%08X d3=%08X d4=%08X d5=%08X d6=%08X d7=%08X a0=%08X a1=%08X a7=%08X\n",
+                            static_cast<unsigned long long>(e.n), e.pc, e.d[0], e.d[1], e.d[2], e.d[3], e.d[4], e.d[5],
+                            e.d[6], e.d[7], e.a0, e.a1, e.a7);
+            }
         }
         if (std::getenv("G3_EXC")) {
             std::printf("[exc] totals:");

@@ -193,3 +193,32 @@ TEST_CASE("mem/bus/write_observer_hears_ram_writes_only")
     CHECK_EQ(heard.count, 2u);
     CHECK_EQ(heard.hi, 0x4200u);
 }
+
+TEST_CASE("mem/bus/mmio_trace_hook")
+{
+    std::vector<u8> ram(0x1000);
+    PhysicalBus bus;
+    REQUIRE(bus.map_ram(0, ram.data(), 0x1000));
+    struct Dev final : MmioDevice {
+        u32 mmio_read(u32, u32) override { return 0x5A; }
+        void mmio_write(u32, u32, u32) override {}
+    } dev;
+    REQUIRE(bus.map_mmio(0x80000000u, 0x100, &dev));
+    struct Log { u32 n = 0, addr = 0, value = 0; bool write = false; } log;
+    bus.set_mmio_trace([](void* c, u32 a, u32, bool w, u32 v) {
+        auto* l = static_cast<Log*>(c);
+        ++l->n; l->addr = a; l->write = w; l->value = v;
+    }, &log);
+    u32 v;
+    bus.read32(0x100, v);                 // RAM: not traced
+    CHECK_EQ(log.n, 0u);
+    bus.read8(0x80000010u, *reinterpret_cast<u8*>(&v));
+    CHECK_EQ(log.n, 1u);
+    CHECK_EQ(log.addr, 0x80000010u);
+    CHECK_EQ(log.value, 0x5Au);
+    CHECK(!log.write);
+    bus.write16(0x80000020u, 0x1234);
+    CHECK_EQ(log.n, 2u);
+    CHECK(log.write);
+    CHECK_EQ(log.value, 0x1234u);
+}

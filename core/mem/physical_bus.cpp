@@ -146,6 +146,8 @@ bool PhysicalBus::access(u32 addr, u32 size, bool write, u32& value)
             r->device->mmio_write(off, size, value);
         else
             value = r->device->mmio_read(off, size);
+        if (mmio_trace_)
+            mmio_trace_(mmio_trace_ctx_, addr, size, write, value);
         return true;
     }
     return false;

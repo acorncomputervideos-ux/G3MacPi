@@ -140,9 +140,12 @@ void Ppc750::run(u64 count)
     break_run_ = false;
     ram_ = mem_.direct_window(ram_base_, ram_size_);
     fetch_host_ = nullptr;
-    // The cache must cover the whole direct RAM window (it does when made
-    // for the machine's RAM).
-    if (cache_ && cache_->ready() && ram_ && ram_base_ == 0 &&
+    if (step_hook_) {
+        for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i) {
+            step();
+            step_hook_(step_ctx_, s_);
+        }
+    } else if (cache_ && cache_->ready() && ram_ && ram_base_ == 0 &&  // covering the RAM window
         (static_cast<u64>(cache_->pages()) << BlockCache::kPageShift) >= ram_size_) {
         run_blocks(count);
     } else {

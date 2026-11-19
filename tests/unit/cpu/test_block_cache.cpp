@@ -807,3 +807,26 @@ BOTH(branch_forms)
     CHECK_EQ(c.cpu.state().gpr[15], 2u);
     CHECK_EQ(c.cpu.state().pc, 0x7200u);
 }
+
+TEST_CASE("cpu/step_hook_sees_every_instruction")
+{
+    // The debugging step hook runs after each instruction, also when a
+    // block cache is set (which is then not used), and costs nothing unset.
+    Machine m(4u << 20);
+    place(m, {{0x5000, li(3, 0)}, {0x5004, addi(3, 3, 1)}, {0x5008, b(-4)}});
+    m.cpu.state().pc = 0x5000;
+    struct Count { u32 n = 0; u32 last_r3 = 0; } c;
+    m.cpu.set_step_hook([](void* ctx, const CpuState& s) {
+        auto* k = static_cast<Count*>(ctx);
+        ++k->n;
+        k->last_r3 = s.gpr[3];
+    }, &c);
+    m.cpu.run(101);
+    CHECK_EQ(c.n, 101u);
+    CHECK_EQ(c.last_r3, 50u);
+    CHECK_EQ(m.cache.stats().built, 0u);
+    m.cpu.set_step_hook(nullptr, nullptr);
+    m.cpu.run(10);
+    CHECK_EQ(c.n, 101u);
+    CHECK(m.cache.stats().built > 0);
+}
