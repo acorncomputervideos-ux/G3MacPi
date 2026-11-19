@@ -44,8 +44,14 @@ command -v "${PREFIX}g++" >/dev/null || {
     exit 1
 }
 
-echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400)"
-(cd "$CIRCLE" && ./configure -r 4 -p "$PREFIX" -f >/dev/null)
+# The kernel image holds the JIT's code buffers (app/circle/kernel.cpp,
+# docs/cpu/jit-a64.md), so it is bigger than Circle's default limit of
+# 2 MB. A bigger image overlaps the boot stack and dies before anything
+# shows (only the firmware's rainbow screen).
+KERNEL_MAX_MB=8
+
+echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400, kernel up to ${KERNEL_MAX_MB} MB)"
+(cd "$CIRCLE" && ./configure -r 4 -p "$PREFIX" --kernel-max-size "$KERNEL_MAX_MB" -f >/dev/null)
 
 echo "==> Building Circle libraries"
 (cd "$CIRCLE" && MAKE="make -j$JOBS" ./makeall --nosample >/dev/null)
@@ -71,6 +77,14 @@ make -s -C "$APP" -j"$JOBS"
 
 echo "==> Assembling $OUT"
 mkdir -p "$OUT"
+# The whole kernel (code, data and bss) must end below Circle's limit.
+END=$("${PREFIX}nm" "$APP/kernel8-rpi4.elf" | awk '$3 == "_end" { print $1 }')
+LIMIT=$(( 0x80000 + KERNEL_MAX_MB * 1024 * 1024 ))
+if [[ -z "$END" || $(( 16#$END )) -gt $LIMIT ]]; then
+    echo "error: the kernel ends at 0x${END:-?}, beyond Circle's limit 0x$(printf %X $LIMIT) (KERNEL_MAX_MB)" >&2
+    exit 1
+fi
+echo "==> Kernel ends at 0x$END (limit 0x$(printf %X $LIMIT))"
 cp "$APP/kernel8-rpi4.img" "$OUT/"
 cp "$CIRCLE/boot/armstub/armstub8-rpi4.bin" "$OUT/"
 cp "$ROOT/sdcard/config.txt" "$ROOT/sdcard/cmdline.txt" "$OUT/"
