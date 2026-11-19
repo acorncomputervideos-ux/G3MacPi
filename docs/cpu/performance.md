@@ -26,8 +26,11 @@ has been done about it.
 Tried and rejected: link-time optimisation (`-flto`) made it slower
 (14.6 s).
 
-The Raspberry Pi 400 (Cortex-A72, 1.8 GHz) is expected to be several
-times slower than this host; not measured yet.
+Against real time: the emulated G3 runs at 350 MHz with one instruction
+per cycle assumed, so a guest second is 350 M instructions. At ~108 MIPS
+that is about 3.3x slower than a real Blue & White on this host (g3_host:
+25 s of guest time took 100 s). The Raspberry Pi 400 (Cortex-A72, 1.8 GHz)
+is expected to be several times slower again; not measured yet.
 
 ## What the fast paths do
 

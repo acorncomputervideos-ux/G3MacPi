@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// platform/common/mac_session.cpp — see mac_session.h.
+
+#include "platform/common/mac_session.h"
+
+#include "core/machine/bw_firmware.h"
+#include "core/machine/yosemite.h"
+#include "platform/common/hid_to_adb.h"
+
+namespace g3 {
+
+namespace {
+
+constexpr u64 kUnixTo1904 = 2082844800ull;  // seconds from 1904-01-01 to 1970-01-01
+// Where the boot file claims to come from, as Open Firmware's `load` records
+// it (the boot script reads it back). The Mac OS ROM file normally lives in
+// the System Folder of the start-up volume.
+constexpr const char* kBootPath = "hd:2,\\\\:tbxi";
+
+void copy_text(char* dst, u32 cap, const char* src)
+{
+    u32 i = 0;
+    for (; src[i] && i + 1 < cap; ++i)
+        dst[i] = src[i];
+    dst[i] = 0;
+}
+
+} // namespace
+
+MacSession::~MacSession() { stop(); }
+
+const char* MacSession::error_text(Error e)
+{
+    switch (e) {
+    case Error::None: return "no error";
+    case Error::BadRam: return "memory size not supported";
+    case Error::NoMachine: return "the machine could not be built";
+    case Error::Image: return "a disk or CD image could not be opened";
+    case Error::NoRom: return "the Mac OS ROM file could not be read";
+    case Error::RomTooBig: return "the Mac OS ROM file is too large";
+    case Error::Firmware: return "Open Firmware failed to start";
+    case Error::BootFailed: return "the Mac OS ROM file did not start Mac OS";
+    }
+    return "unknown error";
+}
+
+MacSession::Error MacSession::fail(Error e, const char* detail)
+{
+    copy_text(detail_, sizeof detail_, detail);  // first: `detail` may live in the firmware
+    stop();
+    error_ = e;
+    return e;
+}
+
+void MacSession::disc_ejected(void* ctx)
+{
+    auto* slot = static_cast<EjectSlot*>(ctx);
+    MacSession* self = slot->session;
+    const u32 i = slot->drive;
+    if (self->image_[i] && self->host_)
+        self->host_->close_image(self->image_[i]);
+    self->image_[i] = nullptr;
+    if (self->host_)
+        self->host_->disc_ejected(i);
+}
+
+void MacSession::stop()
+{
+    delete fw_;
+    fw_ = nullptr;
+    delete m_;
+    m_ = nullptr;
+    for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
+        cd_[i].insert(nullptr);
+        if (image_[i] && host_)
+            host_->close_image(image_[i]);
+        image_[i] = nullptr;
+        is_cd_[i] = false;
+    }
+}
+
+void MacSession::console_sink(void* ctx, const char* text, u32 len)
+{
+    auto* self = static_cast<MacSession*>(ctx);
+    if (self->host_)
+        self->host_->console(text, len);
+}
+
+MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, const Memory& mem,
+                                    const u8* driver, u32 driver_size, u64 unix_time)
+{
+    stop();
+    host_ = &host;
+    error_ = Error::None;
+    detail_[0] = 0;
+    const u64 ram_bytes = static_cast<u64>(config.ram_mb) << 20;
+    if (!mem.ram || mem.ram_size != ram_bytes || ram_bytes < BwFirmware::kMinRam || ram_bytes > BwFirmware::kMaxRam)
+        return fail(Error::BadRam);
+
+    YosemiteConfig yc;
+    yc.ram = mem.ram;
+    yc.ram_size = mem.ram_size;
+    yc.vram = mem.vram;
+    yc.vram_size = mem.vram_size;
+    yc.rtc_seconds_since_1904 = static_cast<u32>(unix_time + kUnixTo1904);
+    m_ = new YosemiteMachine(yc);
+    if (!m_ || !m_->ok())
+        return fail(Error::NoMachine);
+
+    // Drives: ata0.master = mac-io ATA channel 0, device 0, and so on.
+    BwFirmware::Config fc;
+    for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
+        const MachineConfig::Drive& d = config.drive[i];
+        if (d.type == MachineConfig::DriveType::None)
+            continue;
+        const bool cd = d.type == MachineConfig::DriveType::CdRom;
+        if (d.image[0]) {
+            image_[i] = host.open_image(d.image, cd || d.read_only);
+            if (!image_[i])
+                return fail(Error::Image, d.image);
+        }
+        AtaBus& bus = m_->macio().ide(i / 2).bus();
+        if (cd) {
+            is_cd_[i] = true;
+            eject_slot_[i] = EjectSlot{this, i};
+            cd_[i].set_eject_callback(disc_ejected, &eject_slot_[i]);
+            bus.attach_cdrom(i % 2, &cd_[i]);
+            cd_[i].insert(image_[i]);  // nullptr: an empty drive
+        } else if (image_[i]) {
+            bus.attach(i % 2, image_[i]);
+            if (i % 2 == 0)
+                fc.disk[i / 2] = image_[i];  // Open Firmware's view of the channel's master disk
+        }
+    }
+
+    fc.display_driver = driver;
+    fc.display_driver_size = driver_size;
+    fc.rtc_seconds = unix_time;
+    fc.width = config.width;
+    fc.height = config.height;
+    fc.depth = config.depth == 16 ? 15 : config.depth;  // "thousands": the device's 15-bit mode
+    fw_ = new BwFirmware(*m_, fc);
+    if (!fw_ || !fw_->ok())
+        return fail(Error::Firmware);
+    fw_->set_console(console_sink, this);
+
+    u32 rom_size = 0;
+    const u8* rom = host.load_file(config.rom, rom_size);
+    if (!rom || rom_size == 0)
+        return fail(Error::NoRom, config.rom);
+    if (!fw_->place_file(rom, rom_size, kBootPath))
+        return fail(Error::RomTooBig, config.rom);
+    if (!fw_->command("init-program") || !fw_->client_started())
+        return fail(Error::BootFailed, fw_ ? fw_->forth().error_text() : "");
+    return Error::None;
+}
+
+void MacSession::run(u64 picoseconds)
+{
+    if (m_ && fw_ && !halted())
+        m_->run_for(picoseconds);
+}
+
+bool MacSession::halted() const { return m_ && m_->cpu().checkstopped(); }
+bool MacSession::powered_off() const { return fw_ && fw_->powered_off(); }
+bool MacSession::reboot_requested() const { return fw_ && fw_->reboot_requested(); }
+
+void MacSession::key(u8 hid_usage, bool pressed)
+{
+    if (!m_)
+        return;
+    const u8 code = hid_usage_to_adb(hid_usage);
+    if (code != kAdbNoKey)
+        m_->keyboard().key_event(code, pressed);
+}
+
+void MacSession::mouse(s32 dx, s32 dy, u32 buttons)
+{
+    if (!m_)
+        return;
+    if (dx || dy)
+        m_->mouse().motion(dx, dy);
+    m_->mouse().buttons(buttons);
+}
+
+bool MacSession::change_disc(u32 drive, const char* path)
+{
+    if (!m_ || drive >= MachineConfig::kDrives || !is_cd_[drive])
+        return false;
+    BlockDevice* next = nullptr;
+    if (path && path[0]) {
+        next = host_->open_image(path, true);
+        if (!next)
+            return false;
+    }
+    cd_[drive].insert(next);
+    if (image_[drive])
+        host_->close_image(image_[drive]);
+    image_[drive] = next;
+    return true;
+}
+
+bool MacSession::screen_on() const { return m_ && m_->has_display() && m_->display().enabled(); }
+u32 MacSession::screen_width() const { return m_ && m_->has_display() ? m_->display().width() : 0; }
+u32 MacSession::screen_height() const { return m_ && m_->has_display() ? m_->display().height() : 0; }
+
+void MacSession::screen(u32* pixels, u32 pitch_pixels)
+{
+    if (m_ && m_->has_display())
+        m_->display().convert(pixels, pitch_pixels);
+}
+
+} // namespace g3
