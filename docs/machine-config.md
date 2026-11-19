@@ -18,12 +18,16 @@ ram_mb = 256                   ; 64 128 192 256 384 512
 rom = /g3macpi/rom/Mac OS ROM  ; the Mac OS ROM file (user-supplied)
 boot = auto                    ; auto | cdrom | disk
 display = 1024x768x8           ; 640x480 800x600 1024x768 1152x870 1280x1024 1600x1200; depth 8 16 32
+jit = no                       ; yes: block cache + generated code (experimental, docs/cpu/jit-a64.md)
 
 [ata0.master]                  ; also ata0.slave, ata1.master, ata1.slave
 type = cdrom                   ; none | disk | cdrom
 image = /g3macpi/disks/Mac OS 9.iso
 readonly = yes                 ; disks; CD-ROMs are always read-only
 ```
+
+`jit` is not in the menu yet; set it in the file. It is off by default
+until it has been measured on a Pi.
 
 Invalid lines are ignored and reported (count, first line and reason);
 everything valid still applies. Keys and words are case-insensitive.

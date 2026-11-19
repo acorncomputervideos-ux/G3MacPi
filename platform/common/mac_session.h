@@ -66,6 +66,12 @@ public:
         u32 ram_size = 0;           // must be config.ram_mb MB
         u8* vram = nullptr;         // video memory (8 MB is enough for 1600x1200x32)
         u32 vram_size = 0;
+        // With config.jit: memory for the CPU's block cache (a few MB) and,
+        // optional, executable memory for generated code (AArch64 only).
+        u8* blocks = nullptr;
+        u32 blocks_size = 0;
+        u32* code = nullptr;
+        u32 code_words = 0;
     };
     // Builds and starts the Mac. `driver`: our display driver (PEF), which
     // Mac OS needs to draw; `unix_time`: the real-time clock at power-on.
@@ -82,6 +88,8 @@ public:
     void run(u64 picoseconds);
     bool halted() const;              // the CPU checkstopped
     u64 instructions() const;         // executed so far (speed statistics)
+    bool block_cache_on() const;      // the CPU uses its decoded-block cache
+    bool jit_on() const;              // ... and generated code
     bool powered_off() const;         // Mac OS shut down (RTAS power-off)
     bool reboot_requested() const;    // Mac OS restarted (RTAS system-reboot)
 

@@ -14,6 +14,7 @@
 //   rom = /g3macpi/rom/Mac OS ROM
 //   boot = auto          ; auto | cdrom | disk
 //   display = 1024x768x8 ; width x height x depth (8, 16, 32)
+//   jit = no             ; yes: the CPU's block cache and generated code
 //   [ata0.master]
 //   type = cdrom         ; none | disk | cdrom
 //   image = /g3macpi/disks/Mac OS 9.iso
@@ -49,6 +50,9 @@ struct MachineConfig {
     char rom[kPathMax] = "/g3macpi/rom/Mac OS ROM";
     Boot boot = Boot::Auto;
     u32 width = 1024, height = 768, depth = 8;
+    // The CPU's decoded-block cache and AArch64 code generation
+    // (docs/cpu/jit-a64.md). Off by default until measured on the Pi.
+    bool jit = false;
     Drive drive[kDrives];
 
     MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master

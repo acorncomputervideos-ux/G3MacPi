@@ -22,7 +22,6 @@
 #include "core/cpu/ppc750/jit/a64_assembler.h"
 #include "core/common/bitops.h"
 
-#include <cstddef>
 
 namespace g3::ppc {
 
@@ -52,9 +51,9 @@ struct JitCompiler {
     Assembler& a;
     u32 cnt_off, exit_off;
 
-    static constexpr u32 gpr_off(u32 r) { return static_cast<u32>(offsetof(CpuState, gpr)) + 4 * r; }
-    static constexpr u32 pc_off() { return static_cast<u32>(offsetof(CpuState, pc)); }
-    static constexpr u32 spr_off(u32 n) { return static_cast<u32>(offsetof(CpuState, spr)) + 4 * n; }
+    static constexpr u32 gpr_off(u32 r) { return static_cast<u32>(__builtin_offsetof(CpuState, gpr)) + 4 * r; }
+    static constexpr u32 pc_off() { return static_cast<u32>(__builtin_offsetof(CpuState, pc)); }
+    static constexpr u32 spr_off(u32 n) { return static_cast<u32>(__builtin_offsetof(CpuState, spr)) + 4 * n; }
 
     // Base + offset into x17 when the offset does not fit the instruction.
     Reg far(Reg base, u32& off, u32 size)

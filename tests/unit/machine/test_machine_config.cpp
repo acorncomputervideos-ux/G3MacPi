@@ -158,3 +158,28 @@ TEST_CASE("machine/config/write_then_parse_round_trips")
     // Too small a buffer: refused, not truncated.
     CHECK_EQ(write_machine_config(a, buf, 40), 0u);
 }
+
+TEST_CASE("machine/config/jit_option")
+{
+    MachineConfig c;
+    CHECK(!c.jit);  // off until measured on the Pi
+    ConfigParseReport r;
+    const char text[] = "[machine]\njit = yes\n";
+    parse_machine_config(text, sizeof text - 1, c, r);
+    CHECK(c.jit);
+    CHECK_EQ(r.ignored, 0u);
+    char out[4096];
+    const u32 n = write_machine_config(c, out, sizeof out);
+    REQUIRE(n > 0);
+    CHECK(std::strstr(out, "\njit = yes\n") != nullptr);
+    MachineConfig back;
+    ConfigParseReport r2;
+    parse_machine_config(out, n, back, r2);
+    CHECK(back.jit);
+    CHECK_EQ(r2.ignored, 0u);
+    const char bad[] = "[machine]\njit = maybe\n";
+    ConfigParseReport r3;
+    parse_machine_config(bad, sizeof bad - 1, back, r3);
+    CHECK_EQ(r3.ignored, 1u);
+    CHECK(back.jit);  // unchanged
+}

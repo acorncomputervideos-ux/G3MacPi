@@ -91,8 +91,11 @@ struct Rig {
         m.ram_size = static_cast<u32>(ram.size());
         m.vram = vram.data();
         m.vram_size = static_cast<u32>(vram.size());
+        m.blocks = blocks.data();
+        m.blocks_size = static_cast<u32>(blocks.size());
         return m;
     }
+    std::vector<u8> blocks = std::vector<u8>(2u << 20);
     MacSession::Error start() { return session.start(cfg, host, memory(), nullptr, 0, 1000000000ull); }
 };
 
@@ -202,5 +205,18 @@ TEST_CASE("platform/session/start_failures")
         CHECK(!r.session.running());
         CHECK(std::string(MacSession::error_text(MacSession::Error::BootFailed)).find("did not start") !=
               std::string::npos);
+    }
+}
+
+TEST_CASE("platform/session/jit_option_turns_on_the_block_cache")
+{
+    for (bool on : {false, true}) {
+        Rig r;
+        r.cfg.jit = on;
+        REQUIRE(r.start() == MacSession::Error::None);
+        CHECK_EQ(r.session.block_cache_on(), on);
+        CHECK(!r.session.jit_on());  // no code memory given (and not an AArch64 host here)
+        r.session.run(1000000000ull);
+        CHECK(r.host.console_text == "booting\n" + r.client.msg);  // same behaviour either way
     }
 }

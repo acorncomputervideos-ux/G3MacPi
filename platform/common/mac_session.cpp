@@ -103,6 +103,12 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     yc.ram_size = mem.ram_size;
     yc.vram = mem.vram;
     yc.vram_size = mem.vram_size;
+    if (config.jit && mem.blocks) {
+        yc.jit_memory = mem.blocks;
+        yc.jit_size = mem.blocks_size;
+        yc.jit_code = mem.code;
+        yc.jit_code_words = mem.code_words;
+    }
     yc.rtc_seconds_since_1904 = static_cast<u32>(unix_time + kUnixTo1904);
     m_ = new YosemiteMachine(yc);
     if (!m_ || !m_->ok())
@@ -165,6 +171,9 @@ void MacSession::run(u64 picoseconds)
 }
 
 bool MacSession::halted() const { return m_ && m_->cpu().checkstopped(); }
+bool MacSession::block_cache_on() const { return m_ && m_->cpu().block_cache() != nullptr; }
+bool MacSession::jit_on() const { return m_ && m_->jit_enabled(); }
+
 u64 MacSession::instructions() const { return m_ ? m_->cpu().instructions_executed() : 0; }
 bool MacSession::powered_off() const { return fw_ && fw_->powered_off(); }
 bool MacSession::reboot_requested() const { return fw_ && fw_->reboot_requested(); }

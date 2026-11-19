@@ -284,6 +284,10 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                 } else {
                     reject(r, line_no, "display: not an offered mode");
                 }
+            } else if (word_is(key, kn, "jit")) {
+                if (word_is(val, vn, "yes")) c.jit = true;
+                else if (word_is(val, vn, "no")) c.jit = false;
+                else reject(r, line_no, "jit: yes or no");
             } else {
                 reject(r, line_no, "unknown key in [machine]");
             }
@@ -336,6 +340,8 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     o.num(c.height);
     o.str("x");
     o.num(c.depth);
+    o.str("\njit = ");
+    o.str(c.jit ? "yes" : "no");
     o.str("\n");
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         const MachineConfig::Drive& d = c.drive[i];

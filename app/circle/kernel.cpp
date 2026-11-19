@@ -27,6 +27,22 @@
 
 static const char FromKernel[] = "g3macpi";
 
+// Generated code for the JIT (docs/cpu/jit-a64.md). Circle maps everything
+// after the end of .text (_etext) as not executable (PXN) and everything
+// read/write, so this buffer is put into a section of its own, .text_g3jit (its
+// linker script places all .text* before _etext): it is both. Defined in
+// assembly so the section gets the right flags. It adds its size to the
+// kernel image.
+static const unsigned JitCodeWords = 512 * 1024;	// 2 MB
+asm (".section .text_g3jit, \"awx\", %progbits\n"
+     ".balign 65536\n"
+     "g3_jit_code:\n"
+     ".zero 2097152\n"
+     ".previous\n");
+extern "C" u32 g3_jit_code[];
+#define s_JitCode g3_jit_code
+static const unsigned BlockCacheSize = 8 << 20;
+
 #define SD_DRIVE	"SD:"
 #define LOG_DIR		SD_DRIVE "/g3macpi/logs"
 #define LOG_FILE	LOG_DIR "/boot.log"
@@ -62,6 +78,7 @@ CKernel::CKernel (void)
 	m_nRamSize (0),
 	m_pVram (0),
 	m_pPixels (0),
+	m_pBlocks (0),
 	m_bMacRunning (FALSE),
 	m_nLastDrawTicks (0),
 	m_nLastStatsTicks (0),
@@ -630,6 +647,17 @@ void CKernel::StartMac (void)
 	Memory.ram_size = nRamSize;
 	Memory.vram = m_pVram;
 	Memory.vram_size = nVramSize;
+	if (Config.jit)
+	{
+		if (m_pBlocks == 0)
+		{
+			m_pBlocks = new (HEAP_HIGH) u8[BlockCacheSize];
+		}
+		Memory.blocks = m_pBlocks;
+		Memory.blocks_size = m_pBlocks != 0 ? BlockCacheSize : 0;
+		Memory.code = s_JitCode;
+		Memory.code_words = JitCodeWords;
+	}
 	m_MacHost.SetEjectHandler (DiscEjected, this);
 
 	m_Logger.Write (FromKernel, LogNotice, "Starting the Mac: %u MB, ROM %s", Config.ram_mb, Config.rom);
@@ -643,6 +671,8 @@ void CKernel::StartMac (void)
 		m_pMenu->set_status (Status);
 		return;
 	}
+	m_Logger.Write (FromKernel, LogNotice, "CPU: %s", m_Session.jit_on () ? "block cache and generated code"
+			: m_Session.block_cache_on () ? "block cache" : "interpreter");
 	if (g_NdrvSize == 0)
 	{
 		m_Logger.Write (FromKernel, LogWarning, "No display driver built in: Mac OS will not draw");
