@@ -114,6 +114,18 @@ void Assembler::ubfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms)
     emit(sf(x) | (x ? 1u << 22 : 0) | 0x53000000u | ((immr & 63) << 16) | ((imms & 63) << 10) | (rn << 5) | rd);
 }
 
+// BFM: sf 01 100110 N immr imms Rn Rd (N = sf).
+void Assembler::bfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms)
+{
+    emit(sf(x) | (x ? 1u << 22 : 0) | 0x33000000u | ((immr & 63) << 16) | ((imms & 63) << 10) | (rn << 5) | rd);
+}
+
+// CSINC: sf 0 0 11010100 Rm cond 0 1 Rn Rd.
+void Assembler::csinc(bool x, Reg rd, Reg rn, Reg rm, Cond c)
+{
+    emit(sf(x) | 0x1A800400u | (rm << 16) | (static_cast<u32>(c) << 12) | (rn << 5) | rd);
+}
+
 // REV / REV16 (32-bit): 0 1 0 11010110 00000 0000 opc(2) Rn Rd; opc 10 = REV, 01 = REV16.
 void Assembler::rev(Reg wd, Reg wn) { emit(0x5AC00800u | (wn << 5) | wd); }
 void Assembler::rev16(Reg wd, Reg wn) { emit(0x5AC00400u | (wn << 5) | wd); }

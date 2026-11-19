@@ -69,6 +69,9 @@ public:
     void ubfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms);
     void lsr_imm(Reg wd, Reg wn, u32 shift) { ubfm(false, wd, wn, shift & 31, 31); }
     void ubfx(Reg wd, Reg wn, u32 lsb, u32 width) { ubfm(false, wd, wn, lsb, lsb + width - 1); }
+    // Bitfield move (keeps the other bits of rd) and its alias BFI.
+    void bfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms);
+    void bfi(Reg wd, Reg wn, u32 lsb, u32 width) { bfm(false, wd, wn, (32 - lsb) & 31, width - 1); }
     // Byte reversal (32-bit): all four bytes / within each halfword.
     void rev(Reg wd, Reg wn);
     void rev16(Reg wd, Reg wn);
@@ -102,6 +105,9 @@ public:
     enum Cond : u32 { EQ = 0, NE = 1, HS = 2, LO = 3, MI = 4, PL = 5, VS = 6, VC = 7,
                       HI = 8, LS = 9, GE = 10, LT = 11, GT = 12, LE = 13 };
     void b_cond(Cond c, Label& target);
+    // CSINC rd, rn, rm, cond; CSET rd, cond = CSINC rd, zr, zr, !cond.
+    void csinc(bool x, Reg rd, Reg rn, Reg rm, Cond c);
+    void cset(Reg wd, Cond c) { csinc(false, wd, ZR, ZR, static_cast<Cond>(c ^ 1)); }
     void b(Label& target);
     void nop();
 

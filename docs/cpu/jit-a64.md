@@ -12,8 +12,11 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
   generated code, reading and writing the `CpuState` in memory:
   - `addi`, `addis`;
   - `ori`, `oris`, `xori`, `xoris`;
-  - `rlwinm` without Rc;
-  - `add`, `subf`, `and`, `or`, `xor` without OE or Rc;
+  - `rlwinm`;
+  - `add`, `subf`, `and`, `or`, `xor` (with Rc too, not OE);
+  - `cmp`, `cmpl`, `cmpi`, `cmpli`, `andi.`, `andis.`, `rlwinm.`: the CR
+    field is set with `cset` and `bfi` from the AArch64 flags, plus
+    XER[SO];
   - `mflr`, `mfctr`;
   - the D-form integer loads and stores (`lwz`, `lbz`, `lhz`, `stw`,
     `stb`, `sth` and their update forms; see below).
@@ -118,12 +121,18 @@ Native execution on the Pi has not been tested yet.
 
 ## Coverage, and what comes next
 
-With loads and stores, 36% of compiled operations in that boot are
-native (27% before). The ROM boot still ends bit-identical. Next, in
-order of expected gain:
+Native share of compiled operations in that boot: 27% at first, 36% with
+loads and stores, 39% with compares and CR0. The ROM boot still ends
+bit-identical. The CR code had 9 sabotages. Eight were caught. The
+ninth (compiling OE forms natively) is impossible by construction: OE
+is part of the 10-bit extended opcode, so OE forms never match the
+native cases.
 
-1. Compares and CR0 updates (`cmp*`, `andi.`, Rc forms).
-2. Branches at block end, linking blocks directly.
+Next:
+
+1. Branches at block end. Nearly every block ends in a handler call for
+   its branch.
+2. Linking blocks directly.
 3. Keeping the instruction count in a register between handler calls.
 
 Speed can only be measured on the Pi.

@@ -278,3 +278,41 @@ TEST_CASE("cpu/a64sim/bitfields_bytes_and_register_offsets")
     CHECK_EQ(buf[5], 0x34u);
     CHECK_EQ(out[10], 2u);
 }
+
+TEST_CASE("cpu/a64sim/cset_and_bfi")
+{
+    Prog p;
+    Assembler& a = p.a;
+    a.mov_imm32(X8, 5);
+    a.mov_imm32(X9, 0xFFFFFFFF);
+    a.cmp(false, X8, X9);           // 5 vs -1: signed GT, unsigned LO
+    a.cset(X10, Assembler::LT);     // 0
+    a.cset(X11, Assembler::GT);     // 1
+    a.cset(X12, Assembler::LO);     // 1
+    a.cset(X13, Assembler::EQ);     // 0
+    a.mov_imm32(X14, 0x12345678);
+    a.movz(false, X15, 0xA, 0);
+    a.bfi(X14, X15, 28, 4);         // 0xA2345678
+    a.mov_imm32(X1, 0x12345678);
+    a.bfi(X1, X15, 0, 4);           // 0x1234567A
+    a.mov_imm32(X2, 0xFFFFFFFF);
+    a.movz(false, X3, 0x5, 0);
+    a.bfi(X2, X3, 12, 4);           // 0xFFFF5FFF
+    a.str(false, X10, X0, 0);
+    a.str(false, X11, X0, 4);
+    a.str(false, X12, X0, 8);
+    a.str(false, X13, X0, 12);
+    a.str(false, X14, X0, 16);
+    a.str(false, X1, X0, 20);
+    a.str(false, X2, X0, 24);
+    a.ret();
+    u32 out[8] = {9, 9, 9, 9};
+    CHECK(p.run(reinterpret_cast<u64>(out)));
+    CHECK_EQ(out[0], 0u);
+    CHECK_EQ(out[1], 1u);
+    CHECK_EQ(out[2], 1u);
+    CHECK_EQ(out[3], 0u);
+    CHECK_EQ(out[4], 0xA2345678u);
+    CHECK_EQ(out[5], 0x1234567Au);
+    CHECK_EQ(out[6], 0xFFFF5FFFu);
+}

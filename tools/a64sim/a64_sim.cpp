@@ -135,6 +135,25 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
             else                // UBFIZ / LSL: bits imms..0 up to size - immr
                 r = (src & low_bits(imms + 1)) << (size - immr);
             wz(rd, r, x);
+        } else if ((i & 0x7F800000u) == 0x33000000u) {         // BFM
+            const bool nbit = (i >> 22) & 1;
+            const u32 immr = (i >> 16) & 63, imms = (i >> 10) & 63, size = x ? 64 : 32;
+            if (nbit != x || immr >= size || imms >= size)
+                return fail("bad BFM", pc, lo);
+            const u64 src = mask(rz(rn), x), dst = mask(rz(rd), x);
+            u64 r;
+            if (imms >= immr) {  // BFXIL: bits imms..immr of src to the bottom of dst
+                const u64 m = low_bits(imms - immr + 1);
+                r = (dst & ~m) | ((src >> immr) & m);
+            } else {             // BFI: the low imms+1 bits of src to bit size - immr
+                const u32 lsb = size - immr;
+                const u64 m = low_bits(imms + 1) << lsb;
+                r = (dst & ~m) | ((src << lsb) & m);
+            }
+            wz(rd, mask(r, x), x);
+        } else if ((i & 0x7FE00C00u) == 0x1A800400u) {         // CSINC
+            const u64 r = holds((i >> 12) & 15) ? rz(rn) : rz(rm) + 1;
+            wz(rd, r, x);
         } else if ((i & 0xFFFFF000u) == 0x5AC00000u && (((i >> 10) & 3) == 1 || ((i >> 10) & 3) == 2)) {  // REV16/REV (32)
             const u32 v = static_cast<u32>(rz(rn));
             const u32 r = ((i >> 10) & 3) == 2

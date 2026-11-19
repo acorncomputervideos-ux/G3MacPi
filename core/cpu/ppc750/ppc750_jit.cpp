@@ -113,12 +113,61 @@ struct JitCompiler {
         pending = 0;
     }
 
+    static constexpr u32 cr_off() { return static_cast<u32>(__builtin_offsetof(CpuState, cr)); }
+
+    // CR field `index` from the flags of the last compare (signed or
+    // unsigned), plus XER[SO]: op_compare / update_cr0.
+    void set_cr_field_from_flags(u32 index, bool is_signed)
+    {
+        a.cset(X10, is_signed ? Assembler::LT : Assembler::LO);
+        a.cset(X11, is_signed ? Assembler::GT : Assembler::HI);
+        a.cset(X12, Assembler::EQ);
+        a.ldr(false, X13, X20, spr_off(spr::XER));
+        a.lsr_imm(X13, X13, 31);                     // SO
+        a.orr(false, X13, X13, X12, 1);
+        a.orr(false, X13, X13, X11, 2);
+        a.orr(false, X13, X13, X10, 3);
+        a.ldr(false, X14, X20, cr_off());
+        a.bfi(X14, X13, 28 - 4 * index, 4);
+        a.str(false, X14, X20, cr_off());
+    }
+    // update_cr0 for the result in w8.
+    void cr0_from_w8()
+    {
+        a.cmp_imm(false, X8, 0);
+        set_cr_field_from_flags(0, true);
+    }
+    void compare(u32 insn, Reg wb_value, bool is_signed)
+    {
+        load_gpr(X8, field::ra(insn));
+        a.cmp(false, X8, wb_value);
+        set_cr_field_from_flags(field::crfd(insn), is_signed);
+    }
+
     // Generated code for `insn` if it is one of the simple instructions
-    // (no exception possible, no CR/XER update); false otherwise.
+    // (no exception possible; CR updates only as compares and Rc do them,
+    // no XER changes); false otherwise.
     bool native(u32 insn)
     {
         const u32 rd = field::rd(insn), ra = field::ra(insn), rb = field::rb(insn);
         switch (field::opcd(insn)) {
+        case 10:  // cmpli
+            a.mov_imm32(X9, field::uimm(insn));
+            compare(insn, X9, false);
+            return true;
+        case 11:  // cmpi
+            a.mov_imm32(X9, field::simm(insn));
+            compare(insn, X9, true);
+            return true;
+        case 28: case 29: {  // andi. andis.
+            const u32 imm = field::opcd(insn) == 29 ? field::uimm(insn) << 16 : field::uimm(insn);
+            load_gpr(X8, rd);
+            a.mov_imm32(X9, imm);
+            a.and_(false, X8, X8, X9);
+            store_gpr(X8, ra);
+            cr0_from_w8();
+            return true;
+        }
         case 14:  // addi
         case 15:  // addis
             load_gpr_or_zero(X8, ra);
@@ -139,9 +188,7 @@ struct JitCompiler {
             store_gpr(X8, ra);
             return true;
         }
-        case 21: {  // rlwinm without Rc
-            if (field::rc(insn))
-                return false;
+        case 21: {  // rlwinm(.)
             const u32 mask = ppc_mask(field::mb(insn), field::me(insn));
             load_gpr(X8, rd);
             if (rb & 31)
@@ -151,11 +198,22 @@ struct JitCompiler {
                 a.and_(false, X8, X8, X9);
             }
             store_gpr(X8, ra);
+            if (field::rc(insn))
+                cr0_from_w8();
             return true;
         }
         case 31: {
-            if (insn & 0x00000401u)  // OE or Rc
-                return false;
+            switch (field::xo10(insn)) {
+            case 0:   // cmp
+            case 32:  // cmpl
+                load_gpr(X9, rb);
+                compare(insn, X9, field::xo10(insn) == 0);
+                return true;
+            default:
+                break;
+            }
+            // (The OE forms do not match below: OE is bit 9 of the 10-bit
+            // extended opcode, so addo, subfo ... have xo10 >= 512.)
             switch (field::xo10(insn)) {
             case 266:  // add rD = rA + rB
             case 40:   // subf rD = rB - rA
@@ -166,6 +224,8 @@ struct JitCompiler {
                 else
                     a.sub(false, X8, X9, X8);
                 store_gpr(X8, rd);
+                if (field::rc(insn))
+                    cr0_from_w8();
                 return true;
             case 28: case 444: case 316:  // and or xor: rA = rS op rB
                 load_gpr(X8, rd);
@@ -177,10 +237,12 @@ struct JitCompiler {
                 else
                     a.eor(false, X8, X8, X9);
                 store_gpr(X8, ra);
+                if (field::rc(insn))
+                    cr0_from_w8();
                 return true;
             case 339: {  // mfspr LR / CTR (user-readable: no exception)
                 const u32 n = ((insn >> 16) & 31) | ((insn >> 6) & 0x3E0);
-                if (n != spr::LR && n != spr::CTR)
+                if (field::rc(insn) || (n != spr::LR && n != spr::CTR))
                     return false;
                 a.ldr(false, X8, X20, spr_off(n));
                 store_gpr(X8, rd);
