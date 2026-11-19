@@ -392,6 +392,18 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_int(n.display, "linebytes", m.linebytes);
     }
 
+    // --- USB: a placeholder node (name and device_type "usb"), with no
+    // controller behind it yet. A real B&W has USB, and Mac OS assumes every
+    // NewWorld Mac does. The Mac OS ROM file's loader sets extValid1 bit 26
+    // ("has USB") only when it finds such a node (its special-node table);
+    // the bit decides whether the ROM installs a 68K component that hooks
+    // ExpandMem+0x294, and USBMassStorageLoader calls that hook without a
+    // NULL check. Without the node, Mac OS 9.2.1 jumped to 68K address 0
+    // (System Error 10). No reg/assigned-addresses/compatible: no driver
+    // binds to it. docs/firmware/bw-device-tree.md.
+    n.usb = t.add_node(n.pci, "usb", nullptr);
+    t.set_string(n.usb, "device_type", "usb");
+
     // --- aliases
     char path[256];
     t.path_of(n.disk[0], path, sizeof path);

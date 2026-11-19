@@ -42,9 +42,10 @@ value has one of these sources:
 | …/ata/disk@0 | `device_type` `block` | IEEE 1275 |
 | …/nvram@60000 | `reg` 0x60000 0x20000 | Linux nvram direct mode: stride = size / 8 KB = 16 (as emulated) |
 | /aliases | `hd`, `ide0`, `ide1`, `mac-io` | our choice |
+| /pci/usb | `device_type` "usb" only: a placeholder, no USB controller is emulated yet (no `reg`, no driver binds) | Mac OS ROM file loader's special-node table (name "usb", type "usb" → extValid1 bit 26, "has USB"). A real B&W has USB and Mac OS assumes it: without the bit, USBMassStorageLoader calls a NULL 68K hook (ExpandMem+0x294) and Mac OS 9.2.1 stops with System Error 10 |
 | /pci/display@10 | our display device: `device_type`/`compatible` "display", PCI-binding `reg` and `assigned-addresses` (video memory, registers), plus `address`, `width`, `height`, `depth`, `linebytes` | our design (docs/hardware/framebuffer.md). Under /pci so that Mac OS maps it from `assigned-addresses`; no configuration space behind it |
 
-Not in the tree yet: the SCC serial ports, audio, floppy, USB. These hardware models don't exist yet, and a node without a
+Not in the tree yet: audio, floppy; USB only as a placeholder. These hardware models don't exist yet, and a node without a
 device would mislead an OS.
 
 ## Tests

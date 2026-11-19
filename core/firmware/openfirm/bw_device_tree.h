@@ -66,6 +66,7 @@ struct BwNodes {
     Phandle ata[2], disk[2];
     Phandle cmd646, cmd646_channel, cmd646_disk;  // kNone without a CMD646
     Phandle display;  // kNone without a display
+    Phandle usb;      // a placeholder: no USB controller is emulated yet
 };
 
 // Builds the whole tree into `t` (which must be empty). False if the tree

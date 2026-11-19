@@ -363,3 +363,26 @@ TEST_CASE("firmware/bw-tree/cmd646_node_and_io_translation")
     REQUIRE(build_bw_device_tree(*t2, none.m, n2));
     CHECK(n2.cmd646 == kNone);
 }
+
+TEST_CASE("firmware/bw-tree/usb_placeholder_and_cuda_compatible")
+{
+    Built b;
+    REQUIRE(b.ok);
+    const DeviceTree& t = *b.t;
+    // The Mac OS ROM loader's special-node table matches name "usb" with
+    // device_type "usb" (sets extValid1's "has USB" bit). No controller is
+    // emulated, so the node has no addresses a driver could bind to.
+    REQUIRE(b.n.usb != kNone);
+    CHECK_EQ(t.parent(b.n.usb), b.n.pci);
+    CHECK(std::strcmp(t.name(b.n.usb), "usb") == 0);
+    const u8* p = nullptr;
+    u32 len = 0;
+    REQUIRE(t.get_property(b.n.usb, "device_type", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "usb") == 0);
+    CHECK(!t.get_property(b.n.usb, "reg", p, len));
+    CHECK(!t.get_property(b.n.usb, "assigned-addresses", p, len));
+    CHECK(!t.get_property(b.n.usb, "compatible", p, len));
+    // via-cuda's compatible "cuda": the ROM's PowerMgrPlugin parcel matches it.
+    REQUIRE(t.get_property(b.n.cuda, "compatible", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "cuda") == 0);
+}
