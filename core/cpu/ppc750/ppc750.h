@@ -17,6 +17,7 @@
 #ifndef G3_CORE_CPU_PPC750_PPC750_H
 #define G3_CORE_CPU_PPC750_PPC750_H
 
+#include "core/common/endian.h"
 #include "core/common/types.h"
 #include "core/cpu/ppc750/cpu_state.h"
 #include "core/cpu/ppc750/memory_interface.h"
@@ -158,12 +159,41 @@ private:
     // Memory helpers: translate, then access. On failure they raise DSI or a
     // machine check and return false.
     bool mem_access(u32 ea, u32 size, bool write, u32& value);
-    bool mem_read8(u32 a, u32& v);
-    bool mem_read16(u32 a, u32& v);
-    bool mem_read32(u32 a, u32& v);
-    bool mem_write8(u32 a, u32 v);
-    bool mem_write16(u32 a, u32 v);
-    bool mem_write32(u32 a, u32 v);
+    // The common case inline: the access stays in one page, translates
+    // through real mode or a soft-TLB hit, and lands in the direct RAM
+    // window. Anything else goes to mem_access.
+    template <u32 Size, bool Write>
+    bool mem_fast(u32 ea, u32& value)
+    {
+        if ((ea & 0xFFFu) + Size <= 0x1000u) {
+            u32 pa = ea;
+            if (s_.msr & msr::DR) {
+                const u32 page = ea >> 12;
+                const u32 tag = kTlbValid | (page << 1) | ((s_.msr & msr::PR) ? 1u : 0u);
+                const TlbEntry& e = dtlb_[page & (kTlbSize - 1)];
+                if (!tlb_enabled_ || e.tag != tag || (Write && !(e.writable && e.changed)))
+                    return mem_access(ea, Size, Write, value);
+                pa = e.pa_page | (ea & 0xFFFu);
+            }
+            if (u8* p = ram_at(pa, Size)) {
+                if (Write) {
+                    if (Size == 4) store_be32(p, value);
+                    else if (Size == 2) store_be16(p, static_cast<u16>(value));
+                    else *p = static_cast<u8>(value);
+                } else {
+                    value = Size == 4 ? load_be32(p) : Size == 2 ? load_be16(p) : *p;
+                }
+                return true;
+            }
+        }
+        return mem_access(ea, Size, Write, value);
+    }
+    bool mem_read8(u32 a, u32& v) { return mem_fast<1, false>(a, v); }
+    bool mem_read16(u32 a, u32& v) { return mem_fast<2, false>(a, v); }
+    bool mem_read32(u32 a, u32& v) { return mem_fast<4, false>(a, v); }
+    bool mem_write8(u32 a, u32 v) { return mem_fast<1, true>(a, v); }
+    bool mem_write16(u32 a, u32 v) { return mem_fast<2, true>(a, v); }
+    bool mem_write32(u32 a, u32 v) { return mem_fast<4, true>(a, v); }
     void machine_check();
 
     // --- floating point (ppc750_fpu.cpp)

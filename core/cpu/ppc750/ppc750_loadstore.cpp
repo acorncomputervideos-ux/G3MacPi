@@ -154,12 +154,6 @@ bool Ppc750::mem_access(u32 ea, u32 size, bool write, u32& value)
     return true;
 }
 
-bool Ppc750::mem_read8(u32 a, u32& v) { return mem_access(a, 1, false, v); }
-bool Ppc750::mem_read16(u32 a, u32& v) { return mem_access(a, 2, false, v); }
-bool Ppc750::mem_read32(u32 a, u32& v) { return mem_access(a, 4, false, v); }
-bool Ppc750::mem_write8(u32 a, u32 v) { return mem_access(a, 1, true, v); }
-bool Ppc750::mem_write16(u32 a, u32 v) { return mem_access(a, 2, true, v); }
-bool Ppc750::mem_write32(u32 a, u32 v) { return mem_access(a, 4, true, v); }
 
 u32 Ppc750::ea_d(u32 insn) const
 {

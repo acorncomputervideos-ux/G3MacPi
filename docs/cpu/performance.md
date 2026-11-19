@@ -21,6 +21,10 @@ has been done about it.
 | Before | 22.5 s | 62 |
 | Direct RAM path + inline TLB hit | 15.0 s | 93 |
 | + fetch-page cache | 13.4 s | 105 |
+| + inline data-access fast path (`mem_fast`) | 13.0 s | 108 |
+
+Tried and rejected: link-time optimisation (`-flto`) made it slower
+(14.6 s).
 
 The Raspberry Pi 400 (Cortex-A72, 1.8 GHz) is expected to be several
 times slower than this host; not measured yet.
@@ -33,6 +37,9 @@ times slower than this host; not measured yet.
   stores, skipping the bus's region lookup and virtual calls. Everything
   else (ROM, MMIO, unmapped) takes the bus path as before. The window is
   re-read at the start of every `run()` call.
+- **Inline data accesses** (`mem_fast`): an aligned-in-page load or
+  store that hits the soft TLB (or runs in real mode) and lands in the
+  RAM window is done at the call site.
 - **Inline soft-TLB hit** in `translate()`. Misses and first stores to a
   page still go to `translate_enabled()` (R/C bits, protection).
 - **Fetch-page cache.** The host pointer of the RAM page holding the
