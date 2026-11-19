@@ -225,3 +225,7 @@ many seconds to minutes of host time.
    68K start-up keeps moving. The screen is still blank. Cuda commands
    0x02/0x08 (Cuda memory), 0x1B, 0x22 and 0x25 (I2C) get error replies;
    the ROM goes on regardless.
+7. **"?" disk.** With our display driver (G3_NDRV) and 20 s of guest
+   time, Mac OS draws its start-up screen: grey desktop, pointer, and the
+   flashing "?" disk. That is the right result with no system disk
+   attached. Next: a disk holding a Mac OS system folder.
