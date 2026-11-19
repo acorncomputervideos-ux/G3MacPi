@@ -26,7 +26,9 @@
 
 #include "core/common/spsc_queue.h"
 #include "platform/common/hid_keyboard.h"
+#include "platform/common/config_menu.h"
 #include "platform/common/input_events.h"
+#include "settings.h"
 #include "teedevice.h"
 
 enum TShutdownMode
@@ -54,6 +56,11 @@ private:
 	// SD card log file (SD:/g3macpi/logs/boot.log, previous run kept as boot-prev.log)
 	boolean MountSDCard (void);
 	void WriteLogFile (void);
+
+	// Settings menu (F12 switches between it and the log view)
+	void SetUpSettings (void);
+	void ShowMenu (boolean bShow);
+	void HandleMenuKey (u8 ucUsage);
 
 	// USB input test
 	void AttachInputDevices (void);
@@ -103,6 +110,11 @@ private:
 	unsigned		m_nLastMouseLogTicks;
 
 	TShutdownMode		m_ShutdownMode;
+
+	// Settings
+	CFatFsLister		m_Lister;
+	g3::ConfigMenu		*m_pMenu;
+	boolean			m_bMenuShown;
 
 	static CKernel		*s_pThis;
 };

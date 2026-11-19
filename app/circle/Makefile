@@ -7,9 +7,11 @@
 CIRCLEHOME = ../../third_party/circle
 
 # Portable code shared with the Linux test build.
-PORTABLE_OBJS = ../../platform/common/hid_keyboard.o
+PORTABLE_OBJS = ../../platform/common/hid_keyboard.o \
+		../../platform/common/config_menu.o \
+		../../core/machine/machine_config.o
 
-OBJS	= main.o kernel.o teedevice.o $(PORTABLE_OBJS)
+OBJS	= main.o kernel.o teedevice.o settings.o $(PORTABLE_OBJS)
 
 LIBS	= $(CIRCLEHOME)/addon/fatfs/libfatfs.a \
 	  $(CIRCLEHOME)/addon/SDCard/libsdcard.a \

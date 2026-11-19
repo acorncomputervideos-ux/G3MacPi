@@ -16,3 +16,20 @@ directory `build/sdcard/` with everything needed. To make a bootable card:
 
 `cmdline.txt` holds Circle kernel options (see `third_party/circle/doc/cmdline.txt`),
 e.g. `loglevel=4` (debug) or `width=1280 height=720`.
+
+## Settings menu and your files
+
+At start-up the emulator shows its settings menu (F12 switches between the
+menu and the log view; Ctrl+Alt+Delete reboots). On first start it creates:
+
+| Folder / file | Put there |
+|---|---|
+| `/g3macpi/rom/` | the Mac OS ROM file (from your own Mac OS 9 install) |
+| `/g3macpi/disks/` | CD images (`.iso`, `.toast`, `.cdr`) and hard-disk images |
+| `/g3macpi/g3macpi.ini` | written by "Save settings" (docs/machine-config.md) |
+
+The menu sets memory, the ROM file, the four ATA drive positions (CD-ROM
+or hard disk, with an image from `/g3macpi/disks`), the start-up disk and
+the screen mode. The Blue & White G3 has no floppy drive, so the floppy
+line is greyed out. Starting the Mac from the menu is not in this build
+yet: the emulator core does not run on the Pi so far.

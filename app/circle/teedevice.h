@@ -16,9 +16,14 @@ public:
 
 	int Write (const void *pBuffer, size_t nCount) override;
 
+	// While disabled, output goes only to the second device (the settings
+	// menu owns the screen; the log still reaches the serial port).
+	void EnableFirst (boolean bEnable)	{ m_bFirstEnabled = bEnable; }
+
 private:
 	CDevice *m_pFirst;
 	CDevice *m_pSecond;
+	volatile boolean m_bFirstEnabled;
 };
 
 #endif

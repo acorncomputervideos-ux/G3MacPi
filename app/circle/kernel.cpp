@@ -52,7 +52,9 @@ CKernel::CKernel (void)
 	m_nMouseButtons (0),
 	m_nMouseEvents (0),
 	m_nLastMouseLogTicks (0),
-	m_ShutdownMode (ShutdownNone)
+	m_ShutdownMode (ShutdownNone),
+	m_pMenu (0),
+	m_bMenuShown (FALSE)
 {
 	s_pThis = this;
 	m_ActLED.Blink (3);	// visible sign of life before the screen is up
@@ -60,6 +62,7 @@ CKernel::CKernel (void)
 
 CKernel::~CKernel (void)
 {
+	delete m_pMenu;
 	s_pThis = 0;
 }
 
@@ -377,9 +380,27 @@ void CKernel::ProcessInputEvents (void)
 					m_nHeldModifiers &= ~nBit;
 			}
 
-			m_Logger.Write (FromKernel, LogNotice, "Key %-4s usage 0x%02X  %s",
-					Event.key.pressed ? "down" : "up", (unsigned) Usage,
-					g3::hid::usage_name (Usage));
+			// The settings menu takes key presses (F12 toggles it).
+			if (Event.key.pressed && m_pMenu != 0)
+			{
+				if (Usage == g3::menu_key::kF12)
+				{
+					ShowMenu (!m_bMenuShown);
+					continue;
+				}
+				if (m_bMenuShown && Usage != g3::hid::kUsageDeleteForward)
+				{
+					HandleMenuKey (Usage);
+					continue;
+				}
+			}
+
+			if (!m_bMenuShown)
+			{
+				m_Logger.Write (FromKernel, LogNotice, "Key %-4s usage 0x%02X  %s",
+						Event.key.pressed ? "down" : "up", (unsigned) Usage,
+						g3::hid::usage_name (Usage));
+			}
 
 			// Ctrl+Alt+Delete: reboot.
 			const unsigned CtrlMask = (1u << 0) | (1u << 4);	// LCtrl, RCtrl
@@ -393,7 +414,7 @@ void CKernel::ProcessInputEvents (void)
 				m_ShutdownMode = ShutdownReboot;
 			}
 		}
-		else
+		else if (!m_bMenuShown)
 		{
 			// Mouse reports arrive at up to ~125-1000 per second: accumulate
 			// and log a summary at most 5 times per second, or immediately
@@ -432,6 +453,93 @@ void CKernel::ProcessInputEvents (void)
 	}
 }
 
+void CKernel::SetUpSettings (void)
+{
+	g3::MachineConfig Config;
+	if (m_bSDMounted)
+	{
+		CreateSettingsFolders ();
+		g3::ConfigParseReport Report;
+		if (LoadSettings (Config, Report))
+		{
+			m_Logger.Write (FromKernel, LogNotice, "Settings: %s, %u MB RAM",
+					G3_CONFIG_FILE, Config.ram_mb);
+			if (Report.ignored != 0)
+			{
+				m_Logger.Write (FromKernel, LogWarning,
+						"Settings: %u line(s) ignored, first: line %u (%s)",
+						Report.ignored, Report.first_line, Report.first_reason);
+			}
+		}
+		else
+		{
+			m_Logger.Write (FromKernel, LogNotice, "Settings: no %s yet, using defaults",
+					G3_CONFIG_FILE);
+		}
+	}
+
+	m_pMenu = new g3::ConfigMenu (Config, m_Lister, G3_DISKS_DIR, G3_ROM_DIR);
+	if (!m_bSDMounted)
+	{
+		m_pMenu->set_status ("No SD card file system: settings cannot be saved.");
+	}
+
+	ShowMenu (TRUE);
+}
+
+void CKernel::ShowMenu (boolean bShow)
+{
+	m_bMenuShown = bShow;
+	m_LogTee.EnableFirst (!bShow);	// while the menu shows, the log goes to the UART only
+
+	static const char Clear[] = "\x1b[0m\x1b[H\x1b[J";
+	m_Screen.Write (Clear, sizeof Clear - 1);
+
+	if (bShow)
+	{
+		g3::ConfigMenu::Screen Screen;
+		m_pMenu->render (Screen);
+		DrawSettings (&m_Screen, Screen);
+	}
+	else
+	{
+		static const char Back[] = "\x1b[?25hLog view. F12: settings menu.\n";
+		m_Screen.Write (Back, sizeof Back - 1);
+	}
+}
+
+void CKernel::HandleMenuKey (u8 ucUsage)
+{
+	switch (m_pMenu->key (ucUsage))
+	{
+	case g3::ConfigMenu::Action::Save:
+		if (m_bSDMounted && SaveSettings (m_pMenu->config ()))
+		{
+			m_pMenu->mark_saved ();
+			m_pMenu->set_status ("Settings saved to " G3_CONFIG_FILE);
+			m_Logger.Write (FromKernel, LogNotice, "Settings saved");
+		}
+		else
+		{
+			m_pMenu->set_status ("Could not write " G3_CONFIG_FILE " on the SD card.");
+		}
+		break;
+
+	case g3::ConfigMenu::Action::Start:
+		// Not yet: the emulator core runs on the Linux host only so far.
+		m_pMenu->set_status ("Starting the Mac comes with the next milestone (not in this build).");
+		break;
+
+	case g3::ConfigMenu::Action::MediaChanged:	// only while a Mac is running
+	case g3::ConfigMenu::Action::None:
+		break;
+	}
+
+	g3::ConfigMenu::Screen Screen;
+	m_pMenu->render (Screen);
+	DrawSettings (&m_Screen, Screen);
+}
+
 TShutdownMode CKernel::Run (void)
 {
 	LogHostInfo ();
@@ -443,9 +551,11 @@ TShutdownMode CKernel::Run (void)
 	}
 
 	m_Logger.Write (FromKernel, LogNotice,
-			"Milestone 1 input test: press keys, move the mouse.");
+			"Input test: press keys, move the mouse. F12: settings menu.");
 	m_Logger.Write (FromKernel, LogNotice,
 			"Ctrl+Alt+Delete saves the log and reboots.");
+
+	SetUpSettings ();
 
 	unsigned nLastThrottleTicks = m_Timer.GetTicks ();
 

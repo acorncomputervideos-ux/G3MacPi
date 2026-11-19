@@ -23,6 +23,7 @@ if [[ "${1:-}" == "clean" ]]; then
     (cd "$CIRCLE" && ./makeall clean) || true
     make -C "$APP" clean || true
     rm -f "$ROOT"/platform/common/*.o "$ROOT"/platform/common/*.d
+    rm -f "$ROOT"/core/machine/machine_config.o "$ROOT"/core/machine/machine_config.d
     make -C "$CIRCLE/addon/SDCard" clean || true
     make -C "$CIRCLE/addon/fatfs" clean || true
     make -C "$CIRCLE/boot/armstub" clean || true

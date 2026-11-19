@@ -315,3 +315,34 @@ TEST_CASE("platform/menu/running_mac_hard_disk_image_needs_restart")
     CHECK(menu.config().drive[2].read_only);
     CHECK(menu.needs_restart());
 }
+
+TEST_CASE("platform/menu/long_file_names_keep_the_size_column")
+{
+    FakeFs fs = sample_fs();
+    fs.dirs["/g3macpi/disks"] = {{"Mac OS 9.2.2 Install.iso", false, 685u << 20},
+                                 {std::string(70, 'x') + ".img", false, 1u << 20}};
+    MachineConfig cfg;
+    ConfigMenu menu(cfg, fs, "/g3macpi/disks", "/g3macpi/rom");
+    menu.key(kDown); menu.key(kDown);
+    menu.key(kEnter);
+    menu.key(kDown);
+    menu.key(kEnter);
+    ConfigMenu::Screen scr;
+    menu.render(scr);
+    bool found_long = false, found_iso = false;
+    for (u32 r = 0; r < ConfigMenu::kRows; ++r) {
+        const std::string t = scr.text[r];
+        if (t.find("Install.iso") != std::string::npos) {
+            found_iso = true;
+            CHECK(t.find("Install.iso ") != std::string::npos);   // a gap before the size
+            CHECK_EQ(t.find("685 MB"), 56u);
+        }
+        if (t.find("xxx") != std::string::npos) {
+            found_long = true;
+            CHECK(t.find("...") != std::string::npos);
+            CHECK_EQ(t.find("1 MB"), 56u);
+        }
+    }
+    CHECK(found_iso);
+    CHECK(found_long);
+}

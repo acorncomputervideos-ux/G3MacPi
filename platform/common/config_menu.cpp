@@ -431,7 +431,7 @@ ConfigMenu::Action ConfigMenu::pick_file()
 
 // --- drawing -------------------------------------------------------------------------
 
-void ConfigMenu::line(Screen& s, u32& row, Attr a, const char* left, const char* right) const
+void ConfigMenu::line(Screen& s, u32& row, Attr a, const char* left, const char* right, u32 col) const
 {
     if (row >= kRows)
         return;
@@ -444,7 +444,9 @@ void ConfigMenu::line(Screen& s, u32& row, Attr a, const char* left, const char*
     put("  ");
     put(left);
     if (right) {
-        while (n < 26 && n < kCols)
+        if (n >= col && n < kCols)
+            t[n++] = ' ';  // always at least one blank before the value
+        while (n < col && n < kCols)
             t[n++] = ' ';
         put(right);
     }
@@ -554,10 +556,11 @@ void ConfigMenu::render(Screen& s) const
             line(s, row, Attr::Dim, "(this folder cannot be read)");
         else if (count == 0)
             line(s, row, Attr::Dim, "(empty folder)");
+        constexpr u32 kNameCol = 56, kNameMax = kNameCol - 4;  // names up to 52 characters
         for (u32 i = top; i < count && i < top + visible; ++i) {
             const Attr a = i == file_sel_ ? Attr::Selected : Attr::Normal;
             if (has_parent_ && i == 0) {
-                line(s, row, a, "..", "(up one folder)");
+                line(s, row, a, "..", "(up one folder)", kNameCol);
                 continue;
             }
             const DirEntry& e = files_[i - (has_parent_ ? 1 : 0)];
@@ -571,9 +574,11 @@ void ConfigMenu::render(Screen& s) const
                 sappend_num(buf, sizeof buf, (e.size + 1023) / 1024);
                 scat(buf, sizeof buf, " KB");
             }
-            char name[kCols + 1];
-            scopy(name, 25, e.name);  // keep the size column aligned
-            line(s, row, a, name, buf);
+            char name[kNameMax + 1];  // longer names end in "..."
+            scopy(name, sizeof name, e.name);
+            if (slen(e.name) > kNameMax)
+                scopy(name + kNameMax - 3, 4, "...");
+            line(s, row, a, name, buf, kNameCol);
         }
     }
 

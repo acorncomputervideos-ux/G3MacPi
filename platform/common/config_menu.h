@@ -102,7 +102,8 @@ private:
     void load_dir();
     Action pick_file();
     Action set_drive_image(const char* path);
-    void line(Screen& s, u32& row, Attr a, const char* left, const char* right = nullptr) const;
+    // A row: two spaces, `left`, and `right` starting at column `col`.
+    void line(Screen& s, u32& row, Attr a, const char* left, const char* right = nullptr, u32 col = 26) const;
     bool restart_differs(u32 main_item) const;
 
     MachineConfig cfg_, running_cfg_;
