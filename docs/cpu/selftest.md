@@ -43,6 +43,25 @@ nothing about speed. On the Pi all three are real.
 "FAIL" names the first program, by seed, and what differed first. With
 the seed, the program can be replayed on a PC in the same generator.
 
+## Measured on the Pi 400
+
+First run, commit 2c31e79, owner's Pi 400 (stock clock), from a photo of
+the screen:
+
+```
+Self-test PASS. MIPS: interpreter 30.2, block cache 53.3, generated code 107
+```
+
+- **PASS:** the generated AArch64 code, run natively, matched the
+  interpreter in all 200 random programs.
+- **Generated code:** about 3.5 times the interpreter on this loop; the
+  block cache alone, 1.8 times.
+- **This loop favours the JIT:** blocks are long and the TLB always hits.
+  Mac OS code has short blocks (about 3 instructions on average in the ROM
+  boot), so expect less there.
+- **Pi against x86:** the Pi's interpreter is about 4 times slower than
+  the x86 build host's (118.8).
+
 ## Memory
 
 - **Work memory:** 6 MB from the heap: two 1 MB machines and a 4 MB block
