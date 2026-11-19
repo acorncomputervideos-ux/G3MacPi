@@ -280,6 +280,15 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     // --- mac-io cells (offsets and interrupts as emulated: Paddington)
     const u32 cuda_reg[2] = {0x16000, 0x2000}, cuda_irq[1] = {18};
     n.cuda = cell(t, n.macio, n.pic, "via-cuda", "via-cuda", cuda_reg, 2, cuda_irq, 1);
+    // compatible "cuda": the Mac OS ROM file's parcel for Cuda machines
+    // matches on it (with device_type "via-cuda") and gives the node
+    // pef,AAPL,MacOS,PowerPC,register and code,AAPL,MacOS,name, which is how
+    // Mac OS finds its PowerMgrPlugin. NativePowerMgrLib imports that
+    // library, so without it NativePowerMgrLib is never prepared and every
+    // library that depends on it (the Time Manager among them) fails to
+    // initialise. OpenBIOS gives this node the same compatible.
+    // docs/firmware/bw-device-tree.md.
+    t.set_string(n.cuda, "compatible", "cuda");
     // The ADB bus behind Cuda. Apple's Mac OS ROM loader only reports "Cuda
     // ADB detected" for a child named "adb" with compatible "adb" (seen with
     // AAPL,debug); without it the Mac OS ROM drives the VIA with the Egret

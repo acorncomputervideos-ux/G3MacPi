@@ -119,9 +119,21 @@ void Ppc750::op_mtspr(u32 insn)
     case spr::TBU_WRITE:
         s_.tb = (s_.tb & 0x00000000FFFFFFFFull) | (static_cast<u64>(v) << 32);
         break;
+    case spr::DEC:
+        // The 750's decrementer exception is edge-triggered: it is signalled
+        // when bit 0 changes from 0 to 1, by counting down or by this write
+        // (QEMU models the 750 family so, "PPC_DECR_UNDERFLOW_TRIGGERED").
+        // Mac OS's nanokernel relies on it: to re-raise an overdue timer it
+        // writes 0x7FFF0000 and then a negative value (its idle loop at
+        // physical 0xF19200 in Mac OS 9.2.1); without the exception every
+        // timer stops. docs/hardware/ppc750-cpu.md.
+        if (!(s_.spr[n] & 0x80000000u) && (v & 0x80000000u)) {
+            dec_pending_ = true;
+            exit_ = 1;
+        }
+        s_.spr[n] = v;
+        break;
     default:
-        // DEC writes do not raise a decrementer exception here even if bit 0
-        // becomes 1 (implementation-specific on real CPUs; to be verified).
         s_.spr[n] = v;
         // Translation context changed: drop cached translations.
         if (n == spr::SDR1 || (n >= spr::IBAT0U && n <= spr::DBAT0U + 7))

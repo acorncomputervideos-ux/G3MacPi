@@ -496,3 +496,33 @@ TEST_CASE("cpu/ppc750/decrementer_interrupt")
     m.cpu.step();
     CHECK_EQ(m.s().pc, kCode + 8u);
 }
+
+TEST_CASE("cpu/ppc750/decrementer_write_edge")
+{
+    // A write that changes DEC bit 0 from 0 to 1 signals the exception (the
+    // edge rule, as Mac OS's nanokernel uses it: 0x7FFF0000, then negative).
+    Machine m;
+    m.load(kCode, {mtspr(spr::DEC, 3), mtspr(spr::DEC, 4), li(5, 1), li(6, 2)});
+    m.s().gpr[3] = 0x7FFF0000u;
+    m.s().gpr[4] = 0xFFFFFFFEu;
+    m.s().spr[spr::DEC] = 0xFFFFFFFFu;  // already negative: no edge from 1 -> 0 -> 1
+    m.s().msr = msr::EE;
+    m.cpu.step();  // DEC = 0x7FFF0000: bit 0 1 -> 0, nothing
+    CHECK_EQ(m.s().pc, kCode + 4u);
+    m.cpu.step();  // DEC = 0xFFFFFFFE: bit 0 0 -> 1
+    CHECK_EQ(m.s().spr[spr::DEC], 0xFFFFFFFEu);
+    m.cpu.step();  // taken before the next instruction
+    CHECK_EQ(m.s().pc, 0x900u);
+    CHECK_EQ(m.s().spr[spr::SRR0], kCode + 8u);
+
+    // Writing a negative value over a negative one is no edge.
+    Machine n;
+    n.load(kCode, {mtspr(spr::DEC, 4), li(5, 1), li(6, 2)});
+    n.s().gpr[4] = 0xFFFFFFFEu;
+    n.s().spr[spr::DEC] = 0xFFFFFFFFu;
+    n.s().msr = msr::EE;
+    n.cpu.step();
+    n.cpu.step();
+    n.cpu.step();
+    CHECK_EQ(n.s().pc, kCode + 12u);
+}

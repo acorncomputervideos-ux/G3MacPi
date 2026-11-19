@@ -609,8 +609,40 @@ int main(int argc, char** argv)
         }
         // G3_REGSAT=pc: print the registers the first time the CPU is about
         // to execute that address.
-        struct RegsAt { u32 pc = 0; bool done = false; u64 from = 0; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0; };
+        // G3_REGSAT_N=n: instead, one line (lr, r3-r9) for each of the first n hits;
+        // G3_REGSAT_LR=lr: only hits with that link register.
+        struct RegsAt { u32 pc = 0; bool done = false; u64 from = 0; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0;
+                        u32 lines = 0; u32 lr = 0; bool lr_filter = false; };
         static RegsAt ra;
+        // G3_REGSAT_PATH=n,o1,o2...: 8 words at rn, then at [rn+o1], then at [[rn+o1]+o2]... (offsets hex)
+        struct RegsPath {
+            static void print(const RegsAt* r, const ppc::CpuState& s) {
+                if (const char* path = std::getenv("G3_REGSAT_PATH")) {
+                    char* e = nullptr;
+                    u32 a = s.gpr[std::strtoul(path, &e, 10) & 31];
+                    auto word = [&](u32 ea) {
+                        u32 pa = 0;
+                        return r->cpu->probe_translate(ea, false, pa) && pa + 4 <= r->ram_size ? load_be32(r->ram + pa) : 0u;
+                    };
+                    for (;;) {
+                        u32 path_pa = 0;
+                        const bool mapped = r->cpu->probe_translate(a, false, path_pa);
+                        std::printf("[regs] [%08X] (pa %08X%s):", a, path_pa, mapped ? "" : " unmapped");
+                        for (u32 k = 0; k < 32; k += 4)
+                            std::printf(" %08X", word(a + k));
+                        std::printf("  \"");
+                        for (u32 k = 0; k < 32; ++k) {
+                            const u8 ch = static_cast<u8>(word((a + k) & ~3u) >> (24 - 8 * ((a + k) & 3)));
+                            std::printf("%c", ch >= 32 && ch < 127 ? ch : 0x2E);
+                        }
+                        std::printf("\"\n");
+                        if (!e || *e != ',')
+                            break;
+                        a = word(a + static_cast<u32>(std::strtoul(e + 1, &e, 16)));
+                    }
+                }
+            }
+        };
         if (const char* rs = std::getenv("G3_REGSAT")) {
             char* rend = nullptr;
             ra.pc = static_cast<u32>(std::strtoul(rs, &rend, 16));
@@ -619,16 +651,36 @@ int main(int argc, char** argv)
             ra.cpu = &m.cpu();
             ra.ram = ram.data();
             ra.ram_size = static_cast<u32>(ram.size());
+            if (const char* n = std::getenv("G3_REGSAT_N"))
+                ra.lines = static_cast<u32>(std::strtoul(n, nullptr, 0));
+            if (const char* l = std::getenv("G3_REGSAT_LR")) {
+                ra.lr = static_cast<u32>(std::strtoul(l, nullptr, 16));
+                ra.lr_filter = true;
+            }
             m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
                 auto* r = static_cast<RegsAt*>(c);
-                if (r->done || s.pc != r->pc || r->cpu->instructions_executed() < r->from)
+                if (r->done || (s.pc != r->pc && r->pc != 0xFFFFFFFFu) || r->cpu->instructions_executed() < r->from)  // pc FFFFFFFF: any
                     return;
+                if (r->lr_filter && s.lr() != r->lr)
+                    return;
+                if (r->lines) {
+                    u32 tv_pa = 0, tv = 0;
+                    if (r->cpu->probe_translate(s.gpr[12], false, tv_pa) && tv_pa + 4 <= r->ram_size)
+                        tv = load_be32(r->ram + tv_pa);
+                    std::printf("[hit] lr=%08x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x r9=%08x r12=%08x [r12]=%08x r31=%08x (instruction %llu)\n",
+                                s.lr(), s.gpr[3], s.gpr[4], s.gpr[5], s.gpr[6], s.gpr[7], s.gpr[8], s.gpr[9], s.gpr[12], tv, s.gpr[31],
+                                static_cast<unsigned long long>(r->cpu->instructions_executed()));
+                    RegsPath::print(r, s);
+                    r->done = --r->lines == 0;
+                    return;
+                }
                 r->done = true;
-                std::printf("[regs] at %08X msr=%08X lr=%08X ctr=%08X  (instruction %llu)\n", s.pc, s.msr, s.lr(), s.ctr(),
+                std::printf("[regs] at %08X msr=%08X lr=%08X ctr=%08X dec=%08X  (instruction %llu)\n", s.pc, s.msr, s.lr(), s.ctr(), s.spr[ppc::spr::DEC],
                             static_cast<unsigned long long>(r->cpu->instructions_executed()));
                 for (u32 i = 0; i < 32; i += 8)
                     std::printf("[regs] r%-2u %08X %08X %08X %08X %08X %08X %08X %08X\n", i, s.gpr[i], s.gpr[i + 1],
                                 s.gpr[i + 2], s.gpr[i + 3], s.gpr[i + 4], s.gpr[i + 5], s.gpr[i + 6], s.gpr[i + 7]);
+                RegsPath::print(r, s);
                 std::printf("[regs] stack at r1:");  // 32 words, through the data translation
                 for (u32 k = 0; k < 128; k += 4) {
                     u32 pa = 0, v = 0;
@@ -638,6 +690,28 @@ int main(int argc, char** argv)
                 }
                 std::printf("\n");
             }, &ra);
+        }
+        // G3_MTDEC=from: from that instruction count, log up to 60 decrementer
+        // writes (mtspr 22) made in real mode: pc, the value, DEC before.
+        struct MtDec { u64 from = 0; u32 left = 60; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0; };
+        static MtDec md;
+        if (const char* mds = std::getenv("G3_MTDEC")) {
+            md.from = std::strtoull(mds, nullptr, 0);
+            md.cpu = &m.cpu();
+            md.ram = ram.data();
+            md.ram_size = static_cast<u32>(ram.size());
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* d = static_cast<MtDec*>(c);
+                if (!d->left || (s.msr & ppc::msr::IR) || s.pc + 4 > d->ram_size || d->cpu->instructions_executed() < d->from)
+                    return;
+                const u32 insn = load_be32(d->ram + s.pc);
+                if ((insn & 0xFC1FFFFFu) != 0x7C1603A6u)
+                    return;
+                --d->left;
+                std::printf("[mtdec] pc=%08X value=%08X dec=%08X tb=%016llX (instruction %llu)\n", s.pc, s.gpr[(insn >> 21) & 31],
+                            s.spr[ppc::spr::DEC], static_cast<unsigned long long>(s.tb),
+                            static_cast<unsigned long long>(d->cpu->instructions_executed()));
+            }, &md);
         }
         // G3_MEMWATCH=physaddr: report every change of that byte of RAM
         // (checked after each instruction) with the PC and the 68K PC (r24).
@@ -652,7 +726,7 @@ int main(int argc, char** argv)
                 std::printf("[memwatch] %08X starts as %02X\n", pa, mw.last);
                 m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
                     auto* w = static_cast<MemWatch*>(c);
-                    if (*w->p == w->last || w->shown >= 200)
+                    if (*w->p == w->last || w->shown >= (std::getenv("G3_MEMWATCH_MAX") ? std::strtoul(std::getenv("G3_MEMWATCH_MAX"), nullptr, 10) : 200))
                         return;
                     std::printf("[memwatch] %02X -> %02X after pc=%08X (lr=%08X r24=%08X) at %llu\n", w->last, *w->p,
                                 s.pc, s.lr(), s.gpr[24],
