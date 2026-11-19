@@ -50,6 +50,18 @@ void AtaBus::attach(u32 device, BlockDevice* disk)
     set_signature();
 }
 
+void AtaBus::attach_cdrom(u32 device, AtapiCdrom* drive)
+{
+    Drive& d = drive_[device & 1];
+    d = Drive{};
+    d.cd = drive;
+    if (drive) {
+        d.status = 0;    // PACKET devices: status 0 after reset (DRDY clear)
+        d.error = 0x01;  // power-on diagnostic passed
+    }
+    set_signature();
+}
+
 // --- interrupt line -------------------------------------------------------------------
 
 void AtaBus::raise_irq()
@@ -100,13 +112,18 @@ u8 AtaBus::read_reg(u32 reg)
 void AtaBus::write_reg(u32 reg, u8 value)
 {
     switch (reg) {
-    case kFeatures: features_ = value; return;
-    case kSectorCount: nsect_ = value; return;
-    case kLbaLow: lbal_ = value; return;
-    case kLbaMid: lbam_ = value; return;
-    case kLbaHigh: lbah_ = value; return;
+    // Writing the taskfile replaces what the reset signature left there.
+    case kFeatures: features_ = value; signature_ = false; return;
+    case kSectorCount: nsect_ = value; signature_ = false; return;
+    case kLbaLow: lbal_ = value; signature_ = false; return;
+    case kLbaMid: lbam_ = value; signature_ = false; return;
+    case kLbaHigh: lbah_ = value; signature_ = false; return;
     case kDevice:
         device_ = value;
+        // Each device has its own taskfile: after a reset the newly
+        // selected device shows its own signature.
+        if (signature_)
+            show_signature(selected());
         update_irq();  // the other device may now drive INTRQ
         return;
     case kCommand:
@@ -123,7 +140,11 @@ void AtaBus::write_reg(u32 reg, u8 value)
             return;
         irq_pending_ = false;  // writing Command acknowledges the interrupt
         update_irq();
-        execute(value);
+        signature_ = false;
+        if (cur().cd)
+            execute_atapi(value);
+        else
+            execute(value);
         return;
     default: return;
     }
@@ -137,7 +158,7 @@ void AtaBus::write_device_control(u8 value)
     if (reset && !was_reset) {
         cancel_transfer();
         for (Drive& d : drive_)
-            if (d.disk)
+            if (d.disk || d.cd)
                 d.status = BSY;
         irq_pending_ = false;
     } else if (!reset && was_reset) {
@@ -148,20 +169,29 @@ void AtaBus::write_device_control(u8 value)
 
 void AtaBus::set_signature()
 {
+    device_ = 0;
+    show_signature(0);
+    signature_ = true;
+}
+
+void AtaBus::show_signature(u32 device)
+{
+    // ATA: count 1, LBA low 1, LBA mid/high 0. PACKET devices: mid 0x14,
+    // high 0xEB (ATA/ATAPI-5).
     nsect_ = 1;
     lbal_ = 1;
-    lbam_ = 0;
-    lbah_ = 0;
-    device_ = 0;
+    const bool packet = drive_[device & 1].cd != nullptr;
+    lbam_ = packet ? 0x14 : 0;
+    lbah_ = packet ? 0xEB : 0;
 }
 
 void AtaBus::reset_drives()
 {
     cancel_transfer();
     for (Drive& d : drive_) {
-        if (!d.disk)
+        if (!d.disk && !d.cd)
             continue;
-        d.status = DRDY | DSC;
+        d.status = d.cd ? 0 : DRDY | DSC;  // PACKET devices clear DRDY after reset
         d.error = 0x01;  // diagnostic code: passed
     }
     // Device 0 reports for both; an absent device 1 is not a failure.
@@ -426,6 +456,17 @@ void AtaBus::after_out_block()
 void AtaBus::read_data(u8* out, u32 len)
 {
     for (u32 i = 0; i < len; ++i) {
+        if (mode_ == Mode::AtapiIn) {
+            out[i] = atapi_byte();
+            --atapi_total_;
+            if (--atapi_chunk_ == 0) {
+                if (atapi_total_ == 0)
+                    finish_packet();
+                else
+                    next_atapi_chunk();
+            }
+            continue;
+        }
         if (mode_ != Mode::PioIn) {
             out[i] = 0xFF;  // no data phase: undefined; return all ones
             continue;
@@ -438,16 +479,37 @@ void AtaBus::read_data(u8* out, u32 len)
 
 void AtaBus::write_data(const u8* in, u32 len)
 {
-    for (u32 i = 0; i < len && mode_ == Mode::PioOut; ++i) {
-        buf_[pos_++] = in[i];
-        if (pos_ >= block_len_)
-            after_out_block();
+    for (u32 i = 0; i < len; ++i) {
+        if (mode_ == Mode::Packet) {
+            packet_[packet_pos_++] = in[i];
+            if (packet_pos_ == sizeof packet_)
+                run_packet();
+        } else if (mode_ == Mode::AtapiOut) {
+            --atapi_total_;  // parameter data: accepted and dropped
+            if (--atapi_chunk_ == 0) {
+                if (atapi_total_ == 0)
+                    finish_packet();
+                else
+                    next_atapi_chunk();
+            }
+        } else if (mode_ == Mode::PioOut) {
+            buf_[pos_++] = in[i];
+            if (pos_ >= block_len_)
+                after_out_block();
+        } else {
+            return;
+        }
     }
 }
 
 u32 AtaBus::dma_read(u8* out, u32 len)
 {
     u32 n = 0;
+    while (n < len && mode_ == Mode::AtapiDmaIn) {
+        out[n++] = atapi_byte();
+        if (--atapi_total_ == 0)
+            finish_packet();  // the interrupt at the end of the command
+    }
     while (n < len && mode_ == Mode::DmaIn) {
         u32 chunk = block_len_ - pos_;
         if (chunk > len - n)
@@ -477,6 +539,141 @@ u32 AtaBus::dma_write(const u8* in, u32 len)
             after_out_block();
     }
     return n;
+}
+
+// --- ATAPI ---------------------------------------------------------------------------
+// ATA/ATAPI-5, PACKET protocol: the host writes PACKET (0xA0) with the
+// byte count limit in LBA mid/high and DMA in Features bit 0; the device
+// asks for the 12-byte packet (Interrupt Reason = sector count register:
+// CoD 1, IO 0; DRQ). For data in, each DRQ block has its byte count in LBA
+// mid/high, Interrupt Reason IO and an interrupt; the command ends with
+// Interrupt Reason CoD|IO, DRQ clear and an interrupt.
+
+void AtaBus::execute_atapi(u8 command)
+{
+    cancel_transfer();
+    Drive& d = cur();
+    d.error = 0;
+    switch (command) {
+    case 0xA0:  // PACKET
+        mode_ = Mode::Packet;
+        packet_pos_ = 0;
+        byte_limit_ = (static_cast<u32>(lbah_) << 8) | lbam_;
+        nsect_ = 0x01;  // CoD: the device wants the command packet
+        d.status = DRDY | DSC | DRQ;  // no interrupt (IDENTIFY word 0: accelerated DRQ)
+        return;
+    case 0xA1: {  // IDENTIFY PACKET DEVICE
+        u16 w[256];
+        AtapiCdrom::identify(w);
+        for (u32 i = 0; i < 256; ++i) {
+            buf_[2 * i] = static_cast<u8>(w[i]);
+            buf_[2 * i + 1] = static_cast<u8>(w[i] >> 8);
+        }
+        mode_ = Mode::PioIn;
+        remaining_ = 0;
+        block_len_ = kSector;
+        pos_ = 0;
+        d.status = DRDY | DSC | DRQ;
+        raise_irq();
+        return;
+    }
+    case 0xEC:  // IDENTIFY DEVICE: aborted, with the signature showing (how hosts find ATAPI)
+        show_signature(selected());
+        abort_command();
+        return;
+    case 0x08:  // DEVICE RESET: back to the signature, no interrupt
+        show_signature(selected());
+        signature_ = true;
+        d.status = 0;
+        d.error = 0x01;
+        return;
+    case 0xEF:  // SET FEATURES
+        if (features_ == 0x03 || features_ == 0x02 || features_ == 0x82 || features_ == 0x55 ||
+            features_ == 0xAA || features_ == 0x66 || features_ == 0xCC)
+            complete();
+        else
+            abort_command();
+        return;
+    case 0xE5:  // CHECK POWER MODE
+        nsect_ = 0xFF;
+        complete();
+        return;
+    case 0xE0: case 0xE1: case 0xE2: case 0xE3: case 0xE6: case 0xE7:
+        complete();
+        return;
+    default:
+        abort_command();
+        return;
+    }
+}
+
+void AtaBus::run_packet()
+{
+    const AtapiCdrom::Result r = cur().cd->command(packet_, resp_);
+    cancel_transfer();
+    using Kind = AtapiCdrom::Result::Kind;
+    if (r.kind == Kind::Status) {
+        finish_packet();
+        return;
+    }
+    if (r.kind == Kind::DataOut) {
+        mode_ = Mode::AtapiOut;
+        atapi_total_ = r.length;
+        next_atapi_chunk();
+        return;
+    }
+    from_sectors_ = r.kind == Kind::SectorsIn;
+    resp_pos_ = 0;
+    cd_lba_ = r.lba;
+    cd_pos_ = AtapiCdrom::kBlock;  // load the first block on the first byte
+    atapi_total_ = from_sectors_ ? r.count * AtapiCdrom::kBlock : r.length;
+    if (features_ & 0x01) {  // DMA
+        mode_ = Mode::AtapiDmaIn;
+        nsect_ = 0x02;
+        cur().status = DRDY | DSC | DRQ;
+        if (dma_cb_)
+            dma_cb_(dma_ctx_);
+    } else {
+        mode_ = Mode::AtapiIn;
+        next_atapi_chunk();
+    }
+}
+
+void AtaBus::next_atapi_chunk()
+{
+    u32 limit = byte_limit_ & ~1u;
+    if (limit == 0)
+        limit = 0xFFFE;  // 0 is not a valid limit; use the largest
+    atapi_chunk_ = atapi_total_ < limit ? atapi_total_ : limit;
+    lbam_ = static_cast<u8>(atapi_chunk_);
+    lbah_ = static_cast<u8>(atapi_chunk_ >> 8);
+    nsect_ = mode_ == Mode::AtapiOut ? 0x00 : 0x02;  // IO: device to host
+    cur().status = DRDY | DSC | DRQ;
+    raise_irq();
+}
+
+void AtaBus::finish_packet()
+{
+    cancel_transfer();
+    const u8 err = cur().cd->error_register();
+    cur().error = err;
+    nsect_ = 0x03;  // CoD | IO: status
+    cur().status = static_cast<u8>(DRDY | DSC | (err ? ERR : 0));
+    raise_irq();
+}
+
+u8 AtaBus::atapi_byte()
+{
+    if (!from_sectors_)
+        return resp_pos_ < sizeof resp_ ? resp_[resp_pos_++] : 0;
+    if (cd_pos_ >= AtapiCdrom::kBlock) {
+        if (!cur().cd->read_block(cd_lba_, buf_))
+            for (u32 i = 0; i < AtapiCdrom::kBlock; ++i)
+                buf_[i] = 0;  // the disc vanished mid-transfer
+        ++cd_lba_;
+        cd_pos_ = 0;
+    }
+    return buf_[cd_pos_++];
 }
 
 // --- IDENTIFY DEVICE -------------------------------------------------------------------

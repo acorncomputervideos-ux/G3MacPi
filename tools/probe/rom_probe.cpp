@@ -12,6 +12,8 @@
 #include "core/cpu/ppc750/disasm.h"
 #include "core/machine/bw_firmware.h"
 #include "core/machine/bw_nvram.h"
+#include "core/devices/ata/atapi_cdrom.h"
+#include "core/machine/machine_config.h"
 #include "core/storage/block_device.h"
 
 #include <cstdint>
@@ -21,6 +23,21 @@
 #include <vector>
 
 using namespace g3;
+
+namespace {
+bool load_file(const char* path, std::vector<u8>& out)
+{
+    FILE* f = std::fopen(path, "rb");
+    if (!f)
+        return false;
+    std::fseek(f, 0, SEEK_END);
+    out.resize(static_cast<size_t>(std::ftell(f)));
+    std::fseek(f, 0, SEEK_SET);
+    const bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
+    std::fclose(f);
+    return ok;
+}
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -41,8 +58,25 @@ int main(int argc, char** argv)
     }
     const u64 ms = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 100;
 
-    // G3_RAM_MB: emulated RAM (default 256).
-    const u32 ram_mb = std::getenv("G3_RAM_MB") ? static_cast<u32>(std::strtoul(std::getenv("G3_RAM_MB"), nullptr, 10)) : 256;
+    // G3_CONFIG=g3macpi.ini: the machine configuration the Pi's menu writes
+    // (RAM, drives, display); docs/machine-config.md. Image paths are host
+    // paths here.
+    static MachineConfig mc;
+    if (const char* cp = std::getenv("G3_CONFIG")) {
+        std::vector<u8> text;
+        if (!load_file(cp, text)) {
+            std::fprintf(stderr, "cannot read %s\n", cp);
+            return 1;
+        }
+        ConfigParseReport rep;
+        parse_machine_config(reinterpret_cast<const char*>(text.data()), static_cast<u32>(text.size()), mc, rep);
+        std::printf("[probe] config %s: %u MB, %ux%ux%u, %u line(s) ignored%s%s\n", cp, mc.ram_mb, mc.width,
+                    mc.height, mc.depth, rep.ignored, rep.ignored ? " - first: " : "", rep.first_reason);
+    } else {
+        mc.drive[0].type = MachineConfig::DriveType::None;  // no config: no drives unless G3_DISK
+    }
+    // G3_RAM_MB: emulated RAM (default: the config's, 256).
+    const u32 ram_mb = std::getenv("G3_RAM_MB") ? static_cast<u32>(std::strtoul(std::getenv("G3_RAM_MB"), nullptr, 10)) : mc.ram_mb;
     static std::vector<u8> ram(static_cast<size_t>(ram_mb) << 20), vram(8u << 20);
     YosemiteConfig cfg;
     cfg.ram = ram.data();
@@ -51,6 +85,9 @@ int main(int argc, char** argv)
     cfg.vram_size = static_cast<u32>(vram.size());
     YosemiteMachine m(cfg);
     BwFirmware::Config fc;
+    fc.width = mc.width;
+    fc.height = mc.height;
+    fc.depth = mc.depth;
     // G3_NDRV=file.pef: our display driver for the display node.
     std::vector<u8> ndrv;
     if (const char* path = std::getenv("G3_NDRV")) {
@@ -175,6 +212,45 @@ int main(int argc, char** argv)
             r->when[r->pos % r->e.size()] = r->m->cpu().instructions_executed();
             r->e[r->pos++ % r->e.size()] = x;
         }, &via);
+    }
+    // Drives from the configuration: ata0.master = channel 0 device 0, etc.
+    static std::vector<u8> drive_bytes[MachineConfig::kDrives];
+    static RamBlockDevice* drive_dev[MachineConfig::kDrives] = {};
+    static AtapiCdrom cdrom[MachineConfig::kDrives];
+    for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
+        const MachineConfig::Drive& d = mc.drive[i];
+        if (d.type == MachineConfig::DriveType::None)
+            continue;
+        AtaBus& bus = m.macio().ide(i / 2).bus();
+        if (d.image[0]) {
+            if (!load_file(d.image, drive_bytes[i]) || drive_bytes[i].size() < 512) {
+                std::fprintf(stderr, "cannot read image %s\n", d.image);
+                return 1;
+            }
+            drive_dev[i] = new RamBlockDevice(drive_bytes[i].data(), drive_bytes[i].size(), d.read_only);
+        }
+        if (d.type == MachineConfig::DriveType::CdRom) {
+            // G3_ATAPI: print every packet command (up to 300) with its sense.
+            if (std::getenv("G3_ATAPI")) {
+                static u32 shown = 0;
+                cdrom[i].set_packet_trace([](void*, const u8* c, u32 sense) {
+                    if (shown++ >= 300)
+                        return;
+                    std::printf("[atapi]");
+                    for (u32 k = 0; k < 12; ++k)
+                        std::printf(" %02X", c[k]);
+                    std::printf("  -> %06X\n", sense);
+                }, nullptr);
+            }
+            bus.attach_cdrom(i % 2, &cdrom[i]);
+            cdrom[i].insert(drive_dev[i]);  // nullptr: an empty drive
+            std::printf("[probe] %s: CD-ROM, %s (%u blocks)\n", MachineConfig::drive_name(i),
+                        d.image[0] ? d.image : "no disc", cdrom[i].blocks());
+        } else if (drive_dev[i]) {
+            bus.attach(i % 2, drive_dev[i]);
+            std::printf("[probe] %s: disk %s (%zu sectors%s)\n", MachineConfig::drive_name(i), d.image,
+                        drive_bytes[i].size() / 512, d.read_only ? ", read-only" : "");
+        }
     }
     // G3_DISK=image[,channel]: a disk image (loaded into memory, writable)
     // as the master device on mac-io ATA channel 0 (or 1).

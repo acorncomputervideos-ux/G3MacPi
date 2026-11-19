@@ -27,6 +27,7 @@
 #define G3_CORE_DEVICES_ATA_ATA_BUS_H
 
 #include "core/common/types.h"
+#include "core/devices/ata/atapi_cdrom.h"
 #include "core/storage/block_device.h"
 
 namespace g3 {
@@ -55,6 +56,9 @@ public:
 
     // Attach a disk image as device 0 or 1 (nullptr detaches).
     void attach(u32 device, BlockDevice* disk);
+    // Attach an ATAPI CD-ROM drive as device 0 or 1 (nullptr detaches). The
+    // drive keeps its disc; insert or eject through AtapiCdrom::insert().
+    void attach_cdrom(u32 device, AtapiCdrom* drive);
     void set_irq(IrqCallback cb, void* context) { irq_cb_ = cb; irq_ctx_ = context; }
     // Called when a DMA command is ready to move data (the host
     // controller should then let its DMA engine run).
@@ -74,7 +78,10 @@ public:
     // means no (more) DMA data is pending right now.
     u32 dma_read(u8* out, u32 len);
     u32 dma_write(const u8* in, u32 len);
-    bool dma_pending() const { return mode_ == Mode::DmaIn || mode_ == Mode::DmaOut; }
+    bool dma_pending() const
+    {
+        return mode_ == Mode::DmaIn || mode_ == Mode::DmaOut || mode_ == Mode::AtapiDmaIn;
+    }
 
     // Diagnostics: called for every command written to the Command
     // register, with the taskfile as written (before the command runs).
@@ -88,10 +95,13 @@ public:
     u32 selected() const { return (device_ & ata::DEV_SLAVE) ? 1 : 0; }
 
 private:
-    enum class Mode : u8 { Idle, PioIn, PioOut, DmaIn, DmaOut };
+    // Packet: receiving an ATAPI command packet; AtapiIn/AtapiDmaIn/AtapiOut:
+    // its data phase (PIO in, DMA in, PIO out).
+    enum class Mode : u8 { Idle, PioIn, PioOut, DmaIn, DmaOut, Packet, AtapiIn, AtapiDmaIn, AtapiOut };
 
     struct Drive {
         BlockDevice* disk = nullptr;
+        AtapiCdrom* cd = nullptr;  // an ATAPI device instead of a disk
         u8 status = 0;
         u8 error = 0;
         u16 heads = 16, sectors = 63;  // current CHS translation
@@ -100,7 +110,7 @@ private:
 
     Drive& cur() { return drive_[selected()]; }
     const Drive& cur() const { return drive_[selected()]; }
-    bool present(u32 d) const { return drive_[d].disk != nullptr; }
+    bool present(u32 d) const { return drive_[d].disk != nullptr || drive_[d].cd != nullptr; }
 
     void reset_drives();
     void set_signature();
@@ -120,6 +130,13 @@ private:
     void after_in_block();
     void after_out_block();
     void cancel_transfer();
+    void show_signature(u32 device);   // the device's reset signature in the taskfile
+    // ATAPI (PACKET devices).
+    void execute_atapi(u8 command);
+    void run_packet();
+    void finish_packet();
+    void next_atapi_chunk();
+    u8 atapi_byte();
 
     Drive drive_[2];
     // Command block (written to both devices).
@@ -134,6 +151,18 @@ private:
     u32 block_len_ = 0;     // bytes in the current block
     u32 pos_ = 0;           // byte position inside the buffer
     u8 buf_[kMaxMultiple * BlockDevice::kSectorSize];
+
+    // ATAPI transfer state.
+    u8 packet_[12] = {};
+    u32 packet_pos_ = 0;
+    u8 resp_[AtapiCdrom::kResponseMax] = {};
+    u32 resp_pos_ = 0;
+    bool from_sectors_ = false;  // data comes from the disc, not resp_
+    u32 cd_lba_ = 0, cd_pos_ = 0;
+    u32 atapi_total_ = 0;        // bytes left in the data phase
+    u32 atapi_chunk_ = 0;        // bytes left in this DRQ block (PIO)
+    u32 byte_limit_ = 0;         // the host's byte count limit (PIO)
+    bool signature_ = false;     // the taskfile still shows the reset signature
 
     bool irq_pending_ = false;
     bool irq_line_ = false;
