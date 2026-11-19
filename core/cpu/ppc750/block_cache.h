@@ -28,7 +28,8 @@ namespace g3::ppc {
 class Ppc750;
 
 struct BlockOp {
-    void (*fn)(Ppc750& cpu, u32 insn);
+    using Fn = void (*)(Ppc750& cpu, u32 insn);
+    Fn fn;
     u32 insn;
 };
 
@@ -38,12 +39,19 @@ public:
     static constexpr u32 kTableSize = 1u << 15;  // direct-mapped lookup table
     static constexpr u32 kPageShift = 12;
 
+    // Blocks are packed one after another in the pool, each with exactly
+    // its own operations (most blocks are a few instructions long).
     struct Block {
         u32 pa;     // physical address of the first instruction
         u32 gen;    // the page generation it was built under
         u32 count;  // operations
-        BlockOp ops[kMaxOps];
+        u32 pad;
+        BlockOp ops[1];  // really `count`
     };
+    static constexpr u32 block_bytes(u32 ops)
+    {
+        return static_cast<u32>(sizeof(Block) + (ops - 1) * sizeof(BlockOp));
+    }
 
     struct Stats {
         u64 built = 0, hits = 0, flushes = 0, invalidations = 0;
@@ -52,7 +60,7 @@ public:
     // Uses `bytes` of `arena` (8-byte aligned) for pages of RAM in
     // [0, ram_size). False if the arena is too small to be useful.
     bool init(void* arena, u32 bytes, u32 ram_size);
-    bool ready() const { return blocks_ != nullptr; }
+    bool ready() const { return pool_ != nullptr; }
 
     // A valid block starting at physical address `pa`, or nullptr.
     Block* find(u32 pa)
@@ -63,15 +71,16 @@ public:
         const u32 slot = table_[(pa >> 2) & (kTableSize - 1)];
         if (slot == 0)
             return nullptr;
-        Block* b = &blocks_[slot - 1];
+        Block* b = reinterpret_cast<Block*>(pool_ + (slot - 1) * kAlign);
         if (b->pa != pa || b->gen != gen_[page])
             return nullptr;
         ++stats_.hits;
         return b;
     }
-    // A fresh block for `pa` (flushing everything first if the pool is
-    // full); the caller fills ops/count, then calls commit().
-    Block* allocate(u32 pa);
+    // A fresh block for `pa` with room for `ops` operations (flushing
+    // everything first if the pool is full); the caller fills ops and
+    // count (at most `ops`), then calls commit().
+    Block* allocate(u32 pa, u32 ops);
     void commit(Block* b);
 
     // RAM at [pa, pa + len) was written: drops the blocks of the pages it
@@ -87,20 +96,24 @@ public:
     void invalidate_page(u32 page);
     void flush();
 
-    // Set when blocks were dropped; the CPU checks it after each
-    // operation (the code it is running may be gone) and clears it.
-    bool dirty = false;
+    // Set to 1 when blocks are dropped (the code the CPU is running may
+    // be gone); the CPU points it at its block-exit flag.
+    void set_signal(u8* flag) { signal_ = flag; }
 
     const Stats& stats() const { return stats_; }
-    u32 capacity() const { return nblocks_; }
+    // Blocks of kMaxOps operations that fit (more, shorter ones do).
+    u32 capacity() const { return pool_bytes_ / block_bytes(kMaxOps); }
     u32 pages() const { return pages_; }
 
 private:
     u32* gen_ = nullptr;    // per RAM page
     u8* code_ = nullptr;    // per RAM page: holds blocks
-    u32* table_ = nullptr;  // kTableSize entries: block index + 1, 0 = empty
-    Block* blocks_ = nullptr;
-    u32 pages_ = 0, nblocks_ = 0, used_ = 0;
+    static constexpr u32 kAlign = 16;
+    u32* table_ = nullptr;  // kTableSize entries: pool offset / kAlign + 1, 0 = empty
+    u8* pool_ = nullptr;
+    u32 pages_ = 0, pool_bytes_ = 0, used_ = 0;  // used_: bytes
+    u8 own_signal_ = 0;
+    u8* signal_ = &own_signal_;
     Stats stats_;
 };
 

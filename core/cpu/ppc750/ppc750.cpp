@@ -35,6 +35,7 @@ void Ppc750::raise_exception(Exception type, u32 srr0, u32 srr1_cause)
     // PEM 6.4: SRR0 = address to resume at; SRR1 = cause bits + MSR bits
     // 16-23, 25-27, 30-31. New MSR: everything cleared except IP and ME,
     // LE = ILE. A machine check additionally clears ME.
+    exit_ = 1;
     s_.spr[spr::SRR0] = srr0;
     s_.spr[spr::SRR1] = (s_.msr & msr::kSrr1CopyMask) | srr1_cause;
     if (exception_hook_)
@@ -57,6 +58,7 @@ void Ppc750::machine_check()
     } else {
         // PEM 6.4.2: machine check with MSR[ME] = 0 -> checkstop.
         checkstop_ = true;
+        exit_ = 1;
         next_pc_ = s_.pc;
     }
 }
@@ -78,8 +80,10 @@ void Ppc750::advance_timebase(u32 ticks)
     const u32 new_dec = old_dec - ticks;
     s_.spr[spr::DEC] = new_dec;
     // PEM 2.3.14 / 750 UM: exception when DEC bit 0 changes from 0 to 1.
-    if (!(old_dec & 0x80000000u) && (new_dec & 0x80000000u))
+    if (!(old_dec & 0x80000000u) && (new_dec & 0x80000000u)) {
         dec_pending_ = true;
+        exit_ = 1;
+    }
 }
 
 void Ppc750::step()
@@ -120,6 +124,7 @@ void Ppc750::step()
     if (const u8* page = ram_at(pa & ~0xFFFu, 0x1000)) {
         fetch_host_ = page;
         fetch_page_ = s_.pc & ~0xFFFu;
+        fetch_pa_page_ = pa & ~0xFFFu;
         fetch_msr_ = fetch_msr;
         insn = load_be32(page + (pa & 0xFFFu));
     } else if (!mem_.fetch32(pa, insn)) {
@@ -135,7 +140,10 @@ void Ppc750::run(u64 count)
     break_run_ = false;
     ram_ = mem_.direct_window(ram_base_, ram_size_);
     fetch_host_ = nullptr;
-    if (cache_ && cache_->ready() && ram_) {
+    // The cache must cover the whole direct RAM window (it does when made
+    // for the machine's RAM).
+    if (cache_ && cache_->ready() && ram_ && ram_base_ == 0 &&
+        (static_cast<u64>(cache_->pages()) << BlockCache::kPageShift) >= ram_size_) {
         run_blocks(count);
     } else {
         for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i)

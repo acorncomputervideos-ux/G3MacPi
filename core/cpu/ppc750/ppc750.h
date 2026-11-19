@@ -59,7 +59,11 @@ public:
     }
 
     // Interrupt inputs.
-    void set_external_interrupt(bool asserted) { external_pending_ = asserted; }
+    void set_external_interrupt(bool asserted)
+    {
+        external_pending_ = asserted;
+        exit_ |= asserted ? 1 : 0;
+    }
     // Advances the time base and decrementer by 'ticks' time-base ticks.
     // A decrementer exception becomes pending when DEC bit 0 changes 0 -> 1.
     void advance_timebase(u32 ticks);
@@ -117,11 +121,20 @@ public:
     // set (and ready), run() replays decoded blocks instead of fetching and
     // decoding each instruction; the results are the same instruction for
     // instruction. nullptr: the plain interpreter.
-    void set_block_cache(BlockCache* cache) { cache_ = cache; }
+    void set_block_cache(BlockCache* cache)
+    {
+        cache_ = cache;
+        if (cache)
+            cache->set_signal(&exit_);
+    }
     BlockCache* block_cache() { return cache_; }
     // Ends the current run() after the instruction executing now (e.g. after a
     // decrementer write, so the next expiry is planned again).
-    void break_run() { break_run_ = true; }
+    void break_run()
+    {
+        break_run_ = true;
+        exit_ = 1;
+    }
 
     // Observer told of every exception taken (debugging tools); null = none.
     using ExceptionHook = void (*)(void* context, u32 vector, u32 srr0, u32 srr1);
@@ -308,7 +321,14 @@ private:
 
     BlockCache::Block* build_block(u32 pa, const u8* host_page);
     static bool ends_block(u32 insn);
+    static BlockOp::Fn op_for(u32 insn);
     static void op_generic(Ppc750& cpu, u32 insn) { cpu.execute(insn); }
+    friend struct BlockOps;  // the specialised operations (ppc750_blocks.cpp)
+    // Set by everything after which a block must not go on with its next
+    // operation: exceptions, a checkstop, break_run(), an interrupt input
+    // becoming pending, blocks being dropped. Cleared at each block start.
+    u8 exit_ = 0;
+    u32 fetch_pa_page_ = 0;  // physical page of fetch_host_
     void note_store(u32 pa, u32 len)
     {
         if (cache_)

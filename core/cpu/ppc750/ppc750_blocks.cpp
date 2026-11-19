@@ -10,6 +10,7 @@
 // written at any time is never run from a stale decode.
 
 #include "core/cpu/ppc750/ppc750.h"
+#include "core/common/bitops.h"
 
 namespace g3::ppc {
 
@@ -56,15 +57,216 @@ bool Ppc750::ends_block(u32 insn)
     }
 }
 
+// Specialised operations for the most common instructions: the same
+// semantics as execute() (which the tests compare them with), without its
+// decoding switches. Each one does what execute() does around the
+// instruction: next_pc_, the instruction count, and the PC afterwards.
+struct BlockOps {
+    static void begin(Ppc750& c)
+    {
+        c.next_pc_ = c.s_.pc + 4;
+        ++c.instr_count_;
+    }
+    static void end(Ppc750& c) { c.s_.pc = c.next_pc_; }
+    // Instructions that cannot raise an exception.
+    static void simple_end(Ppc750& c) { c.s_.pc += 4; }
+
+    static void addi(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        const u32 ra = field::ra(insn);
+        c.s_.gpr[field::rd(insn)] = (ra ? c.s_.gpr[ra] : 0) + field::simm(insn);
+        simple_end(c);
+    }
+    static void addis(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        const u32 ra = field::ra(insn);
+        c.s_.gpr[field::rd(insn)] = (ra ? c.s_.gpr[ra] : 0) + (field::simm(insn) << 16);
+        simple_end(c);
+    }
+    static void ori(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::ra(insn)] = c.s_.gpr[field::rd(insn)] | field::uimm(insn);
+        simple_end(c);
+    }
+    static void oris(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::ra(insn)] = c.s_.gpr[field::rd(insn)] | (field::uimm(insn) << 16);
+        simple_end(c);
+    }
+    static void andi_rc(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        const u32 r = c.s_.gpr[field::rd(insn)] & field::uimm(insn);
+        c.s_.gpr[field::ra(insn)] = r;
+        c.update_cr0(r);
+        simple_end(c);
+    }
+    static void rlwinm(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        const u32 r = rotl32(c.s_.gpr[field::rd(insn)], field::rb(insn)) & ppc_mask(field::mb(insn), field::me(insn));
+        c.s_.gpr[field::ra(insn)] = r;
+        if (field::rc(insn))
+            c.update_cr0(r);
+        simple_end(c);
+    }
+    static void cmpi(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.op_compare(field::crfd(insn), c.s_.gpr[field::ra(insn)], field::simm(insn), true);
+        simple_end(c);
+    }
+    static void cmpli(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.op_compare(field::crfd(insn), c.s_.gpr[field::ra(insn)], field::uimm(insn), false);
+        simple_end(c);
+    }
+    // or rA,rS,rB (mr when rS = rB), add, subf, and: no OE, no Rc.
+    static void or_(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::ra(insn)] = c.s_.gpr[field::rd(insn)] | c.s_.gpr[field::rb(insn)];
+        simple_end(c);
+    }
+    static void and_(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::ra(insn)] = c.s_.gpr[field::rd(insn)] & c.s_.gpr[field::rb(insn)];
+        simple_end(c);
+    }
+    static void add(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::rd(insn)] = c.s_.gpr[field::ra(insn)] + c.s_.gpr[field::rb(insn)];
+        simple_end(c);
+    }
+    static void subf(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::rd(insn)] = c.s_.gpr[field::rb(insn)] - c.s_.gpr[field::ra(insn)];
+        simple_end(c);
+    }
+    static void cmp(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.op_compare(field::crfd(insn), c.s_.gpr[field::ra(insn)], c.s_.gpr[field::rb(insn)], true);
+        simple_end(c);
+    }
+    static void cmpl(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.op_compare(field::crfd(insn), c.s_.gpr[field::ra(insn)], c.s_.gpr[field::rb(insn)], false);
+        simple_end(c);
+    }
+    static void mflr(Ppc750& c, u32 insn)
+    {
+        ++c.instr_count_;
+        c.s_.gpr[field::rd(insn)] = c.s_.lr();
+        simple_end(c);
+    }
+    // D-form loads and stores (may raise DSI, alignment or machine check).
+    static u32 ea(const Ppc750& c, u32 insn)
+    {
+        const u32 ra = field::ra(insn);
+        return (ra ? c.s_.gpr[ra] : 0) + field::simm(insn);
+    }
+    template <u32 Size, bool Update>
+    static void load(Ppc750& c, u32 insn)
+    {
+        begin(c);
+        const u32 a = ea(c, insn);
+        u32 v = 0;
+        if (c.mem_fast<Size, false>(a, v)) {
+            c.s_.gpr[field::rd(insn)] = v;
+            if (Update)
+                c.s_.gpr[field::ra(insn)] = a;
+        }
+        end(c);
+    }
+    static void lha(Ppc750& c, u32 insn)
+    {
+        begin(c);
+        u32 v = 0;
+        if (c.mem_fast<2, false>(ea(c, insn), v))
+            c.s_.gpr[field::rd(insn)] = static_cast<u32>(sign_extend16(v));
+        end(c);
+    }
+    template <u32 Size, bool Update>
+    static void store(Ppc750& c, u32 insn)
+    {
+        begin(c);
+        const u32 a = ea(c, insn);
+        u32 v = c.s_.gpr[field::rd(insn)];
+        if (c.mem_fast<Size, true>(a, v) && Update)
+            c.s_.gpr[field::ra(insn)] = a;
+        end(c);
+    }
+};
+
+BlockOp::Fn Ppc750::op_for(u32 insn)
+{
+    switch (field::opcd(insn)) {
+    case 10: return &BlockOps::cmpli;
+    case 11: return &BlockOps::cmpi;
+    case 14: return &BlockOps::addi;
+    case 15: return &BlockOps::addis;
+    case 21: return &BlockOps::rlwinm;
+    case 24: return &BlockOps::ori;
+    case 25: return &BlockOps::oris;
+    case 28: return &BlockOps::andi_rc;
+    case 32: return &BlockOps::load<4, false>;   // lwz
+    case 33: return &BlockOps::load<4, true>;    // lwzu
+    case 34: return &BlockOps::load<1, false>;   // lbz
+    case 35: return &BlockOps::load<1, true>;    // lbzu
+    case 36: return &BlockOps::store<4, false>;  // stw
+    case 37: return &BlockOps::store<4, true>;   // stwu
+    case 38: return &BlockOps::store<1, false>;  // stb
+    case 39: return &BlockOps::store<1, true>;   // stbu
+    case 40: return &BlockOps::load<2, false>;   // lhz
+    case 41: return &BlockOps::load<2, true>;    // lhzu
+    case 42: return &BlockOps::lha;              // lha
+    case 44: return &BlockOps::store<2, false>;  // sth
+    case 45: return &BlockOps::store<2, true>;   // sthu
+    case 31:
+        // Only the forms without OE and Rc (bit 21, bit 31), bit 0 clear.
+        if (insn & 0x00000401u)
+            return &Ppc750::op_generic;
+        switch (field::xo10(insn)) {
+        case 0:   return (insn & 0x00600000u) ? &Ppc750::op_generic : &BlockOps::cmp;   // L = 0, bit 9 = 0
+        case 32:  return (insn & 0x00600000u) ? &Ppc750::op_generic : &BlockOps::cmpl;
+        case 28:  return &BlockOps::and_;
+        case 40:  return &BlockOps::subf;
+        case 266: return &BlockOps::add;
+        case 444: return &BlockOps::or_;
+        case 339: return (((insn >> 16) & 31) | ((insn >> 6) & 0x3E0)) == spr::LR ? &BlockOps::mflr : &Ppc750::op_generic;
+        default:  return &Ppc750::op_generic;
+        }
+    default:
+        return &Ppc750::op_generic;
+    }
+}
+
 BlockCache::Block* Ppc750::build_block(u32 pa, const u8* host_page)
 {
-    BlockCache::Block* b = cache_->allocate(pa);
-    for (u32 off = pa & 0xFFFu; off < 0x1000u && b->count < BlockCache::kMaxOps; off += 4) {
-        const u32 insn = load_be32(host_page + off);
-        b->ops[b->count++] = BlockOp{&Ppc750::op_generic, insn};
-        if (ends_block(insn))
+    // Length first (up to a block-ending instruction, the page end or
+    // kMaxOps), then the block, exactly that long.
+    u32 n = 0;
+    for (u32 off = pa & 0xFFFu; off < 0x1000u && n < BlockCache::kMaxOps; off += 4) {
+        ++n;
+        if (ends_block(load_be32(host_page + off)))
             break;
     }
+    BlockCache::Block* b = cache_->allocate(pa, n);
+    for (u32 i = 0; i < n; ++i) {
+        const u32 insn = load_be32(host_page + (pa & 0xFFFu) + 4 * i);
+        b->ops[i] = BlockOp{op_for(insn), insn};
+    }
+    b->count = n;
     cache_->commit(b);
     return b;
 }
@@ -105,37 +307,26 @@ void Ppc750::run_blocks(u64 count)
             }
             fetch_host_ = page;
             fetch_page_ = s_.pc & ~0xFFFu;
+            fetch_pa_page_ = pa & ~0xFFFu;
             fetch_msr_ = fetch_msr;
         }
-        const u32 page_pa = static_cast<u32>(fetch_host_ - ram_) + ram_base_;
-        const u32 pa = page_pa | (s_.pc & 0xFFFu);
-        if ((pa >> BlockCache::kPageShift) >= cache_->pages()) {
-            execute(load_be32(fetch_host_ + (s_.pc & 0xFFFu)));  // RAM the cache does not cover
-            ++done;
-            continue;
-        }
+        const u32 pa = fetch_pa_page_ | (s_.pc & 0xFFFu);
         BlockCache::Block* b = cache_->find(pa);
         if (!b)
             b = build_block(pa, fetch_host_);
 
-        cache_->dirty = false;
-        const u32 entry_msr = s_.msr;
-        u32 expect = s_.pc;
+        // Run the operations until the block ends or something happens
+        // that step() would react to before the next instruction (exit_).
+        exit_ = 0;
         const u64 left = count - done;
         const u32 n = b->count < left ? b->count : static_cast<u32>(left);
-        u32 i = 0;
-        while (i < n) {
-            const BlockOp& op = b->ops[i++];
-            op.fn(*this, op.insn);
-            expect += 4;
-            // Leave the block when the next instruction is not its next
-            // operation, or when step() would now do something else.
-            if (s_.pc != expect || s_.msr != entry_msr || cache_->dirty || checkstop_ || break_run_)
-                break;
-            if ((s_.msr & msr::EE) && (external_pending_ || dec_pending_))
-                break;
-        }
-        done += i;
+        const BlockOp* op = b->ops;
+        const BlockOp* const stop = op + n;
+        do {
+            op->fn(*this, op->insn);
+            ++op;
+        } while (op != stop && !exit_);
+        done += static_cast<u64>(op - b->ops);
     }
 }
 

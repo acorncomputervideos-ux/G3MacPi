@@ -22,7 +22,7 @@ T* carve(u8*& p, u8* end, u32 count)
 
 bool BlockCache::init(void* arena, u32 bytes, u32 ram_size)
 {
-    blocks_ = nullptr;
+    pool_ = nullptr;
     pages_ = (ram_size + (1u << kPageShift) - 1) >> kPageShift;
     u8* p = static_cast<u8*>(arena);
     u8* end = p + bytes;
@@ -31,14 +31,14 @@ bool BlockCache::init(void* arena, u32 bytes, u32 ram_size)
     table_ = carve<u32>(p, end, kTableSize);
     if (!gen_ || !code_ || !table_)
         return false;
-    const uintptr_t a = (reinterpret_cast<uintptr_t>(p) + alignof(Block) - 1) & ~(uintptr_t)(alignof(Block) - 1);
+    const uintptr_t a = (reinterpret_cast<uintptr_t>(p) + kAlign - 1) & ~static_cast<uintptr_t>(kAlign - 1);
     u8* start = reinterpret_cast<u8*>(a);
     if (start >= end)
         return false;
-    nblocks_ = static_cast<u32>(static_cast<u64>(end - start) / sizeof(Block));
-    if (nblocks_ < 64)
+    pool_bytes_ = static_cast<u32>(end - start) & ~(kAlign - 1);
+    if (pool_bytes_ < 64 * block_bytes(kMaxOps))
         return false;
-    blocks_ = reinterpret_cast<Block*>(start);
+    pool_ = start;
     for (u32 i = 0; i < pages_; ++i) {
         gen_[i] = 0;
         code_[i] = 0;
@@ -55,15 +55,17 @@ void BlockCache::flush()
     for (u32 i = 0; i < pages_; ++i)
         code_[i] = 0;
     used_ = 0;
-    dirty = true;
+    *signal_ = 1;
     ++stats_.flushes;
 }
 
-BlockCache::Block* BlockCache::allocate(u32 pa)
+BlockCache::Block* BlockCache::allocate(u32 pa, u32 ops)
 {
-    if (used_ == nblocks_)
+    const u32 need = (block_bytes(ops) + kAlign - 1) & ~(kAlign - 1);
+    if (pool_bytes_ - used_ < need)
         flush();
-    Block* b = &blocks_[used_++];
+    Block* b = reinterpret_cast<Block*>(pool_ + used_);
+    used_ += need;
     b->pa = pa;
     b->count = 0;
     return b;
@@ -74,7 +76,8 @@ void BlockCache::commit(Block* b)
     const u32 page = b->pa >> kPageShift;
     b->gen = gen_[page];
     code_[page] = 1;
-    table_[(b->pa >> 2) & (kTableSize - 1)] = static_cast<u32>(b - blocks_) + 1;
+    table_[(b->pa >> 2) & (kTableSize - 1)] =
+        static_cast<u32>((reinterpret_cast<u8*>(b) - pool_) / kAlign) + 1;
     ++stats_.built;
 }
 
@@ -84,7 +87,7 @@ void BlockCache::invalidate_page(u32 page)
         return;
     ++gen_[page];
     code_[page] = 0;
-    dirty = true;
+    *signal_ = 1;
     ++stats_.invalidations;
 }
 

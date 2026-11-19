@@ -61,3 +61,6 @@ About 150 host instructions per guest instruction. It is spread over
 dispatch (`execute` and its per-opcode functions with their prologues),
 translation (about 20 per lookup) and load/store handling. Large further
 gains need a different execution model: a decoded-block cache or a JIT.
+
+The decoded-block cache (stage 1 of the JIT) is described in
+[block-cache.md](block-cache.md).

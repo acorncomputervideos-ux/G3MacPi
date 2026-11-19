@@ -258,11 +258,11 @@ TEST_CASE("cpu/blocks/differential_translated")
 
 TEST_CASE("cpu/blocks/differential_tiny_cache")
 {
-    // A cache with room for a few hundred blocks: it fills and is flushed
+    // A cache with the smallest pool init() accepts: it fills and is flushed
     // over and over while running.
     Totals t;
     int failed = 0;
-    const u32 arena = 4 * (kRam >> 12) * 5 + 4 * BlockCache::kTableSize + 300 * sizeof(BlockCache::Block);
+    const u32 arena = 4 * (kRam >> 12) * 5 + 4 * BlockCache::kTableSize + 64 * BlockCache::block_bytes(BlockCache::kMaxOps) + 64;
     for (int seed = 2001; seed <= 2100 && failed < 3; ++seed)
         failed += !differential_run(seed, seed & 1, arena, t);
     CHECK_EQ(failed, 0);
@@ -487,4 +487,51 @@ TEST_CASE("cpu/blocks/code_watch_same_as_interpreter")
     CHECK_EQ(logs[1].n, logs[0].n);
     CHECK(std::memcmp(logs[0].pcs, logs[1].pcs, sizeof logs[0].pcs) == 0);
     CHECK_EQ(c.cpu.state().pc, 0x5010u);
+}
+
+TEST_CASE("cpu/blocks/break_run_and_checkstop_inside_block")
+{
+    // break_run() from the time hook (as the machine does after a DEC
+    // write) ends run() right after that instruction; a machine check with
+    // MSR[ME] = 0 stops the CPU at once. Same as the interpreter.
+    const u32 prog[] = {addi(3, 3, 1), mftb(5, 268), addi(3, 3, 1), addi(3, 3, 1),
+                        lwz(6, 0, 7),  // r7 = 0x80000000: outside RAM, machine check
+                        addi(3, 3, 1), b(-24)};
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {});
+        for (u32 i = 0; i < 7; ++i)
+            store_be32(m->ram.data() + 0x4000 + 4 * i, prog[i]);
+        m->cpu.state().pc = 0x4000;
+        m->cpu.state().msr = 0;  // ME = 0
+        m->cpu.state().gpr[7] = 0x80000000u;
+        m->cpu.set_time_hook([](void* cpu) { static_cast<Ppc750*>(cpu)->break_run(); }, &m->cpu);
+        m->cpu.run(100);
+        CHECK_EQ(m->cpu.instructions_executed(), 2u);  // stopped after the mftb
+        m->cpu.run(100);
+        CHECK(m->cpu.checkstopped());
+    }
+    CHECK(same(a, c, "break/checkstop", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 3u);
+}
+
+TEST_CASE("cpu/blocks/external_interrupt_raised_inside_block")
+{
+    // A device raises the external interrupt during an instruction (here
+    // from the time hook, as an MMIO write would): it must be taken right
+    // after that instruction, as the interpreter does.
+    const u32 prog[] = {addi(3, 3, 1), mftb(5, 268), addi(3, 3, 1), addi(3, 3, 1), addi(3, 3, 1), b(-20)};
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        for (u32 i = 0; i < 6; ++i)
+            store_be32(m->ram.data() + 0x4000 + 4 * i, prog[i]);
+        place(*m, {{0x500, addi(7, 7, 1)}, {0x504, b(0)}});
+        m->cpu.state().pc = 0x4000;
+        m->cpu.state().msr = msr::ME | msr::EE;
+        m->cpu.set_time_hook([](void* cpu) { static_cast<Ppc750*>(cpu)->set_external_interrupt(true); }, &m->cpu);
+        m->cpu.run(40);
+    }
+    CHECK(same(a, c, "external", 0, 0));
+    CHECK_EQ(c.cpu.state().spr[spr::SRR0], 0x4008u);  // after the mftb
+    CHECK_EQ(c.cpu.state().gpr[3], 1u);
 }
