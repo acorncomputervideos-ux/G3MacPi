@@ -128,6 +128,17 @@ public:
             cache->set_signal(&exit_);
     }
     BlockCache* block_cache() { return cache_; }
+    // JIT stage 2 (docs/cpu/jit-a64.md): AArch64 code for each block, in
+    // `words` words of executable memory at `code`. `runner` executes a
+    // block's code (runner(code, cpu, context)); nullptr calls it directly,
+    // which only an AArch64 host can do. False (and no JIT) without a block
+    // cache, without room, or with no way to run the code.
+    using JitRunner = void (*)(void* code, void* cpu, void* context);
+    bool set_jit(u32* code, u32 words, JitRunner runner, void* context);
+    struct JitStats {
+        u64 compiled = 0, native_ops = 0, helper_ops = 0, resets = 0, runs = 0;
+    };
+    const JitStats& jit_stats() const { return jit_stats_; }
     // Ends the current run() after the instruction executing now (e.g. after a
     // decrementer write, so the next expiry is planned again).
     void break_run()
@@ -337,6 +348,17 @@ private:
 
     MemoryInterface& mem_;
     BlockCache* cache_ = nullptr;
+    // --- JIT (ppc750_jit.cpp)
+    bool jit_compile(BlockCache::Block* b);
+    void jit_run(BlockCache::Block* b);
+    u32* jit_code_ = nullptr;
+    u32 jit_words_ = 0, jit_used_ = 0;
+    u64 jit_epoch_ = 0;          // cache flush count the code buffer belongs to
+    bool jit_full_ = false;      // out of code space: flush everything at the next build
+    JitRunner jit_runner_ = nullptr;
+    void* jit_ctx_ = nullptr;
+    JitStats jit_stats_;
+    friend struct JitCompiler;
     // Direct RAM window, refreshed at the start of run().
     u8* ram_ = nullptr;
     u32 ram_base_ = 0, ram_size_ = 0;

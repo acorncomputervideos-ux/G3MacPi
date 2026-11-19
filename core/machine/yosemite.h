@@ -47,6 +47,13 @@ struct YosemiteConfig {
     // a few MB). None: the CPU interprets every instruction.
     u8* jit_memory = nullptr;
     u32 jit_size = 0;
+    // Executable memory for generated AArch64 code (docs/cpu/jit-a64.md;
+    // needs jit_memory too). Without a runner the code is called directly,
+    // which only works on an AArch64 host.
+    u32* jit_code = nullptr;
+    u32 jit_code_words = 0;
+    ppc::Ppc750::JitRunner jit_runner = nullptr;
+    void* jit_runner_context = nullptr;
 };
 
 class YosemiteMachine {
@@ -72,6 +79,7 @@ public:
     void run_for(u64 picoseconds) { loop_.run_for(picoseconds); }
 
     ppc::Ppc750& cpu() { return cpu_; }
+    bool jit_enabled() const { return jit_; }  // generated code in use
     u32 ram_size() const { return ram_size_; }
     u64 cpu_hz() const { return cpu_hz_; }
     u64 bus_hz() const { return bus_hz_; }
@@ -92,6 +100,7 @@ private:
     PhysicalBus bus_;
     ppc::Ppc750 cpu_;
     ppc::BlockCache blocks_;
+    bool jit_ = false;
     ExecutionLoop loop_;
     Grackle grackle_;
     PciToPciBridge bridge_;

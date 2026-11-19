@@ -17,6 +17,7 @@
 #include "core/mem/flat_memory.h"
 #include "tests/framework/g3test.h"
 #include "tests/unit/cpu/ppc_asm.h"
+#include "tools/a64sim/a64_sim.h"
 
 #include <cstdio>
 #include <cstring>
@@ -43,18 +44,36 @@ struct Rng {
     u32 below(u32 n) { return next() % n; }
 };
 
+// Every test runs twice: "cpu/blocks/..." with the block cache, and
+// "cpu/jit/..." with generated AArch64 code for the blocks as well (run on
+// the A64 simulator here; natively on an AArch64 host).
+bool g_jit = false;
+u32 g_jit_words = 1u << 20;
+
 struct Machine {
     std::vector<u8> ram = std::vector<u8>(kRam);
     FlatMemory mem{ram.data(), kRam};
     Ppc750 cpu{mem};
     std::vector<u8> arena;
     BlockCache cache;
+    std::vector<u32> code;
+    const void* range[2] = {};
     explicit Machine(u32 arena_bytes)
     {
         if (arena_bytes) {
             arena.resize(arena_bytes);
             REQUIRE(cache.init(arena.data(), arena_bytes, kRam));
             cpu.set_block_cache(&cache);
+            if (g_jit) {
+                code.resize(g_jit_words);
+                range[0] = code.data();
+                range[1] = code.data() + code.size();
+#if defined(__aarch64__)
+                REQUIRE(cpu.set_jit(code.data(), g_jit_words, nullptr, nullptr));
+#else
+                REQUIRE(cpu.set_jit(code.data(), g_jit_words, a64::simulate_jit_block, range));
+#endif
+            }
         }
     }
 };
@@ -182,6 +201,7 @@ bool same(Machine& a, Machine& b, const char* what, int run, u32 slice)
 
 struct Totals {
     u64 hits = 0, built = 0, invalidations = 0, flushes = 0, executed = 0;
+    u64 jit_runs = 0, jit_native = 0, jit_resets = 0;
 };
 
 // One random program on an interpreter and a block-cache CPU; false on
@@ -226,12 +246,31 @@ bool differential_run(int seed, bool translate, u32 arena_bytes, Totals& t)
     t.invalidations += st.invalidations;
     t.flushes += st.flushes;
     t.executed += blocks.cpu.instructions_executed();
+    t.jit_runs += blocks.cpu.jit_stats().runs;
+    t.jit_native += blocks.cpu.jit_stats().native_ops;
+    t.jit_resets += blocks.cpu.jit_stats().resets;
     return true;
 }
 
 } // namespace
 
-TEST_CASE("cpu/blocks/differential_real_mode")
+// Defines the test body once and registers it in both modes.
+#define BOTH(name)                                                                        \
+    static void name##_body();                                                            \
+    TEST_CASE("cpu/blocks/" #name)                                                        \
+    {                                                                                     \
+        g_jit = false;                                                                    \
+        name##_body();                                                                    \
+    }                                                                                     \
+    TEST_CASE("cpu/jit/" #name)                                                           \
+    {                                                                                     \
+        g_jit = true;                                                                     \
+        name##_body();                                                                    \
+        g_jit = false;                                                                    \
+    }                                                                                     \
+    static void name##_body()
+
+BOTH(differential_real_mode)
 {
     Totals t;
     int failed = 0;
@@ -244,9 +283,15 @@ TEST_CASE("cpu/blocks/differential_real_mode")
     // The test means something only if blocks were reused and code was rewritten.
     CHECK(t.hits > t.built);
     CHECK(t.invalidations > 100);
+    if (g_jit) {
+        std::printf("    jit: %llu block runs in generated code, %llu instructions compiled natively\n",
+                    static_cast<unsigned long long>(t.jit_runs), static_cast<unsigned long long>(t.jit_native));
+        CHECK(t.jit_runs > t.built);
+        CHECK(t.jit_native > 10000);
+    }
 }
 
-TEST_CASE("cpu/blocks/differential_translated")
+BOTH(differential_translated)
 {
     Totals t;
     int failed = 0;
@@ -256,7 +301,7 @@ TEST_CASE("cpu/blocks/differential_translated")
     CHECK(t.hits > t.built);
 }
 
-TEST_CASE("cpu/blocks/differential_tiny_cache")
+BOTH(differential_tiny_cache)
 {
     // A cache with the smallest pool init() accepts: it fills and is flushed
     // over and over while running.
@@ -269,7 +314,7 @@ TEST_CASE("cpu/blocks/differential_tiny_cache")
     CHECK(t.flushes > 100);
 }
 
-TEST_CASE("cpu/blocks/self_modifying_loop")
+BOTH(self_modifying_loop)
 {
     // A loop that rewrites the instruction it runs next: "addi r3,r3,1" is
     // replaced with "addi r3,r3,100" by the loop itself, in the same block.
@@ -298,7 +343,7 @@ TEST_CASE("cpu/blocks/self_modifying_loop")
     CHECK(m.cache.stats().invalidations >= 1);
 }
 
-TEST_CASE("cpu/blocks/dma_write_through_bus_observer")
+BOTH(dma_write_through_bus_observer)
 {
     // A block is built, then the code is changed behind the CPU's back
     // (as DMA would) and reported with note_write: the next run must use
@@ -317,7 +362,7 @@ TEST_CASE("cpu/blocks/dma_write_through_bus_observer")
     CHECK_EQ(m.cpu.state().gpr[3], 2u);
 }
 
-TEST_CASE("cpu/blocks/interrupt_mid_block")
+BOTH(interrupt_mid_block)
 {
     // The decrementer fires in the middle of a long block: the exception
     // must be taken at the same instruction as the interpreter's.
@@ -361,7 +406,7 @@ void run_both(const u32* prog, u32 words, u32 base, u32 count, u32 slice, Prep p
 }
 } // namespace
 
-TEST_CASE("cpu/blocks/interrupt_raised_inside_block")
+BOTH(interrupt_raised_inside_block)
 {
     // mftb calls the time hook, which advances the time base far enough
     // for the decrementer to fire: the interrupt becomes pending in the
@@ -400,7 +445,7 @@ void map_bats(Machine& m)
 }
 } // namespace
 
-TEST_CASE("cpu/blocks/page_crossing_and_reserved_stores_into_code")
+BOTH(page_crossing_and_reserved_stores_into_code)
 {
     // With data translation on, a word store that straddles a page edge is
     // done byte by byte, and stwcx. has its own write path: both rewrite
@@ -431,7 +476,7 @@ TEST_CASE("cpu/blocks/page_crossing_and_reserved_stores_into_code")
     CHECK_EQ(c.cpu.state().pc, 0x5038u);
 }
 
-TEST_CASE("cpu/blocks/block_ends_at_page_end")
+BOTH(block_ends_at_page_end)
 {
     // A subroutine that runs over a page edge, whose second page is then
     // rewritten: blocks stop at the page end, so the new code is seen.
@@ -454,7 +499,7 @@ TEST_CASE("cpu/blocks/block_ends_at_page_end")
     CHECK_EQ(c.cpu.state().pc, 0x5018u);
 }
 
-TEST_CASE("cpu/blocks/code_watch_same_as_interpreter")
+BOTH(code_watch_same_as_interpreter)
 {
     // The code watch reports page entries: the same ones, in the same
     // order, with or without the cache.
@@ -489,7 +534,7 @@ TEST_CASE("cpu/blocks/code_watch_same_as_interpreter")
     CHECK_EQ(c.cpu.state().pc, 0x5010u);
 }
 
-TEST_CASE("cpu/blocks/break_run_and_checkstop_inside_block")
+BOTH(break_run_and_checkstop_inside_block)
 {
     // break_run() from the time hook (as the machine does after a DEC
     // write) ends run() right after that instruction; a machine check with
@@ -515,7 +560,7 @@ TEST_CASE("cpu/blocks/break_run_and_checkstop_inside_block")
     CHECK_EQ(c.cpu.state().gpr[3], 3u);
 }
 
-TEST_CASE("cpu/blocks/external_interrupt_raised_inside_block")
+BOTH(external_interrupt_raised_inside_block)
 {
     // A device raises the external interrupt during an instruction (here
     // from the time hook, as an MMIO write would): it must be taken right
@@ -534,4 +579,20 @@ TEST_CASE("cpu/blocks/external_interrupt_raised_inside_block")
     CHECK(same(a, c, "external", 0, 0));
     CHECK_EQ(c.cpu.state().spr[spr::SRR0], 0x4008u);  // after the mftb
     CHECK_EQ(c.cpu.state().gpr[3], 1u);
+}
+
+BOTH(code_buffer_runs_out)
+{
+    // A code buffer of the smallest size set_jit accepts: it fills again
+    // and again; each time everything is flushed and compiled afresh.
+    const u32 saved = g_jit_words;
+    g_jit_words = 1024;
+    Totals t;
+    int failed = 0;
+    for (int seed = 3001; seed <= 3040 && failed < 3; ++seed)
+        failed += !differential_run(seed, seed & 1, 4u << 20, t);
+    g_jit_words = saved;
+    CHECK_EQ(failed, 0);
+    if (g_jit)
+        CHECK(t.jit_resets > 20);
 }

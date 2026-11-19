@@ -40,8 +40,11 @@ target_compile_options(g3platform_common PRIVATE ${G3_COMMON_FLAGS})
 
 # --- Host-side build tools for guest code (PEF writer) ---------------------------
 add_library(g3pef STATIC tools/pef/pef_writer.cpp tools/pef/elf2pef.cpp)
+# Simulator for the JIT's AArch64 code on other hosts (docs/cpu/jit-a64.md).
+add_library(g3a64sim STATIC tools/a64sim/a64_sim.cpp)
+target_include_directories(g3a64sim PUBLIC ${CMAKE_SOURCE_DIR})
 add_executable(g3_rom_probe tools/probe/rom_probe.cpp)
-target_link_libraries(g3_rom_probe PRIVATE g3core)
+target_link_libraries(g3_rom_probe PRIVATE g3core g3a64sim)
 target_compile_options(g3_rom_probe PRIVATE ${G3_COMMON_FLAGS})
 add_executable(g3_hfs tools/hfs/hfs_tool.cpp)
 target_link_libraries(g3_hfs PRIVATE g3core)
@@ -65,7 +68,7 @@ add_executable(g3_unit_tests
   tests/framework/g3test_main.cpp
   ${G3_TEST_SOURCES})
 find_package(Threads REQUIRED)
-target_link_libraries(g3_unit_tests PRIVATE g3core g3platform_common g3pef Threads::Threads)
+target_link_libraries(g3_unit_tests PRIVATE g3core g3platform_common g3pef g3a64sim Threads::Threads)
 target_compile_definitions(g3_unit_tests PRIVATE G3_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # The FPU oracle test changes the host rounding mode at run time.
 set_source_files_properties(tests/unit/fpu/test_ieee754_oracle.cpp PROPERTIES

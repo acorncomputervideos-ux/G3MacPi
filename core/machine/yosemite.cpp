@@ -19,6 +19,8 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
         bus_.set_write_observer([](void* cache, u32 pa, u32 len) {
             static_cast<ppc::BlockCache*>(cache)->note_write(pa, len);
         }, &blocks_);
+        if (c.jit_code)
+            jit_ = cpu_.set_jit(c.jit_code, c.jit_code_words, c.jit_runner, c.jit_runner_context);
     }
     cpu_hz_ = c.cpu_hz;
     bus_hz_ = c.bus_hz;

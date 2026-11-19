@@ -253,6 +253,12 @@ BlockOp::Fn Ppc750::op_for(u32 insn)
 
 BlockCache::Block* Ppc750::build_block(u32 pa, const u8* host_page)
 {
+    if (jit_full_) {
+        // Out of code space: start again with an empty cache (the code
+        // buffer follows the cache's flushes, see jit_compile).
+        jit_full_ = false;
+        cache_->flush();
+    }
     // Length first (up to a block-ending instruction, the page end or
     // kMaxOps), then the block, exactly that long.
     u32 n = 0;
@@ -268,6 +274,8 @@ BlockCache::Block* Ppc750::build_block(u32 pa, const u8* host_page)
     }
     b->count = n;
     cache_->commit(b);
+    if (jit_code_ && !jit_compile(b))
+        jit_full_ = true;
     return b;
 }
 
@@ -319,6 +327,14 @@ void Ppc750::run_blocks(u64 count)
         // that step() would react to before the next instruction (exit_).
         exit_ = 0;
         const u64 left = count - done;
+        if (b->code && b->count <= left) {
+            // Generated code: the same operations; it keeps the
+            // instruction count, so what ran is the difference.
+            const u64 before = instr_count_;
+            jit_run(b);
+            done += instr_count_ - before;
+            continue;
+        }
         const u32 n = b->count < left ? b->count : static_cast<u32>(left);
         const BlockOp* op = b->ops;
         const BlockOp* const stop = op + n;

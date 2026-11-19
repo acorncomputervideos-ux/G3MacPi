@@ -9,6 +9,7 @@
 //
 //   g3_rom_probe "Mac OS ROM" [milliseconds-of-guest-time] ["forth before init-program"]
 
+#include "tools/a64sim/a64_sim.h"
 #include "core/cpu/ppc750/disasm.h"
 #include "core/machine/bw_firmware.h"
 #include "core/machine/bw_nvram.h"
@@ -90,10 +91,26 @@ int main(int argc, char** argv)
         cfg.jit_memory = jit.data();
         cfg.jit_size = static_cast<u32>(jit.size());
     }
+    // G3_JITCODE=MB: generated AArch64 code too (with G3_JIT). On other
+    // hosts it runs on the A64 simulator (slow; for checking the JIT).
+    static std::vector<u32> jit_code;
+    static const void* jit_range[2];
+    if (const char* jc = std::getenv("G3_JITCODE"); jc && !jit.empty()) {
+        jit_code.resize(static_cast<size_t>(std::strtoul(jc, nullptr, 10)) << 18);  // MB in words
+        cfg.jit_code = jit_code.data();
+        cfg.jit_code_words = static_cast<u32>(jit_code.size());
+        jit_range[0] = jit_code.data();
+        jit_range[1] = jit_code.data() + jit_code.size();
+#if !defined(__aarch64__)
+        cfg.jit_runner = a64::simulate_jit_block;
+        cfg.jit_runner_context = jit_range;
+#endif
+    }
     YosemiteMachine m(cfg);
     if (!jit.empty())
-        std::printf("[probe] block cache: %s, %u blocks\n", m.cpu().block_cache() ? "on" : "FAILED",
-                    m.cpu().block_cache() ? m.cpu().block_cache()->capacity() : 0);
+        std::printf("[probe] block cache: %s, %u blocks; generated code: %s\n", m.cpu().block_cache() ? "on" : "FAILED",
+                    m.cpu().block_cache() ? m.cpu().block_cache()->capacity() : 0,
+                    m.jit_enabled() ? "on" : (jit_code.empty() ? "off" : "FAILED"));
     BwFirmware::Config fc;
     fc.width = mc.width;
     fc.height = mc.height;
@@ -495,6 +512,12 @@ int main(int argc, char** argv)
         std::printf("[probe] blocks: %llu built, %llu hits, %llu flushes, %llu page invalidations\n",
                     static_cast<unsigned long long>(st.built), static_cast<unsigned long long>(st.hits),
                     static_cast<unsigned long long>(st.flushes), static_cast<unsigned long long>(st.invalidations));
+        const auto& js = m.cpu().jit_stats();
+        if (m.jit_enabled())
+            std::printf("[probe] jit: %llu compiled, %llu runs, %llu native / %llu handler operations, %llu resets\n",
+                        static_cast<unsigned long long>(js.compiled), static_cast<unsigned long long>(js.runs),
+                        static_cast<unsigned long long>(js.native_ops), static_cast<unsigned long long>(js.helper_ops),
+                        static_cast<unsigned long long>(js.resets));
     }
     // Interrupt controller state at the end.
     std::printf("[pic] enabled=%016llX output=%d\n",

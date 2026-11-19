@@ -68,6 +68,7 @@ BlockCache::Block* BlockCache::allocate(u32 pa, u32 ops)
     used_ += need;
     b->pa = pa;
     b->count = 0;
+    b->code = 0;
     return b;
 }
 

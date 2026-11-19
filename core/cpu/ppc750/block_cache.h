@@ -45,7 +45,7 @@ public:
         u32 pa;     // physical address of the first instruction
         u32 gen;    // the page generation it was built under
         u32 count;  // operations
-        u32 pad;
+        u32 code;   // generated code: word offset in the JIT buffer + 1; 0 = none
         BlockOp ops[1];  // really `count`
     };
     static constexpr u32 block_bytes(u32 ops)
