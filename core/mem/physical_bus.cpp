@@ -184,4 +184,17 @@ bool PhysicalBus::write16(u32 a, u16 v)
 
 bool PhysicalBus::write32(u32 a, u32 v) { return access(a, 4, true, v); }
 
+u8* PhysicalBus::direct_window(u32& base, u32& size)
+{
+    for (u32 i = 0; i < count_; ++i) {
+        const Region& r = regions_[i];
+        if (r.kind == Kind::Ram && r.base == 0) {
+            base = r.base;
+            size = r.size;
+            return r.data;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace g3

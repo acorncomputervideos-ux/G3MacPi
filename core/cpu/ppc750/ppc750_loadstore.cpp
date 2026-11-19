@@ -119,6 +119,16 @@ bool Ppc750::mem_access(u32 ea, u32 size, bool write, u32& value)
     u32 pa;
     if (!translate(ea, acc, pa))
         return false;
+    if (u8* p = ram_at(pa, size)) {  // plain RAM: no bus dispatch
+        if (write) {
+            if (size == 4) store_be32(p, value);
+            else if (size == 2) store_be16(p, static_cast<u16>(value));
+            else *p = static_cast<u8>(value);
+        } else {
+            value = size == 4 ? load_be32(p) : size == 2 ? load_be16(p) : *p;
+        }
+        return true;
+    }
     bool ok;
     if (write) {
         ok = size == 4 ? mem_.write32(pa, value)

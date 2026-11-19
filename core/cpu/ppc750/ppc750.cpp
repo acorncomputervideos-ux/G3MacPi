@@ -5,6 +5,8 @@
 
 #include "core/cpu/ppc750/ppc750.h"
 
+#include "core/common/endian.h"
+
 namespace g3::ppc {
 
 Ppc750::Ppc750(MemoryInterface& memory, u32 pvr) : mem_(memory), pvr_(pvr)
@@ -101,12 +103,24 @@ void Ppc750::step()
         }
     }
 
-    u32 pa, insn;
+    u32 insn;
+    const u32 fetch_msr = s_.msr & (msr::IR | msr::PR);
+    if (fetch_host_ && (s_.pc & ~0xFFFu) == fetch_page_ && fetch_msr == fetch_msr_) {
+        insn = load_be32(fetch_host_ + (s_.pc & 0xFFFu));  // same page as before
+        execute(insn);
+        return;
+    }
+    u32 pa;
     if (!translate(s_.pc, Access::Fetch, pa)) {  // raises ISI
         s_.pc = next_pc_;
         return;
     }
-    if (!mem_.fetch32(pa, insn)) {
+    if (const u8* page = ram_at(pa & ~0xFFFu, 0x1000)) {
+        fetch_host_ = page;
+        fetch_page_ = s_.pc & ~0xFFFu;
+        fetch_msr_ = fetch_msr;
+        insn = load_be32(page + (pa & 0xFFFu));
+    } else if (!mem_.fetch32(pa, insn)) {
         machine_check();
         s_.pc = next_pc_;
         return;
@@ -117,6 +131,8 @@ void Ppc750::step()
 void Ppc750::run(u64 count)
 {
     break_run_ = false;
+    ram_ = mem_.direct_window(ram_base_, ram_size_);
+    fetch_host_ = nullptr;
     for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i)
         step();
     break_run_ = false;

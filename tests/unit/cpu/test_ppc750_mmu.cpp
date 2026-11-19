@@ -41,7 +41,7 @@ struct MmuMachine {
     {
         w32(pa, insn);
         s().pc = pc;
-        cpu.step();
+        cpu.run(1);  // run(): the direct RAM paths are in use, as in the machine
     }
 };
 
@@ -409,4 +409,62 @@ TEST_CASE("cpu/mmu/tlb_user_supervisor_contexts_are_separate")
     m.run_at(0x1004, 0x1004, lwz(4, 0, 3));  // user: must not hit that entry
     CHECK_EQ(m.s().pc, 0x300u);
     CHECK_EQ(m.s().spr[spr::DSISR], dsisr::PROTECTION);
+}
+
+// --- fetch-page cache (instructions fetched straight from host RAM) --------
+
+TEST_CASE("cpu/mmu/fetch_cache_follows_ibat_change")
+{
+    // Several instructions in ONE run() call: the IBAT is rewritten by the
+    // guest, and the next fetch must use the new mapping, not the cached page.
+    MmuMachine m;
+    m.s().spr[spr::IBAT0U] = 0x10000000u | mmu::BATU_VS;     // EA 0x10000000, 128 KB
+    m.s().spr[spr::IBAT0U + 1] = 0x00040000u | 2;            // -> PA 0x40000
+    m.s().msr = msr::IR;
+    m.s().gpr[5] = 0x00060000u | 2;                          // new mapping -> PA 0x60000
+    m.w32(0x40000, li(7, 1));
+    m.w32(0x40004, mtspr(spr::IBAT0U + 1, 5));
+    m.w32(0x40008, isync());
+    m.w32(0x4000C, li(7, 2));                                // old page: must not run
+    m.w32(0x60008, isync());     // the fetch right after mtspr already uses the new page
+    m.w32(0x6000C, li(7, 3));                                // new page
+    m.s().pc = 0x10000000u;
+    m.cpu.run(4);
+    CHECK_EQ(m.s().gpr[7], 3u);
+    CHECK_EQ(m.s().pc, 0x10000010u);
+}
+
+TEST_CASE("cpu/mmu/fetch_cache_follows_msr_ir")
+{
+    // Real-mode code turns instruction translation on: the following fetch
+    // goes through the IBAT even though the page number is unchanged.
+    MmuMachine m;
+    m.s().spr[spr::IBAT0U] = 0x00000000u | mmu::BATU_VS;     // EA 0, 128 KB
+    m.s().spr[spr::IBAT0U + 1] = 0x00040000u | 2;            // -> PA 0x40000
+    m.s().msr = 0;
+    m.s().gpr[5] = msr::IR;
+    m.w32(0x1000, li(7, 1));
+    m.w32(0x1004, mtmsr(5));
+    m.w32(0x1008, li(7, 2));                                 // real-mode page: must not run
+    m.w32(0x41008, li(7, 3));                                // translated page
+    m.s().pc = 0x1000;
+    m.cpu.run(3);
+    CHECK_EQ(m.s().gpr[7], 3u);
+}
+
+TEST_CASE("cpu/mmu/fetch_sees_stores_to_its_own_page")
+{
+    // An interpreter has no stale instruction cache: a store to the next
+    // instruction (after icbi/isync, as the architecture requires) runs.
+    MmuMachine m;
+    m.s().msr = 0;
+    m.s().gpr[3] = 0x100C;
+    m.s().gpr[4] = li(7, 9);
+    m.w32(0x1000, stw(4, 0, 3));
+    m.w32(0x1004, icbi(0, 3));
+    m.w32(0x1008, isync());
+    m.w32(0x100C, li(7, 1));
+    m.s().pc = 0x1000;
+    m.cpu.run(4);
+    CHECK_EQ(m.s().gpr[7], 9u);
 }

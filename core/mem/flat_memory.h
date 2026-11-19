@@ -57,6 +57,13 @@ public:
         return true;
     }
 
+    u8* direct_window(u32& base, u32& size) override
+    {
+        base = base_;
+        size = size_;
+        return data_;
+    }
+
     u8* data() { return data_; }
     u32 size() const { return size_; }
     u32 base() const { return base_; }

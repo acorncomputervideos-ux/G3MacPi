@@ -221,6 +221,7 @@ bool Ppc750::probe_translate(u32 ea, bool write, u32& pa)
 
 void Ppc750::flush_tlb()
 {
+    fetch_host_ = nullptr;
     for (u32 i = 0; i < kTlbSize; ++i) {
         itlb_[i].tag = 0;
         dtlb_[i].tag = 0;

@@ -93,6 +93,8 @@ constexpr u32 sc() { return (17u << 26) | 2u; }
 constexpr u32 rfi() { return X(19, 0, 0, 0, 50); }
 constexpr u32 mfmsr(u32 rd) { return X(31, rd, 0, 0, 83); }
 constexpr u32 mtmsr(u32 rs) { return X(31, rs, 0, 0, 146); }
+constexpr u32 isync() { return X(19, 0, 0, 0, 150); }
+constexpr u32 icbi(u32 ra, u32 rb) { return X(31, 0, ra, rb, 982); }
 constexpr u32 mfspr(u32 rd, u32 spr) { return (31u << 26) | (rd << 21) | (spr_field(spr) << 11) | (339u << 1); }
 constexpr u32 mtspr(u32 spr, u32 rs) { return (31u << 26) | (rs << 21) | (spr_field(spr) << 11) | (467u << 1); }
 constexpr u32 mftb(u32 rd, u32 tbr) { return (31u << 26) | (rd << 21) | (spr_field(tbr) << 11) | (371u << 1); }

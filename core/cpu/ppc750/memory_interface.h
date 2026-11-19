@@ -24,6 +24,12 @@ public:
     virtual bool write16(u32 addr, u16 value) = 0;
     virtual bool write32(u32 addr, u32 value) = 0;
     virtual bool fetch32(u32 addr, u32& insn) { return read32(addr, insn); }
+    // Optional fast path: a block of plain RAM (no side effects on access,
+    // guest big-endian byte order) that the CPU may read and write directly
+    // at physical [base, base + size). nullptr if there is none. The CPU asks
+    // again at the start of every run() call, so the mapping must not change
+    // while run() executes.
+    virtual u8* direct_window(u32& base, u32& size) { (void)base; (void)size; return nullptr; }
 
 protected:
     ~MemoryInterface() = default;

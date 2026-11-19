@@ -67,6 +67,8 @@ public:
     bool write8(u32 addr, u8 value) override;
     bool write16(u32 addr, u16 value) override;
     bool write32(u32 addr, u32 value) override;
+    // The RAM region at physical address 0 (main memory), if mapped.
+    u8* direct_window(u32& base, u32& size) override;
 
     // Diagnostics.
     u64 unmapped_accesses() const { return unmapped_count_; }

@@ -199,7 +199,25 @@ private:
             pa = ea;
             return true;
         }
+        // Soft-TLB hit, inline (the common case); everything else goes to
+        // translate_enabled, which repeats the lookup.
+        if (tlb_enabled_) {
+            const u32 page = ea >> 12;
+            const u32 tag = kTlbValid | (page << 1) | ((s_.msr & msr::PR) ? 1u : 0u);
+            const TlbEntry& e = (access == Access::Fetch ? itlb_ : dtlb_)[page & (kTlbSize - 1)];
+            if (e.tag == tag && (access != Access::Write || (e.writable && e.changed))) {
+                pa = e.pa_page | (ea & 0xFFFu);
+                return true;
+            }
+        }
         return translate_enabled(ea, access, pa);
+    }
+    // Host pointer to [pa, pa + len) if it lies in the bus's direct RAM
+    // window (MemoryInterface::direct_window), else nullptr.
+    u8* ram_at(u32 pa, u32 len) const
+    {
+        const u32 off = pa - ram_base_;
+        return (ram_ && off < ram_size_ && ram_size_ - off >= len) ? ram_ + off : nullptr;
     }
     bool translate_enabled(u32 ea, Access access, u32& pa);
     // Uncached translation. On success also reports whether the page/block
@@ -235,6 +253,14 @@ private:
     void op_sc();
 
     MemoryInterface& mem_;
+    // Direct RAM window, refreshed at the start of run().
+    u8* ram_ = nullptr;
+    u32 ram_base_ = 0, ram_size_ = 0;
+    // Fetch-page cache: host pointer to the RAM page holding the current
+    // instruction stream, valid for fetch_page_ (effective) under
+    // fetch_msr_ (MSR[IR|PR]). Dropped by flush_tlb() and at run() start.
+    const u8* fetch_host_ = nullptr;
+    u32 fetch_page_ = 0, fetch_msr_ = 0;
     CpuState s_;
     u32 pvr_;
     u32 next_pc_ = 0;        // set by execute(); exceptions/branches overwrite
