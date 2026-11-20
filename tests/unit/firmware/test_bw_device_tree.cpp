@@ -391,3 +391,14 @@ TEST_CASE("firmware/bw-tree/usb_placeholder_and_cuda_compatible")
     REQUIRE(t.get_property(b.n.cuda, "compatible", p, len));
     CHECK(std::strcmp(reinterpret_cast<const char*>(p), "cuda") == 0);
 }
+
+TEST_CASE("firmware/bw-tree/serial_channels_have_slot_names")
+{
+    Built b;
+    REQUIRE(b.ok);
+    const DeviceTree& t = *b.t;
+    // As OpenBIOS: slot-names = 0 on the channels (the Mac OS ROM loader's
+    // "slot-name detected"; without it Mac OS 9.2.1 started LocalTalk).
+    CHECK_EQ(cell_or(t, b.n.escc_a, "slot-names", 0xFFFFFFFFu), 0u);
+    CHECK_EQ(cell_or(t, b.n.escc_b, "slot-names", 0xFFFFFFFFu), 0u);
+}

@@ -526,3 +526,33 @@ TEST_CASE("cpu/ppc750/decrementer_write_edge")
     n.cpu.step();
     CHECK_EQ(n.s().pc, kCode + 12u);
 }
+
+TEST_CASE("cpu/ppc750/thermal_assist_unit")
+{
+    // MPC750 UM ch. 10: THRM3[E] enables the unit; a THRMn with V set reads
+    // back TIV (valid) and TIN = temperature above threshold (TID = 0) or
+    // below it (TID = 1). The emulated junction temperature is fixed.
+    const u32 t = Ppc750::kJunctionCelsius;
+    Machine m;
+    m.load(kCode, {mtspr(spr::THRM3, 3), mtspr(spr::THRM1, 4), mfspr(5, spr::THRM1),
+                   mtspr(spr::THRM1, 6), mfspr(7, spr::THRM1), mtspr(spr::THRM2, 8), mfspr(9, spr::THRM2),
+                   mtspr(spr::THRM2, 10), mfspr(11, spr::THRM2)});
+    m.s().gpr[3] = 1;                                 // THRM3[E]
+    m.s().gpr[4] = ((t + 10) << 23) | 1;              // threshold above: not crossed
+    m.s().gpr[6] = ((t - 10) << 23) | 1;              // threshold below: crossed
+    m.s().gpr[8] = ((t + 10) << 23) | 4 | 1;          // TID: below threshold: crossed
+    m.s().gpr[10] = ((t + 10) << 23);                 // V clear: nothing reported
+    for (int i = 0; i < 9; ++i)
+        m.cpu.step();
+    CHECK_EQ(m.s().gpr[5], m.s().gpr[4] | 0x40000000u);
+    CHECK_EQ(m.s().gpr[7], m.s().gpr[6] | 0xC0000000u);
+    CHECK_EQ(m.s().gpr[9], m.s().gpr[8] | 0xC0000000u);
+    CHECK_EQ(m.s().gpr[11], m.s().gpr[10]);
+    // With the unit disabled, nothing is reported either.
+    Machine off;
+    off.load(kCode, {mtspr(spr::THRM1, 4), mfspr(5, spr::THRM1)});
+    off.s().gpr[4] = ((t - 10) << 23) | 1;
+    off.cpu.step();
+    off.cpu.step();
+    CHECK_EQ(off.s().gpr[5], off.s().gpr[4]);
+}

@@ -28,6 +28,8 @@ namespace g3::ppc {
 
 class Ppc750 {
 public:
+    // The junction temperature the thermal assist unit reports (our choice).
+    static constexpr u32 kJunctionCelsius = 40;
     explicit Ppc750(MemoryInterface& memory, u32 pvr = kPvrMpc750Placeholder);
 
     // Hard reset (750 UM 2.1.4): MSR = IP, PC = 0xFFF00100, other state 0.
@@ -332,6 +334,7 @@ private:
 
     // --- system (ppc750_system.cpp)
     void op_mfspr(u32 insn);
+    u32 thermal_read(u32 thrm) const;  // THRM1/THRM2 as read (thermal assist unit)
     void op_mtspr(u32 insn);
     void op_mftb(u32 insn);
     static bool spr_implemented(u32 n);

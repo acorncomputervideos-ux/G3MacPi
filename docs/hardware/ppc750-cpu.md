@@ -18,6 +18,7 @@ manuals leave undefined follow the hardware-derived vectors in
 | lwarx/stwcx. (32-byte reservation granule) | **Done** | unit tests |
 | dcbz (32-byte block); other cache ops are no-ops | **Done** | unit tests |
 | SPR access, privilege checks, unimplemented SPR -> illegal | **Done** | unit tests |
+| Thermal assist unit (THRM1-3): with THRM3[E] and THRMn[V], reads report TIV and TIN against a fixed 40 °C junction temperature (MPC750 UM ch. 10; our temperature); no thermal interrupts. Mac OS 9.2.1 scans thresholds and waits for TIV | **Done** | unit test |
 | Time base, decrementer (exception on DEC bit 0: 0 -> 1, by counting down or by an mtspr write: edge-triggered, as QEMU models the 750 family; Mac OS's nanokernel relies on the write case) | **Done** | unit tests |
 | Exceptions: program (illegal/privileged/trap), sc, FP unavailable, alignment (lwarx/stwcx./lmw/stmw), machine check / checkstop, external, decrementer; rfi | **Done** | unit tests |
 | Floating point (Milestone 2b): all 750 FP arithmetic, fused multiply-add family, compares, frsp, fctiw[z], moves, fsel, fres, frsqrte, FPSCR instructions, FP loads/stores, FP-unavailable and FP-enabled exceptions | **Done** | all 2054 FP vectors pass; 18 unit tests; IEEE core checked against host FPU |

@@ -81,9 +81,27 @@ void Ppc750::op_mfspr(u32 insn)
     case spr::UMMCR1: v = s_.spr[spr::MMCR1]; break;
     case spr::UPMC3:  v = s_.spr[spr::PMC3]; break;
     case spr::UPMC4:  v = s_.spr[spr::PMC4]; break;
+    case spr::THRM1:
+    case spr::THRM2:  v = thermal_read(s_.spr[n]); s_.spr[n] = v; break;
     default:          v = s_.spr[n]; break;
     }
     s_.gpr[field::rd(insn)] = v;
+}
+
+// Thermal assist unit (MPC750 UM ch. 10): with THRM3[E] set, a THRMn
+// with V set reports its comparison as valid (TIV) and TIN = 1 when the
+// junction temperature is above the threshold (TID = 0) or below it
+// (TID = 1). The comparison is ready at once and the temperature is a
+// fixed kJunctionCelsius (our choice; no thermal interrupts). Mac OS 9.2.1
+// scans thresholds downward and waits for TIV on each one.
+u32 Ppc750::thermal_read(u32 thrm) const
+{
+    constexpr u32 TIN = 0x80000000u, TIV = 0x40000000u, TID = 0x4u, V = 0x1u, E = 0x1u;
+    if (!(s_.spr[spr::THRM3] & E) || !(thrm & V))
+        return thrm;
+    const u32 threshold = (thrm >> 23) & 0x7F;
+    const bool crossed = (thrm & TID) ? kJunctionCelsius < threshold : kJunctionCelsius > threshold;
+    return (thrm & ~TIN) | TIV | (crossed ? TIN : 0);
 }
 
 void Ppc750::op_mtspr(u32 insn)

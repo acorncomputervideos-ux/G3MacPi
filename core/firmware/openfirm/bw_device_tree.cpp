@@ -351,8 +351,10 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_int(legacy, "#size-cells", 1);
         const u32 la_reg[2] = {base + 2, 1}, lb_reg[2] = {base, 1};
         const u32 irq_a[1] = {Paddington::kEsccIrq[0]}, irq_b[1] = {Paddington::kEsccIrq[1]};
-        t.set_string(cell(t, legacy, n.pic, "ch-a", "serial", la_reg, 2, irq_a, 1), "compatible", "chrp,es2");
-        t.set_string(cell(t, legacy, n.pic, "ch-b", "serial", lb_reg, 2, irq_b, 1), "compatible", "chrp,es3");
+        const Phandle la = cell(t, legacy, n.pic, "ch-a", "serial", la_reg, 2, irq_a, 1);
+        const Phandle lb = cell(t, legacy, n.pic, "ch-b", "serial", lb_reg, 2, irq_b, 1);
+        t.set_string(la, "compatible", "chrp,es2");
+        t.set_string(lb, "compatible", "chrp,es3");
         const u32 escc_reg[2] = {base + 0x1000, 0x1000};
         n.escc = t.add_node(n.macio, "escc", "13000");
         t.set_string(n.escc, "device_type", "escc");
@@ -364,6 +366,16 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         n.escc_b = cell(t, n.escc, n.pic, "ch-b", "serial", b_reg, 2, irq_b, 1);
         t.set_string(n.escc_a, "compatible", "chrp,es4");
         t.set_string(n.escc_b, "compatible", "chrp,es5");
+        // slot-names (a count of 0: no named external connector), on every
+        // channel, as OpenBIOS gives them. The Mac OS ROM loader sets
+        // extValid1 bits 23/24 when ch-a/ch-b have the property ("slot-name
+        // detected"). Without it Mac OS 9.2.1 started LocalTalk (SDLC) on
+        // the SCC and waited for ever for the frame to go out; a real B&W
+        // has no external serial port. To verify against a B&W tree.
+        // docs/firmware/bw-device-tree.md.
+        const Phandle channels[4] = {la, lb, n.escc_a, n.escc_b};
+        for (const Phandle ch : channels)
+            t.set_int(ch, "slot-names", 0);
     }
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
