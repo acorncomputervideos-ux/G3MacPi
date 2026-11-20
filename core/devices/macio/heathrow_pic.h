@@ -53,6 +53,13 @@ public:
     u64 enabled_mask() const { return enable_; }
     bool mode_68k() const { return (enable_ & kModeBit) != 0; }
     static constexpr u64 kModeBit = 1ull << 31;  // in the IRQ 0-31 enable register
+    // DMA interrupt sources (IRQs 0-10, DBDMA channels): a DMA channel only
+    // raises its line; software lowers it by writing the source's bit to the
+    // IRQ 0-31 ack register (DingusPPC MacIoTwo/GrandCentral clear_dma_int;
+    // to verify). Mac OS's nanokernel acks with bit 31 and then dispatches
+    // from the level register, so a DMA interrupt that dropped by itself
+    // was never seen. docs/hardware/heathrow-pic.md.
+    static constexpr u64 kDmaSources = 0x7FFull;
 
     // MmioDevice
     u32 mmio_read(u32 offset, u32 size) override;

@@ -31,7 +31,7 @@ BlockDevice (four 512-byte sectors per block).
 | INQUIRY | type 5 (CD/DVD), removable, "G3MacPi Virtual CD-ROM" |
 | READ CAPACITY | last LBA, 2048 |
 | READ(10), READ(12), READ CD (user data only) | out of range: 5/21/00 |
-| READ TOC | formats 0 and 1, LBA or MSF; one data track (ADR/CTRL 0x14) |
+| READ TOC | formats 0 and 1, LBA or MSF; format 2 (full TOC: POINT A0/A1/A2 and track 1, always MSF, as MMC/SFF-8020i define it and QEMU answers it); one data track (ADR/CTRL 0x14). Mac OS 9.2.1's CD driver asks for the full TOC with the format in byte 9 |
 | MODE SENSE(6/10) | pages 0x01, 0x0E, 0x2A, 0x31, 0x3F; others 5/24/00 |
 | MODE SELECT(10) | parameters accepted and ignored |
 | START STOP UNIT | eject (unless locked: 5/53/02); tells the front end |

@@ -206,6 +206,14 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     const u32 bar = pci_hi(kMem32, 1, m.macio_device, 0, 0x10);
     const u32 assigned[5] = {bar | 0x80000000u, 0, m.macio_base, 0, 0x80000};  // n bit: not relocatable
     t.set_ints(n.macio, "assigned-addresses", assigned, 5);
+    // reg (PCI binding): the configuration space, then BAR 0 and its size.
+    // The Mac OS ROM file's loader takes the mac-io base from the second
+    // reg entry (translated through assigned-addresses/ranges); with only
+    // the configuration entry it read past the end, computed 0x00010000,
+    // and every mac-io device's AAPL,address (the ATA buses' among them)
+    // pointed into RAM. docs/firmware/bw-device-tree.md.
+    const u32 macio_reg[10] = {pci_hi(kConfig, 1, m.macio_device, 0, 0), 0, 0, 0, 0, bar, 0, 0, 0, 0x80000};
+    t.set_ints(n.macio, "reg", macio_reg, 10);
     t.set_int(n.macio, "#address-cells", 1);
     t.set_int(n.macio, "#size-cells", 1);
     const u32 macio_ranges[5] = {0, bar, 0, m.macio_base, 0x80000};

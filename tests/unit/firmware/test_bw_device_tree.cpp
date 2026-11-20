@@ -294,6 +294,11 @@ TEST_CASE("firmware/bw-tree/pci_nodes_follow_the_pci_binding")
     CHECK(cells(t, b.n.bridge, "bus-range") == std::vector<u32>({1, 1}));
     const auto mr = cells(t, b.n.macio, "reg");
     CHECK_EQ(mr[0], (1u << 16) | (5u << 11));
+    // Then BAR 0 and its size (PCI binding). The Mac OS ROM loader takes the
+    // mac-io base from this second entry; without it it computed 0x10000.
+    REQUIRE(mr.size() == 10u);
+    CHECK_EQ(mr[5], 0x02000010u | (1u << 16) | (5u << 11));
+    CHECK_EQ(mr[9], 0x80000u);
     CHECK_EQ(cell_or(t, b.n.macio, "vendor-id", 0), 0x106Bu);
     CHECK_EQ(cell_or(t, b.n.macio, "device-id", 0), 0x17u);
     CHECK(std::strcmp(t.unit(b.n.bridge), "d") == 0);

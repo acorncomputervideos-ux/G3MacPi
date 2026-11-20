@@ -619,6 +619,14 @@ int main(int argc, char** argv)
             static void print(const RegsAt* r, const ppc::CpuState& s) {
                 if (const char* path = std::getenv("G3_REGSAT_PATH")) {
                     char* e = nullptr;
+                    if (path[0] == 'p') {  // p<hex>: 32 bytes of physical memory, as 8 little- and big-endian words
+                        const u32 pa = static_cast<u32>(std::strtoul(path + 1, nullptr, 16));
+                        std::printf("[regs] phys %08X:", pa);
+                        for (u32 k = 0; k < 32 && pa + k + 4 <= r->ram_size; k += 4)
+                            std::printf(" %08X", load_be32(r->ram + pa + k));
+                        std::printf("\n");
+                        return;
+                    }
                     u32 a = s.gpr[std::strtoul(path, &e, 10) & 31];
                     if (e && *e == ':')  // n:off: start at rn + off (hex, may be negative)
                         a += static_cast<u32>(std::strtol(e + 1, &e, 16));

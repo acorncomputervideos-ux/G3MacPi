@@ -229,6 +229,32 @@ TEST_CASE("devices/atapi/read_toc_formats")
     CHECK_EQ(s.data[6], 1u);
     // Allocation length cuts the reply.
     CHECK_EQ(r.packet({0x43, 0, 0, 0, 0, 0, 0, 0, 4}).data.size(), 4u);
+    // Full TOC (format 2), as Mac OS 9.2.1's CD driver asks for it: MSF bit,
+    // session 1 in byte 6, format in byte 9's top bits, 0x30 bytes.
+    Rig::Reply f = r.packet({0x43, 0x02, 0, 0, 0, 0, 1, 0, 0x30, 0x80});
+    REQUIRE(f.error == 0u);
+    REQUIRE(f.data.size() == 48u);
+    CHECK_EQ((f.data[0] << 8) | f.data[1], 46u);
+    CHECK_EQ(f.data[2], 1u);                         // first and last session
+    CHECK_EQ(f.data[3], 1u);
+    const u8* a0 = f.data.data() + 4;                // POINT A0: first track, disc type
+    CHECK_EQ(a0[0], 1u);
+    CHECK_EQ(a0[1], 0x14u);
+    CHECK_EQ(a0[3], 0xA0u);
+    CHECK_EQ(a0[8], 1u);
+    CHECK_EQ(a0[9], 0x00u);
+    const u8* a1 = a0 + 11;                          // POINT A1: last track
+    CHECK_EQ(a1[3], 0xA1u);
+    CHECK_EQ(a1[8], 1u);
+    const u8* a2 = a1 + 11;                          // POINT A2: lead-out 00:02:40
+    CHECK_EQ(a2[3], 0xA2u);
+    CHECK_EQ(a2[8], 0u);
+    CHECK_EQ(a2[9], 2u);
+    CHECK_EQ(a2[10], 40u);
+    const u8* t1 = a2 + 11;                          // track 1 at 00:02:00
+    CHECK_EQ(t1[3], 1u);
+    CHECK_EQ(t1[9], 2u);
+    CHECK_EQ(t1[10], 0u);
 }
 
 TEST_CASE("devices/atapi/mode_sense_pages")

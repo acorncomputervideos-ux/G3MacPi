@@ -26,10 +26,9 @@ Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
         }, &ide_irq_[i]);
         DbdmaChannel& ch = dbdma_.channel(kIdeDmaChannel[i]);
         ide_[i].attach_dma(&ch);
-        ch.set_irq([](void* c) {  // DBDMA interrupts are pulses (edge)
+        ch.set_irq([](void* c) {  // DMA lines stay up until the PIC's ack clears them
             auto* r = static_cast<IrqRoute*>(c);
             r->pic->set_input(r->irq, true);
-            r->pic->set_input(r->irq, false);
         }, &ide_dma_irq_[i]);
     }
 }

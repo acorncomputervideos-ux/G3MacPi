@@ -269,6 +269,33 @@ AtapiCdrom::Result AtapiCdrom::run(const u8* cdb, u8* out)
             put_address(out + 8, 0, msf);
             return data(12, alloc);
         }
+        if (format == 2) {  // full TOC (MMC / SFF-8020i): one session, always MSF
+            // 11-byte descriptors: session, ADR/CTRL, TNO 0, POINT,
+            // MIN/SEC/FRAME (unused here), zero, PMIN/PSEC/PFRAME.
+            u8* d = out + 4;
+            auto entry = [&](u8 point, u8 pmin, u8 psec, u8 pframe) {
+                for (u32 k = 0; k < 11; ++k)
+                    d[k] = 0;
+                d[0] = 1;  // session 1
+                d[1] = kTrackAdrCtrl;
+                d[3] = point;
+                d[8] = pmin;
+                d[9] = psec;
+                d[10] = pframe;
+                d += 11;
+            };
+            u8 lead_out[4], track1[4];
+            put_address(lead_out, blocks(), true);
+            put_address(track1, 0, true);
+            entry(0xA0, 1, 0x00, 0);  // first track 1; disc type 0x00 (CD-ROM)
+            entry(0xA1, 1, 0, 0);     // last track 1
+            entry(0xA2, lead_out[1], lead_out[2], lead_out[3]);
+            entry(0x01, track1[1], track1[2], track1[3]);
+            put16(out, 2 + 4 * 11);
+            out[2] = 1;  // first complete session
+            out[3] = 1;  // last complete session
+            return data(4 + 4 * 11, alloc);
+        }
         return check(kIllegalRequest, kAscInvalidField);
     }
 

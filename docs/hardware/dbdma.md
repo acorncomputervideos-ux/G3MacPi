@@ -51,6 +51,10 @@ no code was copied.
   inputs are wired when the devices that use the channels are added.
 - `cmdptr_hi` reads 0 (32-bit physical addresses only).
 
+- Interrupts: a channel calls its interrupt callback; on Paddington that
+  raises the PIC input and leaves it up until software acks it in the PIC
+  (docs/hardware/heathrow-pic.md, "DMA interrupt sources").
+
 ## Tests
 
 - OUTPUT_MORE/LAST into a device, with the residual and status written back

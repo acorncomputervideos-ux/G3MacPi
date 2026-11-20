@@ -65,15 +65,43 @@ TEST_CASE("devices/heathrow_pic/edge_latch_enable_ack")
 TEST_CASE("devices/heathrow_pic/edge_only_on_rising_transition")
 {
     Fixture f;
-    out_le32(f.bus, kEnable0, 1u << 3);
-    f.pic.set_input(3, true);
-    out_le32(f.bus, kAck0, 1u << 3);
-    f.pic.set_input(3, true);  // still high: no new edge
+    out_le32(f.bus, kEnable0, 1u << 12);  // not a DMA source (those are 0-10)
+    f.pic.set_input(12, true);
+    out_le32(f.bus, kAck0, 1u << 12);
+    f.pic.set_input(12, true);  // still high: no new edge
     CHECK_EQ(in_le32(f.bus, kEvent0), 0u);
     CHECK(!f.cpu_irq);
-    f.pic.set_input(3, false);
-    f.pic.set_input(3, true);  // new rising edge
+    f.pic.set_input(12, false);
+    f.pic.set_input(12, true);  // new rising edge
     CHECK(f.cpu_irq);
+}
+
+TEST_CASE("devices/heathrow_pic/dma_line_cleared_by_ack")
+{
+    // A DMA source (IRQ 2, ATA bus 0 DMA) stays up until software acks it;
+    // the ack drops the level, and in 68K mode that change latches an event.
+    Fixture f;
+    out_le32(f.bus, kEnable0, 1u << 2);
+    f.pic.set_input(2, true);
+    CHECK(f.cpu_irq);
+    CHECK_EQ(in_le32(f.bus, kLevel0), 1u << 2);
+    out_le32(f.bus, kAck0, 1u << 2);               // native mode: event and level cleared
+    CHECK_EQ(in_le32(f.bus, kLevel0), 0u);
+    CHECK_EQ(in_le32(f.bus, kEvent0), 0u);
+    CHECK(!f.cpu_irq);
+    // 68K mode: the ack-all (bit 31) leaves the DMA level for dispatch.
+    out_le32(f.bus, kEnable0, 0x80000000u | (1u << 2));
+    f.pic.set_input(2, true);
+    out_le32(f.bus, kAck0, 0x80000000u);
+    CHECK_EQ(in_le32(f.bus, kLevel0), 1u << 2);
+    out_le32(f.bus, kAck0, 1u << 2);               // the driver's ack: level drops...
+    CHECK_EQ(in_le32(f.bus, kLevel0), 0u);
+    CHECK_EQ(in_le32(f.bus, kEvent0) & (1u << 2), 1u << 2);  // ...and latches (68K mode)
+    // A non-DMA input's level is not touched by an ack.
+    out_le32(f.bus, kEnable0, 1u << 13);
+    f.pic.set_input(13, true);
+    out_le32(f.bus, kAck0, 1u << 13);
+    CHECK_EQ(in_le32(f.bus, kLevel0) & (1u << 13), 1u << 13);
 }
 
 TEST_CASE("devices/heathrow_pic/level_triggered_input")

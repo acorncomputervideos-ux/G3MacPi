@@ -53,3 +53,18 @@ machines. Neither Linux nor QEMU uses the bit. To verify on hardware.
   0 per QEMU's Old World mac-io) comes with the mac-io/Paddington model.
 - Whether the B&W uses a second (cascaded) controller: Linux supports one
   for mac-io; not modelled yet.
+
+## DMA interrupt sources (IRQs 0-10)
+
+- A DBDMA channel only raises its interrupt line. Software lowers it by
+  writing the source's bit to the IRQ 0-31 ack register. In 68K mode that
+  1 -> 0 change also latches an event. The ack-all (bit 31) does not lower
+  DMA lines.
+- Source: DingusPPC's MacIoTwo/GrandCentral `clear_dma_int`, read for facts
+  only; QEMU instead never lowers its DBDMA line. To verify on hardware.
+- Why it matters: Mac OS's nanokernel acks every event with bit 31 and then
+  dispatches from the level register. A DMA interrupt that dropped by
+  itself was never seen. Mac OS 9.2.1's heathrow-ata driver therefore never
+  counted a DMA read's bytes, its CD driver retried every read, and it
+  ejected the boot CD. Holding the line until the ack fixed the boot; with
+  a line that stayed up for ever the same ack loop became an interrupt storm.
