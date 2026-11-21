@@ -723,6 +723,60 @@ int main(int argc, char** argv)
                             static_cast<unsigned long long>(d->cpu->instructions_executed()));
             }, &md);
         }
+        // G3_ITRACE=from,to: every instruction (pc, disassembly, r3-r12, r24)
+        // while the instruction count is in [from, to).
+        struct ITrace { u64 from = 0, to = 0; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0; PhysicalBus* bus = nullptr; };
+        static ITrace it;
+        if (const char* its = std::getenv("G3_ITRACE")) {
+            char* e = nullptr;
+            it.from = std::strtoull(its, &e, 0);
+            it.to = e && *e == ',' ? std::strtoull(e + 1, nullptr, 0) : it.from + 1000;
+            it.cpu = &m.cpu();
+            it.ram = ram.data();
+            it.ram_size = static_cast<u32>(ram.size());
+            it.bus = &m.bus();
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* t = static_cast<ITrace*>(c);
+                const u64 n = t->cpu->instructions_executed();
+                if (n < t->from || n >= t->to)
+                    return;
+                u32 pa = 0, insn = 0;
+                if (t->cpu->probe_translate(s.pc, false, pa)) {
+                    if (pa + 4 <= t->ram_size)
+                        insn = load_be32(t->ram + pa);
+                    else
+                        t->bus->read32(pa, insn);
+                }
+                char text[96];
+                if (!ppc::disassemble(s.pc, insn, text, sizeof text))
+                    std::snprintf(text, sizeof text, ".long 0x%08X", insn);
+                std::printf("[it] %llu %08X %-32s r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X r11=%08X r12=%08X r24=%08X\n",
+                            static_cast<unsigned long long>(n), s.pc, text, s.gpr[3], s.gpr[4], s.gpr[5], s.gpr[6],
+                            s.gpr[7], s.gpr[8], s.gpr[9], s.gpr[10], s.gpr[11], s.gpr[12], s.gpr[24]);
+            }, &it);
+        }
+        // G3_R1IN=lo,hi[,from]: the first 40 times r1 enters [lo, hi) (pc, lr, r24).
+        struct R1In { u32 lo = 0, hi = 0; u64 from = 0; bool in = false; u32 left = 40; ppc::Ppc750* cpu = nullptr; };
+        static R1In r1in;
+        if (const char* rs = std::getenv("G3_R1IN")) {
+            char* e = nullptr;
+            r1in.lo = static_cast<u32>(std::strtoul(rs, &e, 16));
+            r1in.hi = static_cast<u32>(std::strtoul(e + 1, &e, 16));
+            if (*e == ',')
+                r1in.from = std::strtoull(e + 1, nullptr, 0);
+            r1in.cpu = &m.cpu();
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* r = static_cast<R1In*>(c);
+                const bool in = s.gpr[1] >= r->lo && s.gpr[1] < r->hi;
+                if (in && !r->in && r->left && r->cpu->instructions_executed() >= r->from) {
+                    --r->left;
+                    std::printf("[r1in] %llu pc=%08X lr=%08X r1=%08X r24=%08X msr=%08X\n",
+                                static_cast<unsigned long long>(r->cpu->instructions_executed()), s.pc, s.lr(), s.gpr[1],
+                                s.gpr[24], s.msr);
+                }
+                r->in = in;
+            }, &r1in);
+        }
         // G3_MEMWATCH=physaddr: report every change of that byte of RAM
         // (checked after each instruction) with the PC and the 68K PC (r24).
         struct MemWatch { const u8* p = nullptr; u8 last = 0; ppc::Ppc750* cpu = nullptr; u32 shown = 0; };
