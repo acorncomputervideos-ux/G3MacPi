@@ -7,12 +7,12 @@
 #include "core/machine/bw_firmware.h"
 #include "core/machine/yosemite.h"
 #include "platform/common/hid_to_adb.h"
+#include "platform/common/machine_state.h"
 
 namespace g3 {
 
 namespace {
 
-constexpr u64 kUnixTo1904 = 2082844800ull;  // seconds from 1904-01-01 to 1970-01-01
 // Where the boot file claims to come from, as Open Firmware's `load` records
 // it (the boot script reads it back). The Mac OS ROM file normally lives in
 // the System Folder of the start-up volume.
@@ -88,7 +88,7 @@ void MacSession::console_sink(void* ctx, const char* text, u32 len)
 }
 
 MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, const Memory& mem,
-                                    const u8* driver, u32 driver_size, u64 unix_time)
+                                    const u8* driver, u32 driver_size, u64 unix_time, const MachineState* saved)
 {
     stop();
     host_ = &host;
@@ -113,6 +113,15 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     m_ = new YosemiteMachine(yc);
     if (!m_ || !m_->ok())
         return fail(Error::NoMachine);
+    // What the Mac kept from its last run: NVRAM (before the firmware, which
+    // formats it only when blank or damaged) and the Cuda's PRAM.
+    if (saved) {
+        m_->macio().nvram().load(saved->nvram, MachineState::kNvramSize);
+        m_->macio().nvram().clear_dirty();
+        u8* pram = m_->macio().cuda().pram();
+        for (u32 i = 0; i < MachineState::kPramSize && i < Cuda::kPramSize; ++i)
+            pram[i] = saved->pram[i];
+    }
 
     // Drives: ata0.master = mac-io ATA channel 0, device 0, and so on.
     BwFirmware::Config fc;
@@ -172,6 +181,20 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     if (!fw_->command("init-program") || !fw_->client_started())
         return fail(Error::BootFailed, fw_ ? fw_->forth().error_text() : "");
     return Error::None;
+}
+
+bool MacSession::capture_state(MachineState& out) const
+{
+    if (!m_)
+        return false;
+    out.rtc_1904 = m_->macio().cuda().rtc();
+    const u8* nv = m_->macio().nvram().data();
+    for (u32 i = 0; i < MachineState::kNvramSize; ++i)
+        out.nvram[i] = nv[i];
+    const u8* pram = m_->macio().cuda().pram();
+    for (u32 i = 0; i < MachineState::kPramSize; ++i)
+        out.pram[i] = i < Cuda::kPramSize ? pram[i] : 0;
+    return true;
 }
 
 void MacSession::run(u64 picoseconds)

@@ -73,7 +73,7 @@ explicit byte offsets, never C structs.
 - **Preferences**: SavePreferredConfiguration and
   GetPreferredConfiguration, kept in memory only. NVRAM is a later step.
 - **Unsupported**:
-  - Reset, KillIO, SetDefaultMode, SetInterrupt, the hardware cursor
+  - Reset, KillIO, SetDefaultMode, the hardware cursor
     and power states: controlErr or statusErr.
   - SupportsHardwareCursor answers false.
   - Read and write return readErr and writErr.
@@ -124,6 +124,17 @@ All of this needs a real Mac OS 9 boot:
   driver's first register read faulted there. The node now sits under
   `/pci` with `assigned-addresses`, and Mac OS maps it (the CD's start-up
   desktop pattern is drawn through the driver).
-- **Interrupts.** No vertical-blanking interrupt is offered: there is no
-  Video Services Library call yet. The Display Manager may need one for
-  the cursor.
+- **Vertical blanking.** Classic Mac OS moves the cursor in its VBL tasks,
+  which run when the display driver signals its VBL interrupt service.
+  Without one the pointer never moved (button clicks still arrived). The
+  device has no VBL interrupt, so the driver does what Apple's guide allows
+  ("If the hardware interrupt for vertical blanking is not provided, a
+  time management task may be installed", ch. 1): at initialisation it
+  creates a 'vbl ' service (VSLNewInterruptService) and arms a Driver
+  Services timer (SetInterruptTimer, 16 ms after UpTime +
+  DurationToAbsolute) whose handler calls VSLDoInterruptService and
+  re-arms; finalise cancels the timer and disposes of the service.
+  SetInterrupt/GetInterrupt (csCode 7) turn the signal off and on.
+  AbsoluteTime results come back through a hidden pointer in r3 (Mac OS's
+  PowerPC runtime for struct results); verified by Mac OS 9.2.1 moving the
+  pointer and opening menus with the mouse.

@@ -4,7 +4,8 @@
 // on the emulated 750 against the real display device model, with this
 // program playing Mac OS: the PEF is prepared like the Code Fragment
 // Manager would (tests/unit/tools/pef_prepare.h), its imports
-// (IOCommandIsComplete, RegistryPropertyGetSize, RegistryPropertyGet) are
+// (IOCommandIsComplete, RegistryPropertyGetSize, RegistryPropertyGet, the
+// timer routines and the Video Services Library's interrupt services) are
 // stand-ins reached through transition vectors whose code is an emulator
 // trap word, and DoDriverIO is called the way the Device Manager and the
 // Display Manager call it.
@@ -36,6 +37,11 @@ constexpr u32 kVram = 0x90000000u, kRegs = 0x91000000u;
 constexpr u32 kBase = 0x100000;                 // where the fragment is placed
 constexpr u32 kStubTv = 0x6000, kStubCode = 0x6100, kReturn = 0x6F00, kStack = 0x3F0000;
 constexpr u32 kTrapComplete = 0x00004F10u, kTrapGetSize = 0x00004F11u, kTrapGet = 0x00004F12u;
+constexpr u32 kTrapSetTimer = 0x00004F13u, kTrapCancelTimer = 0x00004F14u, kTrapUpTime = 0x00004F15u,
+              kTrapDurToAbs = 0x00004F16u, kTrapVslNew = 0x00004F17u, kTrapVslDo = 0x00004F18u,
+              kTrapVslDispose = 0x00004F19u;
+constexpr u32 kNumStubs = 10;
+constexpr u32 kVslId = 0x5A5A0001u;            // the service ID our VSLNewInterruptService gives
 constexpr u32 kStopWord = 0x00004F99u;
 constexpr u32 kScratch = 0x200000;              // records passed to the driver
 constexpr u8 kEntryMagic = 0xA5;                // our RegEntryID: 16 bytes of this
@@ -54,6 +60,12 @@ struct Host {
     std::vector<std::pair<u32, s32>> completions;  // IOCommandIsComplete(ID, result)
     bool stopped = false;
     u32 registry_calls = 0;
+    // Timers and VBL services (Designing PCI Cards and Drivers, ch. 11 and 13).
+    u64 uptime = 1000;                 // AbsoluteTime units: 1 per microsecond here
+    u32 timers_set = 0, timers_cancelled = 0, timer_handler = 0, timer_p1 = 0;
+    u64 timer_expiry = 0;
+    u32 vsl_new = 0, vsl_new_type = 0, vsl_do = 0, vsl_disposed = 0;
+    bool vsl_entry_ok = false;
 
     std::string cstr(u32 a) const
     {
@@ -124,6 +136,38 @@ bool trap(void* ctx, u32 insn, ppc::CpuState& s, u32& next_pc)
             wr32(b, size_ptr, n);
             s.gpr[3] = 0;
         }
+    } else if (insn == kTrapUpTime) {          // UpTime(&result): AbsoluteTime via a hidden pointer
+        wr32(b, s.gpr[3], static_cast<u32>(h.uptime >> 32));
+        wr32(b, s.gpr[3] + 4, static_cast<u32>(h.uptime));
+    } else if (insn == kTrapDurToAbs) {        // DurationToAbsolute(&result, duration): ms -> us
+        const s32 d = static_cast<s32>(s.gpr[4]);
+        const u64 us = d > 0 ? static_cast<u64>(d) * 1000 : static_cast<u64>(-static_cast<s64>(d));
+        wr32(b, s.gpr[3], static_cast<u32>(us >> 32));
+        wr32(b, s.gpr[3] + 4, static_cast<u32>(us));
+    } else if (insn == kTrapSetTimer) {        // SetInterruptTimer(&expiry, handler, p1, &timerID)
+        h.timer_expiry = (static_cast<u64>(rd32(b, s.gpr[3])) << 32) | rd32(b, s.gpr[3] + 4);
+        h.timer_handler = s.gpr[4];
+        h.timer_p1 = s.gpr[5];
+        wr32(b, s.gpr[6], 0x7100u + h.timers_set);
+        ++h.timers_set;
+        s.gpr[3] = 0;
+    } else if (insn == kTrapCancelTimer) {     // CancelTimer(timerID, &remaining)
+        ++h.timers_cancelled;
+        s.gpr[3] = 0;
+    } else if (insn == kTrapVslNew) {          // VSLNewInterruptService(owner, type, &id)
+        ++h.vsl_new;
+        h.vsl_entry_ok = h.entry_ok(s.gpr[3]);
+        h.vsl_new_type = s.gpr[4];
+        wr32(b, s.gpr[5], kVslId);
+        s.gpr[3] = 0;
+    } else if (insn == kTrapVslDo) {           // VSLDoInterruptService(id)
+        if (s.gpr[3] == kVslId)
+            ++h.vsl_do;
+        s.gpr[3] = 0;
+    } else if (insn == kTrapVslDispose) {      // VSLDisposeInterruptService(id)
+        if (s.gpr[3] == kVslId)
+            ++h.vsl_disposed;
+        s.gpr[3] = 0;
     } else {
         return false;
     }
@@ -164,7 +208,10 @@ int main(int argc, char** argv)
     }
     const std::map<std::string, u32> imports = {
         {"IOCommandIsComplete", kStubTv}, {"RegistryPropertyGetSize", kStubTv + 16},
-        {"RegistryPropertyGet", kStubTv + 32}};
+        {"RegistryPropertyGet", kStubTv + 32}, {"SetInterruptTimer", kStubTv + 48},
+        {"CancelTimer", kStubTv + 64}, {"UpTime", kStubTv + 80}, {"DurationToAbsolute", kStubTv + 96},
+        {"VSLNewInterruptService", kStubTv + 112}, {"VSLDoInterruptService", kStubTv + 128},
+        {"VSLDisposeInterruptService", kStubTv + 144}};
     const pef_test::Prepared p = pef_test::prepare(pef, {kBase}, imports);
     if (!p.ok) {
         std::printf("FAIL prepare: %s\n", p.why.c_str());
@@ -181,8 +228,9 @@ int main(int argc, char** argv)
     fb.set_enabled(true);
     const std::vector<u8>& image = p.mem.at(0);
     std::memcpy(&ram[kBase], image.data(), image.size());
-    const u32 traps[3] = {kTrapComplete, kTrapGetSize, kTrapGet};
-    for (u32 i = 0; i < 3; ++i) {
+    const u32 traps[kNumStubs] = {kTrapComplete, kTrapGetSize, kTrapGet, kTrapSetTimer, kTrapCancelTimer,
+                                  kTrapUpTime, kTrapDurToAbs, kTrapVslNew, kTrapVslDo, kTrapVslDispose};
+    for (u32 i = 0; i < kNumStubs; ++i) {
         wr32(bus, kStubTv + 16 * i, kStubCode + 4 * i);
         wr32(bus, kStubTv + 16 * i + 4, 0x00777000u);
         wr32(bus, kStubCode + 4 * i, traps[i]);
@@ -210,30 +258,34 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // DoDriverIO(spaceID, ID, contents, code, kind), called as Mac OS would.
+    // A routine reached through a transition vector, called as Mac OS would.
     bool ran = true;
-    auto io = [&](u32 code, u32 contents, u32 kind, u32 id = 0x0BAD0001u) -> s16 {
+    auto callv = [&](u32 tvec, u32 a1, u32 a2, u32 a3, u32 a4, u32 a5) -> u32 {
         cpu.reset();
         ppc::CpuState& s = cpu.state();
         s.msr = ppc::msr::FP;
-        s.pc = rd32(bus, tv);
-        s.gpr[2] = rd32(bus, tv + 4);
-        s.gpr[12] = tv;
+        s.pc = rd32(bus, tvec);
+        s.gpr[2] = rd32(bus, tvec + 4);
+        s.gpr[12] = tvec;
         s.gpr[1] = kStack;
-        s.gpr[3] = 1;            // the address space ID
-        s.gpr[4] = id;
-        s.gpr[5] = contents;
-        s.gpr[6] = code;
-        s.gpr[7] = kind;
+        s.gpr[3] = a1;
+        s.gpr[4] = a2;
+        s.gpr[5] = a3;
+        s.gpr[6] = a4;
+        s.gpr[7] = a5;
         s.lr() = kReturn;
         host.stopped = false;
         for (u64 n = 0; !host.stopped && !cpu.checkstopped() && n < 200000000ull; ++n)
             cpu.step();
         if (!host.stopped || s.gpr[1] != kStack) {
             ran = false;
-            std::printf("FAIL DoDriverIO(%u) did not return (pc=0x%08X)\n", code, s.pc);
+            std::printf("FAIL the call through 0x%08X did not return (pc=0x%08X)\n", tvec, s.pc);
         }
-        return static_cast<s16>(s.gpr[3]);
+        return s.gpr[3];
+    };
+    // DoDriverIO(spaceID, ID, contents, code, kind).
+    auto io = [&](u32 code, u32 contents, u32 kind, u32 id = 0x0BAD0001u) -> s16 {
+        return static_cast<s16>(callv(tv, 1, id, contents, code, kind));
     };
     // Control/Status with a record: a CntrlParam at kScratch, the record after it.
     const u32 pb = kScratch, rec = kScratch + 0x100, table = kScratch + 0x400, vpb = kScratch + 0x1000;
@@ -295,6 +347,35 @@ int main(int argc, char** argv)
     EXPECT(fb.width() == 800 && fb.height() == 600 && fb.depth() == 15 && fb.enabled(),
            "firmware mode kept: %ux%u depth %u", fb.width(), fb.height(), fb.depth());
     EXPECT(fb.palette(0) == 0x808080u && fb.palette(255) == 0x808080u, "50%% gray CLUT before a mode set");
+    // --- vertical blanking: a 'vbl ' service and a timer standing in for the interrupt ---
+    EXPECT(host.vsl_new == 1 && host.vsl_entry_ok && host.vsl_new_type == 0x76626C20u,
+           "VSLNewInterruptService(our RegEntryID, 'vbl ') once (calls %u, type 0x%08X)", host.vsl_new,
+           host.vsl_new_type);
+    EXPECT(host.timers_set == 1 && host.timer_expiry > host.uptime && host.timer_expiry - host.uptime <= 17000 &&
+               host.timer_expiry - host.uptime >= 15000,
+           "timer armed about 16 ms ahead (set %u, in %llu us)", host.timers_set,
+           static_cast<unsigned long long>(host.timer_expiry - host.uptime));
+    {
+        // The timer fires: Mac OS calls the handler at secondary interrupt level.
+        host.uptime = host.timer_expiry;
+        const u32 handler = host.timer_handler;
+        EXPECT(handler != 0 && callv(handler, host.timer_p1, 0x1234, 0, 0, 0) == 0, "VBL handler returns noErr");
+        EXPECT(host.vsl_do == 1, "the handler signals the VBL service (%u)", host.vsl_do);
+        EXPECT(host.timers_set == 2 && host.timer_expiry == host.uptime + 16000, "and re-arms the timer");
+        // SetInterrupt csMode 1: VBL interrupts off; GetInterrupt reports it.
+        zero(bus, rec, 4);
+        wr8(bus, rec, 1);
+        EXPECT(control(7) == noErr, "SetInterrupt (off)");
+        EXPECT(status(7) == noErr && rd8(bus, rec) == 1, "GetInterrupt: off");
+        host.uptime = host.timer_expiry;
+        callv(host.timer_handler, host.timer_p1, 0, 0, 0, 0);
+        EXPECT(host.vsl_do == 1 && host.timers_set == 3, "off: no VBL service call, timer kept running");
+        zero(bus, rec, 4);
+        EXPECT(control(7) == noErr && status(7) == noErr && rd8(bus, rec) == 0, "SetInterrupt (on)");
+        host.uptime = host.timer_expiry;
+        callv(host.timer_handler, host.timer_p1, 0, 0, 0, 0);
+        EXPECT(host.vsl_do == 2, "on again");
+    }
     host.completions.clear();
     EXPECT(io(kOpen, pb, kImmediate) == noErr, "open");
     EXPECT(host.completions.empty(), "immediate requests are not completed through IOCommandIsComplete");
@@ -512,6 +593,7 @@ int main(int argc, char** argv)
     // --- close, finalize --------------------------------------------------------------
     EXPECT(io(kClose, pb, kImmediate) == noErr, "close");
     EXPECT(io(kFinalize, init, kImmediate) == noErr && !fb.enabled(), "finalize blanks the display");
+    EXPECT(host.timers_cancelled == 1 && host.vsl_disposed == 1, "finalize cancels the timer and disposes the service");
     EXPECT(control(2) == controlErr, "control after finalize");
 
     // --- a second device with 1 MB of VRAM: the resolution list stops at 1152x870 ----

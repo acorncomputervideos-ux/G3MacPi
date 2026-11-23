@@ -697,12 +697,18 @@ void CKernel::StartMac (void)
 	memset (m_pRam, 0, nRamSize);
 	memset (m_pVram, 0, nVramSize);
 
-	// The Pi 400 has no battery clock: without network time the Mac starts in 2001.
-	u64 nTime = m_Timer.GetUniversalTime ();
-	if (nTime < 1577836800u)	// before 2020: not set
-	{
-		nTime = 978307200u;	// 2001-01-01
-	}
+	// What the Mac kept from its last run (clock, NVRAM, PRAM): a real Mac
+	// keeps them powered by its battery.
+	m_bStateValid = m_bSDMounted && LoadMachineState (m_SavedState);
+	m_Logger.Write (FromKernel, LogNotice, "Saved clock and NVRAM: %s",
+			m_bStateValid ? "restored" : "none (first start)");
+
+	// The Pi 400 has no battery clock: the time is unknown (before 2020)
+	// unless something set it. Then the Mac's clock carries on from where it
+	// was when it last stopped (it lags by the time the Pi was off), or
+	// starts in 2001 the first time.
+	const u64 nTime = g3::choose_start_time (m_Timer.GetUniversalTime (), 1577836800u,
+						 m_bStateValid ? &m_SavedState : 0, 978307200u);
 
 	g3::MacSession::Memory Memory;
 	Memory.ram = m_pRam;
@@ -723,7 +729,8 @@ void CKernel::StartMac (void)
 	m_MacHost.SetEjectHandler (DiscEjected, this);
 
 	m_Logger.Write (FromKernel, LogNotice, "Starting the Mac: %u MB, ROM %s", Config.ram_mb, Config.rom);
-	const g3::MacSession::Error Error = m_Session.start (Config, m_MacHost, Memory, g_NdrvData, g_NdrvSize, nTime);
+	const g3::MacSession::Error Error = m_Session.start (Config, m_MacHost, Memory, g_NdrvData, g_NdrvSize, nTime,
+							     m_bStateValid ? &m_SavedState : 0);
 	if (Error != g3::MacSession::Error::None)
 	{
 		CString Status;
@@ -743,15 +750,44 @@ void CKernel::StartMac (void)
 	m_bMacRunning = TRUE;
 	m_nGuestMs = 0;
 	m_nLastStatsTicks = m_Timer.GetTicks ();
+	m_nLastStateTicks = m_nLastStatsTicks;
 	m_pMenu->set_running (TRUE);
 	m_pMenu->set_status ("");
 	ShowMenu (FALSE);
+}
+
+// Writes the Mac's clock, NVRAM and PRAM to the SD card: always when
+// bForce, otherwise only if NVRAM or PRAM changed or the clock moved on by
+// five minutes or more since the last write (to spare the card).
+void CKernel::SaveMacState (boolean bForce)
+{
+	if (!m_bSDMounted || !m_Session.capture_state (m_CurrentState))
+	{
+		return;
+	}
+	if (!bForce && m_bStateValid
+	    && memcmp (m_CurrentState.nvram, m_SavedState.nvram, sizeof m_SavedState.nvram) == 0
+	    && memcmp (m_CurrentState.pram, m_SavedState.pram, sizeof m_SavedState.pram) == 0
+	    && m_CurrentState.rtc_1904 - m_SavedState.rtc_1904 < 5 * 60)
+	{
+		return;
+	}
+	if (SaveMachineState (m_CurrentState))
+	{
+		m_SavedState = m_CurrentState;
+		m_bStateValid = TRUE;
+	}
+	else
+	{
+		m_Logger.Write (FromKernel, LogWarning, "Cannot write " G3_STATE_FILE);
+	}
 }
 
 void CKernel::StopMac (void)
 {
 	if (m_bMacRunning)
 	{
+		SaveMacState (TRUE);
 		m_Session.stop ();	// closes (and flushes) the images
 		m_bMacRunning = FALSE;
 		m_pMenu->set_running (FALSE);
@@ -793,6 +829,11 @@ void CKernel::RunMac (void)
 	{
 		DrawMacScreen (&m_Screen, m_Session, m_pPixels);
 		m_nLastDrawTicks = nNow;
+	}
+	if (nNow - m_nLastStateTicks >= 60 * HZ)	// NVRAM, PRAM, clock to the SD card
+	{
+		SaveMacState (FALSE);
+		m_nLastStateTicks = nNow;
 	}
 	if (nNow - m_nLastStatsTicks >= 10 * HZ)	// speed, to the log (UART)
 	{

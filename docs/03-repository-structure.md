@@ -73,7 +73,7 @@ G3MacPi/
 /kernel8-rpi4.img                                 our emulator
 /g3macpi/g3macpi.ini                              configuration
 /g3macpi/disks/*.img                              user-supplied disk images
-/g3macpi/nvram.bin                                persisted NVRAM/PRAM
+/g3macpi/machine.state                            persisted clock, NVRAM and PRAM
 /g3macpi/logs/                                    log files
 ```
 (Exact firmware filenames and `config.txt` keys to be verified in Milestone 1.)

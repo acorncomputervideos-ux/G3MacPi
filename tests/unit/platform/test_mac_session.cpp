@@ -10,6 +10,7 @@
 #include "core/storage/disk_format.h"
 #include "core/machine/yosemite.h"
 #include "platform/common/mac_session.h"
+#include "platform/common/machine_state.h"
 #include "tests/framework/g3test.h"
 #include "tests/unit/machine/test_client.h"
 
@@ -254,4 +255,39 @@ TEST_CASE("platform/session/start_up_disk_sets_chosen_bootpath")
         std::strcpy(want + k, ":2,\\\\:tbxi");
         CHECK(std::string(reinterpret_cast<const char*>(data)) == want);
     }
+}
+
+TEST_CASE("platform/session/state_survives_a_restart")
+{
+    // First run: change NVRAM (as Mac OS would, through the firmware's
+    // nvram access) and PRAM, then capture.
+    MachineState st;
+    {
+        Rig r;
+        REQUIRE(r.start() == MacSession::Error::None);
+        r.session.run(1000000000ull);
+        r.session.machine()->macio().nvram().set_byte(0x11B0, 0x5A);
+        r.session.machine()->macio().cuda().pram()[0x13] = 0xA5;
+        REQUIRE(r.session.capture_state(st));
+        CHECK_EQ(st.nvram[0x11B0], 0x5Au);
+        CHECK_EQ(st.pram[0x13], 0xA5u);
+        CHECK(st.rtc_1904 >= static_cast<u32>(1000000000ull + kUnixTo1904));
+    }
+    // Through the file format, into a second run.
+    std::vector<u8> file(MachineState::kFileSize);
+    st.encode(file.data());
+    MachineState back;
+    REQUIRE(back.decode(file.data(), static_cast<u32>(file.size())));
+    Rig r2;
+    REQUIRE(r2.session.start(r2.cfg, r2.host, r2.memory(), nullptr, 0, 1000000000ull, &back) ==
+            MacSession::Error::None);
+    CHECK_EQ(r2.session.machine()->macio().nvram().byte(0x11B0), 0x5Au);
+    CHECK_EQ(r2.session.machine()->macio().cuda().pram()[0x13], 0xA5u);
+    // The firmware kept the saved (valid) NVRAM rather than formatting it:
+    // the rest of it matches too.
+    for (u32 i = 0; i < MachineState::kNvramSize; i += 97)
+        CHECK_EQ(r2.session.machine()->macio().nvram().byte(i), st.nvram[i]);
+    MachineState none;
+    Rig r3;
+    CHECK(!r3.session.capture_state(none));  // no Mac running
 }

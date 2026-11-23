@@ -9,7 +9,10 @@
 //                                   the A64 simulator unless on AArch64)
 //
 // Paths in the .ini are host paths. Progress goes to stdout once per
-// second of guest time.
+// second of guest time. G3_STATE=file: the Mac's NVRAM, PRAM and clock
+// are read from that file at the start (if valid) and written at the end.
+// G3_INPUT=s:dx:dy:b,...: at guest second s, move the mouse by (dx, dy) in
+// steps of at most 2 pixels per 10 ms, then set the button to b (0/1).
 
 #include "platform/common/cpu_selftest.h"
 #include "tools/a64sim/a64_sim.h"
@@ -17,6 +20,7 @@
 #include <chrono>
 #include <cstring>
 #include "platform/common/mac_session.h"
+#include "platform/common/machine_state.h"
 
 #include <chrono>
 #include <cstdio>
@@ -152,9 +156,17 @@ int main(int argc, char** argv)
     mem.vram_size = static_cast<u32>(vram.size());
     HostFiles host;
     MacSession session;
+    const char* state_path = std::getenv("G3_STATE");
+    static MachineState saved;
+    bool have_saved = false;
+    if (state_path) {
+        std::vector<u8> bytes;
+        have_saved = read_file(state_path, bytes) && saved.decode(bytes.data(), static_cast<u32>(bytes.size()));
+        std::printf("[g3_host] saved state: %s\n", have_saved ? "restored" : "none");
+    }
     const MacSession::Error e = session.start(config, host, mem, driver.empty() ? nullptr : driver.data(),
                                               static_cast<u32>(driver.size()),
-                                              static_cast<u64>(std::time(nullptr)));
+                                              static_cast<u64>(std::time(nullptr)), have_saved ? &saved : nullptr);
     if (e != MacSession::Error::None) {
         std::fprintf(stderr, "cannot start: %s%s%s\n", MacSession::error_text(e), session.detail()[0] ? ": " : "",
                      session.detail());
@@ -162,17 +174,66 @@ int main(int argc, char** argv)
     }
     std::printf("[g3_host] started: %u MB, %ux%u\n", config.ram_mb, config.width, config.height);
 
+    struct InputStep { u32 at; s32 dx, dy; u32 button; };
+    std::vector<InputStep> steps;
+    if (const char* in = std::getenv("G3_INPUT")) {
+        const char* p = in;
+        while (*p) {
+            InputStep st{};
+            char* end = nullptr;
+            st.at = static_cast<u32>(std::strtoul(p, &end, 10));
+            st.dx = static_cast<s32>(std::strtol(end + 1, &end, 10));
+            st.dy = static_cast<s32>(std::strtol(end + 1, &end, 10));
+            st.button = static_cast<u32>(std::strtoul(end + 1, &end, 10));
+            steps.push_back(st);
+            if (end == p)
+                break;  // malformed
+            p = *end == ',' ? end + 1 : end;
+        }
+    }
+    size_t next_step = 0;
+    s32 move_x = 0, move_y = 0;
+    u32 button = 0;
     const u32 seconds = static_cast<u32>(std::strtoul(argv[2], nullptr, 10));
     const auto t0 = std::chrono::steady_clock::now();
     for (u32 s = 0; s < seconds && !session.halted() && !session.powered_off(); ++s) {
-        for (u32 slice = 0; slice < 100; ++slice)
+        for (u32 slice = 0; slice < 100; ++slice) {
+            if (move_x == 0 && move_y == 0 && next_step < steps.size() && steps[next_step].at <= s) {
+                move_x = steps[next_step].dx;
+                move_y = steps[next_step].dy;
+                button = steps[next_step].button;
+                ++next_step;
+                if (move_x == 0 && move_y == 0)
+                    session.mouse(0, 0, button);
+            }
+            if (move_x || move_y) {
+                const s32 dx = move_x > 2 ? 2 : (move_x < -2 ? -2 : move_x);
+                const s32 dy = move_y > 2 ? 2 : (move_y < -2 ? -2 : move_y);
+                move_x -= dx;
+                move_y -= dy;
+                session.mouse(dx, dy, button);
+            }
             session.run(10000000000ull);  // 10 ms of guest time
+        }
         const double real = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         std::printf("[g3_host] %u s guest, %.1f s real, screen %s\n", s + 1, real, session.screen_on() ? "on" : "off");
         std::fflush(stdout);
     }
     if (session.halted())
         std::printf("[g3_host] the CPU halted (checkstop)\n");
+    if (state_path) {
+        static MachineState now;
+        std::vector<u8> bytes(MachineState::kFileSize);
+        bool ok = session.capture_state(now);
+        if (ok) {
+            now.encode(bytes.data());
+            FILE* f = std::fopen(state_path, "wb");
+            ok = f && std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+            if (f)
+                ok = std::fclose(f) == 0 && ok;
+        }
+        std::printf("[g3_host] state %s %s\n", ok ? "saved to" : "NOT saved to", state_path);
+    }
     if (argc > 3) {
         if (write_ppm(argv[3], session))
             std::printf("[g3_host] screen saved to %s\n", argv[3]);

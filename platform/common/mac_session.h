@@ -24,6 +24,7 @@ namespace g3 {
 
 class YosemiteMachine;
 class BwFirmware;
+struct MachineState;
 
 // What a front end provides.
 class MacHost {
@@ -74,9 +75,13 @@ public:
         u32 code_words = 0;
     };
     // Builds and starts the Mac. `driver`: our display driver (PEF), which
-    // Mac OS needs to draw; `unix_time`: the real-time clock at power-on.
+    // Mac OS needs to draw; `unix_time`: the real-time clock at power-on;
+    // `saved`: NVRAM and PRAM from the last run (machine_state.h), or none.
     Error start(const MachineConfig& config, MacHost& host, const Memory& memory, const u8* driver,
-                u32 driver_size, u64 unix_time);
+                u32 driver_size, u64 unix_time, const MachineState* saved = nullptr);
+    // What to keep for the next run: the clock now, NVRAM and PRAM. False
+    // when no Mac is running.
+    bool capture_state(MachineState& out) const;
     void stop();  // releases everything (closes the images)
 
     bool running() const { return fw_ != nullptr; }

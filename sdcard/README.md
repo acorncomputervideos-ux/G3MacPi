@@ -27,6 +27,7 @@ menu and the log view; Ctrl+Alt+Delete reboots). On first start it creates:
 | `/g3macpi/rom/` | the Mac OS ROM file (from your own Mac OS 9 install) |
 | `/g3macpi/disks/` | CD images (`.iso`, `.toast`, `.cdr`) and hard-disk images |
 | `/g3macpi/g3macpi.ini` | written by "Save settings" (docs/machine-config.md) |
+| `/g3macpi/machine.state` | the Mac's clock, NVRAM and PRAM, kept between runs (see below) |
 
 The menu sets memory, the ROM file, the four ATA drive positions (CD-ROM
 or hard disk, with an image from `/g3macpi/disks`), the start-up disk and
@@ -43,3 +44,21 @@ through "Restart the Mac". The UART log reports the emulation speed every
 Not yet tested on a Raspberry Pi; please report what you see. Known: the
 Pi 400 has no battery clock, so the Mac's clock starts at 2001-01-01; the
 emulation is several times slower than a real G3.
+
+## The Mac's clock and settings (`machine.state`)
+
+A real Mac keeps its clock and its NVRAM/PRAM (time zone, start-up disk,
+sound volume and other control-panel settings) alive on a battery. The Pi
+400 has no battery clock, so G3MacPi keeps them in `/g3macpi/machine.state`:
+
+- written when the Mac stops (Shut Down, the menu's stop, Ctrl+Alt+Delete)
+  and, while it runs, once a minute if NVRAM or PRAM changed or the clock
+  moved on by five minutes;
+- read at the next start. If the Pi knows the real time, the Mac uses it;
+  otherwise the Mac's clock carries on from where it stopped (it lags by
+  the time the Pi was off; set it in the Date & Time control panel).
+- Mac OS writes its settings to NVRAM when you choose Shut Down or
+  Restart, so use those rather than switching off, as on a real Mac.
+
+Delete the file to start afresh (like zapping the PRAM). A damaged file
+(wrong size or checksum) is ignored.

@@ -107,6 +107,44 @@ boolean SaveSettings (const g3::MachineConfig &Config)
 	return Result == FR_OK && CloseResult == FR_OK && nWritten == nLength;
 }
 
+boolean LoadMachineState (g3::MachineState &State)
+{
+	char Path[64];
+	SdPath (Path, sizeof Path, G3_STATE_FILE);
+
+	FIL File;
+	if (f_open (&File, Path, FA_READ | FA_OPEN_EXISTING) != FR_OK)
+	{
+		return FALSE;
+	}
+	static u8 Buffer[g3::MachineState::kFileSize + 1];
+	UINT nRead = 0;
+	FRESULT Result = f_read (&File, Buffer, sizeof Buffer, &nRead);
+	f_close (&File);
+
+	return Result == FR_OK && State.decode (Buffer, nRead);
+}
+
+boolean SaveMachineState (const g3::MachineState &State)
+{
+	static u8 Buffer[g3::MachineState::kFileSize];
+	State.encode (Buffer);
+
+	char Path[64];
+	SdPath (Path, sizeof Path, G3_STATE_FILE);
+
+	FIL File;
+	if (f_open (&File, Path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	{
+		return FALSE;
+	}
+	UINT nWritten = 0;
+	FRESULT Result = f_write (&File, Buffer, sizeof Buffer, &nWritten);
+	FRESULT CloseResult = f_close (&File);
+
+	return Result == FR_OK && CloseResult == FR_OK && nWritten == sizeof Buffer;
+}
+
 void CreateSettingsFolders (void)
 {
 	char Path[64];

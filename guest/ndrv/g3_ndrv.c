@@ -12,9 +12,12 @@
  *   ch. 8  DriverDescription, DoDriverIO, command codes and kinds,
  *          IOCommandIsComplete;
  *   ch. 10 RegistryPropertyGet / RegistryPropertyGetSize;
+ *   ch. 11 SetInterruptTimer, CancelTimer, UpTime, DurationToAbsolute;
  *   ch. 12 AAPL,address;
  *   ch. 13 graphics driver control and status calls, their records and
- *          constants.
+ *          constants; the Video Services Library's interrupt services
+ *          (VSLNewInterruptService, VSLDoInterruptService,
+ *          VSLDisposeInterruptService, kVBLService 'vbl ').
  * Inside Macintosh: Devices — the CntrlParam layout (csCode at 26,
  * csParam at 28) and the Device Manager result codes. Record layouts use
  * Mac OS's 68K alignment (2-byte), as Apple's Video.h declares it
@@ -83,6 +86,13 @@ enum {
 extern struct cfm_tvector imp_IOCommandIsComplete;   /* DriverServicesLib */
 extern struct cfm_tvector imp_RegistryPropertyGetSize; /* NameRegistryLib */
 extern struct cfm_tvector imp_RegistryPropertyGet;     /* NameRegistryLib */
+extern struct cfm_tvector imp_SetInterruptTimer;       /* DriverServicesLib */
+extern struct cfm_tvector imp_CancelTimer;             /* DriverServicesLib */
+extern struct cfm_tvector imp_UpTime;                  /* DriverServicesLib */
+extern struct cfm_tvector imp_DurationToAbsolute;      /* DriverServicesLib */
+extern struct cfm_tvector imp_VSLNewInterruptService;  /* VideoServicesLib */
+extern struct cfm_tvector imp_VSLDoInterruptService;   /* VideoServicesLib */
+extern struct cfm_tvector imp_VSLDisposeInterruptService; /* VideoServicesLib */
 
 /* --- the driver description (chapter 8; 128 bytes, every field 4-aligned) -------- */
 struct DriverDescription {
@@ -167,6 +177,17 @@ static struct {
     u32 sync;                             /* SetSync state (bits 0-1) */
     u8 clut[256][3];                      /* as loaded into the hardware (gamma applied) */
     struct gamma gamma;
+    /* Vertical blanking: Mac OS moves the cursor and runs VBL tasks when the
+       driver signals its 'vbl ' service. The device has no VBL interrupt,
+       so a Driver Services timer stands in (chapter 1: "If the hardware
+       interrupt for vertical blanking is not provided, a time management
+       task may be installed"). */
+    u32 vbl_service;                      /* InterruptServiceId; 0 = none */
+    u32 vbl_timer[2];                     /* TimerID (room for 64 bits) */
+    u32 vbl_period[2];                    /* AbsoluteTime of kVblMs */
+    int vbl_running;                      /* the timer is armed */
+    int vbl_disabled;                     /* SetInterrupt csMode 1 */
+    struct cfm_tvector vbl_tv;            /* our handler, as Mac OS calls it */
 } g;
 
 static void hw_w(u32 reg, u32 v)
@@ -262,6 +283,63 @@ static int program_mode(u32 id, u32 depth_mode)
     return noErr;
 }
 
+/* --- vertical blanking --------------------------------------------------------------- */
+enum { kVblMs = 16, durationMillisecond = 1 };
+#define kVBLService 0x76626C20u /* 'vbl ' */
+
+/* AbsoluteTime is a 64-bit struct; Mac OS routines that return one take a
+   pointer to the result as a hidden first argument (r3). */
+static void vbl_arm(void);
+
+static long vbl_handler(void *p1, void *p2)  /* SecondaryInterruptHandler2 */
+{
+    (void)p1;
+    (void)p2;
+    g.vbl_running = 0;
+    if (!g.vbl_service)
+        return noErr;
+    if (!g.vbl_disabled)
+        cfm_call(&imp_VSLDoInterruptService, g.vbl_service);
+    vbl_arm();
+    return noErr;
+}
+
+static void vbl_arm(void)
+{
+    u32 now[2] = {0, 0};
+    cfm_call(&imp_UpTime, now);
+    u32 when[2];
+    when[1] = now[1] + g.vbl_period[1];
+    when[0] = now[0] + g.vbl_period[0] + (when[1] < now[1]);
+    g.vbl_tv.code = (unsigned long)vbl_handler;
+    g.vbl_tv.toc = 0;  /* our code doesn't use r2 */
+    if ((s32)cfm_call(&imp_SetInterruptTimer, when, &g.vbl_tv, 0, g.vbl_timer) == noErr)
+        g.vbl_running = 1;
+}
+
+static void vbl_start(const void *entry)
+{
+    u32 id = 0;
+    if ((s32)cfm_call(&imp_VSLNewInterruptService, entry, kVBLService, &id) != noErr || id == 0)
+        return;  /* Mac OS then works without VBL tasks, as before */
+    g.vbl_service = id;
+    cfm_call(&imp_DurationToAbsolute, g.vbl_period, (u32)(kVblMs * durationMillisecond));
+    vbl_arm();
+}
+
+static void vbl_stop(void)
+{
+    const u32 id = g.vbl_service;
+    g.vbl_service = 0;  /* a handler already running won't re-arm */
+    if (g.vbl_running) {
+        u32 remaining[2];
+        cfm_call(&imp_CancelTimer, g.vbl_timer[0], remaining);
+        g.vbl_running = 0;
+    }
+    if (id)
+        cfm_call(&imp_VSLDisposeInterruptService, id);
+}
+
 /* --- Name Registry ------------------------------------------------------------------- */
 /* Reads up to `max` 32-bit cells of a property; returns the count, or -1 if absent. */
 static s32 get_cells(const void *entry, const char *name, u32 *cells, u32 max)
@@ -333,6 +411,8 @@ static int initialize(const void *init_info)
     g.preferred_id = id;
     g.preferred_depth = depth;
     g.initialized = 1;
+    if (!g.vbl_service)
+        vbl_start(entry);
     return noErr;
 }
 
@@ -457,7 +537,10 @@ static int do_control(u32 code, u8 *rec)
         g.preferred_depth = ld16(rec, 0);
         return noErr;
     }
-    default:  /* Reset, KillIO, SetInterrupt, SetDefaultMode, cursor, power: not supported */
+    case cscSetInterrupt:  /* VDFlagRecord: csMode 0 = VBL interrupts on, 1 = off */
+        g.vbl_disabled = ld8(rec, 0) != 0;
+        return noErr;
+    default:  /* Reset, KillIO, SetDefaultMode, cursor, power: not supported */
         return controlErr;
     }
 }
@@ -592,7 +675,10 @@ static int do_status(u32 code, u8 *rec)
     case cscSupportsHardwareCursor:
         st8(rec, 0, 0);
         return noErr;
-    default:  /* GetInterrupt, GetDefaultMode, GetModeBaseAddress, gamma lists, power... */
+    case cscGetInterrupt:
+        st8(rec, 0, g.vbl_disabled ? 1 : 0);
+        return noErr;
+    default:  /* GetDefaultMode, GetModeBaseAddress, gamma lists, power... */
         return statusErr;
     }
 }
@@ -609,6 +695,7 @@ long DoDriverIO(u32 space_id, u32 command_id, void *contents, u32 code, u32 kind
         break;
     case kFinalizeCommand:
     case kSupersededCommand:
+        vbl_stop();
         if (g.initialized)
             hw_w(FB_ENABLE, 0);
         g.initialized = 0;

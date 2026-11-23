@@ -69,6 +69,7 @@ private:
 	void StopMac (void);
 	void RunSelfTest (void);
 	void RunMac (void);
+	void SaveMacState (boolean bForce);
 	static void DiscEjected (void *pContext, u32 nDrive);
 
 	// USB input test
@@ -138,6 +139,10 @@ private:
 	unsigned		m_nLastDrawTicks;
 	unsigned		m_nLastStatsTicks;
 	u64			m_nGuestMs;		// guest time run so far
+	g3::MachineState	m_SavedState;		// as last written to the SD card
+	g3::MachineState	m_CurrentState;		// scratch for comparing
+	boolean			m_bStateValid = FALSE;	// m_SavedState holds a state
+	unsigned		m_nLastStateTicks = 0;	// last check for changes
 
 	static CKernel		*s_pThis;
 };
