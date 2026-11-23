@@ -50,8 +50,8 @@ command -v "${PREFIX}g++" >/dev/null || {
 # shows (only the firmware's rainbow screen).
 KERNEL_MAX_MB=8
 
-echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400, kernel up to ${KERNEL_MAX_MB} MB)"
-(cd "$CIRCLE" && ./configure -r 4 -p "$PREFIX" --kernel-max-size "$KERNEL_MAX_MB" -f >/dev/null)
+echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400, multi-core, kernel up to ${KERNEL_MAX_MB} MB)"
+(cd "$CIRCLE" && ./configure -r 4 -p "$PREFIX" --kernel-max-size "$KERNEL_MAX_MB" --multicore -f >/dev/null)
 
 echo "==> Building Circle libraries"
 (cd "$CIRCLE" && MAKE="make -j$JOBS" ./makeall --nosample >/dev/null)

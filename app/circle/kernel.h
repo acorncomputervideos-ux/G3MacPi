@@ -14,6 +14,7 @@
 #include <circle/input/mouse.h>
 #include <circle/interrupt.h>
 #include <circle/koptions.h>
+#include <circle/multicore.h>
 #include <circle/logger.h>
 #include <circle/screen.h>
 #include <circle/serial.h>
@@ -30,6 +31,7 @@
 #include "platform/common/input_events.h"
 #include "mac_host.h"
 #include "platform/common/mac_session.h"
+#include "platform/common/screen_presenter.h"
 #include "settings.h"
 #include "teedevice.h"
 
@@ -38,6 +40,25 @@ enum TShutdownMode
 	ShutdownNone,
 	ShutdownHalt,
 	ShutdownReboot
+};
+
+// The second core draws the Mac's screen (ScreenPresenter); cores 2 and 3
+// are left idle.
+class CDrawCore : public CMultiCoreSupport
+{
+public:
+	CDrawCore (CMemorySystem *pMemorySystem) : CMultiCoreSupport (pMemorySystem) {}
+	void Setup (g3::ScreenPresenter *pPresenter, const g3::ScreenSurface &Surface)
+	{
+		m_pPresenter = pPresenter;
+		m_Surface = Surface;
+	}
+	void Run (unsigned nCore) override;
+	volatile boolean m_bStarted = FALSE;	// set by core 1 when it runs
+
+private:
+	g3::ScreenPresenter *m_pPresenter = 0;
+	g3::ScreenSurface m_Surface;
 };
 
 class CKernel
@@ -62,6 +83,10 @@ private:
 	// Settings menu (F12 switches between it and the log view)
 	void SetUpSettings (void);
 	void ShowMenu (boolean bShow);
+	void StartDrawCore (void);
+#ifdef G3_QEMU_DRAWTEST
+	void DrawTest (void);
+#endif
 	void HandleMenuKey (u8 ucUsage);
 
 	// The emulated Mac
@@ -143,6 +168,13 @@ private:
 	g3::MachineState	m_CurrentState;		// scratch for comparing
 	boolean			m_bStateValid = FALSE;	// m_SavedState holds a state
 	unsigned		m_nLastStateTicks = 0;	// last check for changes
+
+	// Drawing on core 1 (falls back to drawing here if it can't start).
+	CDrawCore		m_DrawCore;
+	g3::ScreenPresenter	*m_pPresenter = 0;
+	g3::ScreenFrame		m_Frame;
+	boolean			m_bDrawCore = FALSE;	// core 1 draws
+	void			ResumeDrawing (void);
 
 	static CKernel		*s_pThis;
 };

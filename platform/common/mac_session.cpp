@@ -8,6 +8,7 @@
 #include "core/machine/yosemite.h"
 #include "platform/common/hid_to_adb.h"
 #include "platform/common/machine_state.h"
+#include "platform/common/screen_presenter.h"
 
 namespace g3 {
 
@@ -254,6 +255,23 @@ void MacSession::screen(u32* pixels, u32 pitch_pixels)
 {
     if (m_ && m_->has_display())
         m_->display().convert(pixels, pitch_pixels);
+}
+
+void MacSession::screen_frame(ScreenFrame& f) const
+{
+    f.on = false;
+    if (!m_ || !m_->has_display())
+        return;
+    Framebuffer& fb = m_->display();
+    f.on = fb.enabled();
+    f.width = fb.width();
+    f.height = fb.height();
+    f.depth = fb.depth();
+    f.pitch = fb.pitch();
+    f.vram = fb.vram();
+    f.vram_size = fb.vram_size();
+    for (u32 i = 0; i < 256; ++i)
+        f.palette[i] = fb.palette(i);
 }
 
 } // namespace g3

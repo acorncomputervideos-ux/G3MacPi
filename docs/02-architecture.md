@@ -133,6 +133,22 @@ codes in `core/devices/macio/adb_keymap` — the core only sees neutral events.
 
 ### 3.7 Core assignment on the Pi 400
 
+Now (2026-11-24):
+
+| Core | Work |
+|---|---|
+| 0 | Circle kernel (interrupts, USB, SD, menu) and the **guest**: CPU, devices, scheduler |
+| 1 | Display: the Mac's video memory → HDMI, converted and scaled, changed rows only (`platform/common/screen_presenter`) |
+| 2, 3 | idle |
+
+The display hand-off: core 0 publishes a snapshot of the display (mode,
+video memory, palette) under a sequence lock and never waits; core 1
+renders about 60 times a second. Before the menu draws or the Mac stops,
+core 0 pauses core 1 and waits until it is outside its renderer. If core 1
+does not start, core 0 draws as before. docs/devlog/2026-11-19-macos921-cd.md.
+
+Planned:
+
 | Core | Work |
 |---|---|
 | 0 | Circle kernel: interrupts, USB, SD, network, config/debug UI |

@@ -25,6 +25,7 @@ namespace g3 {
 class YosemiteMachine;
 class BwFirmware;
 struct MachineState;
+struct ScreenFrame;
 
 // What a front end provides.
 class MacHost {
@@ -111,6 +112,9 @@ public:
     u32 screen_width() const;
     u32 screen_height() const;
     void screen(u32* pixels, u32 pitch_pixels);
+    // The display as a snapshot for ScreenPresenter (screen_presenter.h):
+    // mode, video memory and palette. f.on is false when there is none.
+    void screen_frame(ScreenFrame& f) const;
 
     YosemiteMachine* machine() { return m_; }   // for diagnostics and tests
     BwFirmware* firmware() { return fw_; }

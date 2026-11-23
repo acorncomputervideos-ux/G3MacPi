@@ -98,7 +98,8 @@ CKernel::CKernel (void)
 	m_bMacRunning (FALSE),
 	m_nLastDrawTicks (0),
 	m_nLastStatsTicks (0),
-	m_nGuestMs (0)
+	m_nGuestMs (0),
+	m_DrawCore (CMemorySystem::Get ())
 {
 	s_pThis = this;
 	m_ActLED.Blink (3);	// visible sign of life before the screen is up
@@ -153,10 +154,92 @@ boolean CKernel::Initialize (void)
 
 	if (bOK)
 	{
+#ifndef G3_QEMU_DRAWTEST	// QEMU's raspi4b has no Pi 4 USB controller
 		bOK = m_USBHCI.Initialize ();
+#endif
+	}
+
+	if (bOK)
+	{
+		StartDrawCore ();	// not fatal: without it, core 0 draws
 	}
 
 	return bOK;
+}
+
+// Core 1 draws the Mac's screen: the shadow copy of the drawn video memory
+// (8 MB, as much as the Mac's VRAM) and the presenter come from the high heap.
+void CKernel::StartDrawCore (void)
+{
+	CBcmFrameBuffer *pFrameBuffer = m_Screen.GetFrameBuffer ();
+	const u32 nShadow = 8u << 20;
+	u8 *pShadow = new (HEAP_HIGH) u8[nShadow];
+	if (pFrameBuffer == 0 || pShadow == 0)
+	{
+		return;
+	}
+	m_pPresenter = new (HEAP_HIGH) g3::ScreenPresenter (pShadow, nShadow);
+	if (m_pPresenter == 0)
+	{
+		return;
+	}
+	m_pPresenter->pause ();		// nothing to draw until the Mac runs
+	g3::ScreenSurface Surface;
+	Surface.base = (u8 *) (uintptr) pFrameBuffer->GetBuffer ();
+	Surface.width = pFrameBuffer->GetWidth ();
+	Surface.height = pFrameBuffer->GetHeight ();
+	Surface.pitch = pFrameBuffer->GetPitch ();
+	Surface.depth = pFrameBuffer->GetDepth ();
+	m_DrawCore.Setup (m_pPresenter, Surface);
+	if (!m_DrawCore.Initialize ())
+	{
+		m_Logger.Write (FromKernel, LogWarning, "Cannot start core 1: core 0 draws the screen");
+		return;
+	}
+	for (unsigned i = 0; i < 100 && !m_DrawCore.m_bStarted; i++)
+	{
+		CTimer::SimpleMsDelay (1);
+	}
+	m_bDrawCore = m_DrawCore.m_bStarted;
+	m_Logger.Write (FromKernel, LogNotice, "Screen drawing: %s",
+			m_bDrawCore ? "core 1" : "core 0 (core 1 did not start)");
+}
+
+// Core 1: draw about 60 times a second. Cores 2 and 3 return (they halt).
+void CDrawCore::Run (unsigned nCore)
+{
+	if (nCore != 1 || m_pPresenter == 0)
+	{
+		return;
+	}
+	m_bStarted = TRUE;
+	const u64 nPeriod = CLOCKHZ / 60;		// in system timer ticks (1 MHz)
+	u64 nNext = CTimer::GetClockTicks64 ();
+	for (;;)
+	{
+		m_pPresenter->render (m_Surface);
+		nNext += nPeriod;
+		u64 nNow = CTimer::GetClockTicks64 ();
+		if (nNow > nNext + nPeriod)	// fell behind: don't try to catch up
+		{
+			nNext = nNow;
+		}
+		while ((nNow = CTimer::GetClockTicks64 ()) < nNext)
+		{
+			asm volatile ("yield");
+		}
+	}
+}
+
+// Core 1 may draw again (the menu is gone): it redraws everything once.
+void CKernel::ResumeDrawing (void)
+{
+	if (m_bDrawCore && m_bMacRunning && !m_bMenuShown)
+	{
+		m_Session.screen_frame (m_Frame);
+		m_pPresenter->publish (m_Frame);
+		m_pPresenter->resume ();
+	}
 }
 
 void CKernel::ShowStartupScreen (void)
@@ -541,8 +624,13 @@ void CKernel::SetUpSettings (void)
 
 void CKernel::ShowMenu (boolean bShow)
 {
+	if (m_pPresenter != 0)
+	{
+		m_pPresenter->pause ();	// core 1 keeps off the screen while we write to it
+	}
 	m_bMenuShown = bShow;
-	m_LogTee.EnableFirst (!bShow);	// while the menu shows, the log goes to the UART only
+	// While the menu or the Mac shows, the log goes to the UART only.
+	m_LogTee.EnableFirst (!bShow && !m_bMacRunning);
 
 	static const char Clear[] = "\x1b[0m\x1b[H\x1b[J";
 	m_Screen.Write (Clear, sizeof Clear - 1);
@@ -558,6 +646,7 @@ void CKernel::ShowMenu (boolean bShow)
 		static const char Hide[] = "\x1b[?25l";
 		m_Screen.Write (Hide, sizeof Hide - 1);
 		m_nLastDrawTicks = 0;	// redraw the Mac's screen at once
+		ResumeDrawing ();
 	}
 	else
 	{
@@ -787,6 +876,10 @@ void CKernel::StopMac (void)
 {
 	if (m_bMacRunning)
 	{
+		if (m_pPresenter != 0)
+		{
+			m_pPresenter->pause ();	// before the Mac's video memory changes hands
+		}
 		SaveMacState (TRUE);
 		m_Session.stop ();	// closes (and flushes) the images
 		m_bMacRunning = FALSE;
@@ -825,7 +918,13 @@ void CKernel::RunMac (void)
 	}
 
 	unsigned nNow = m_Timer.GetTicks ();
-	if (nNow - m_nLastDrawTicks >= HZ / 25)		// up to 25 frames per second
+	if (m_bDrawCore)
+	{
+		// Core 1 draws; hand it the display's current state (cheap).
+		m_Session.screen_frame (m_Frame);
+		m_pPresenter->publish (m_Frame);
+	}
+	else if (nNow - m_nLastDrawTicks >= HZ / 25)	// up to 25 frames per second
 	{
 		DrawMacScreen (&m_Screen, m_Session, m_pPixels);
 		m_nLastDrawTicks = nNow;
@@ -845,8 +944,88 @@ void CKernel::RunMac (void)
 	}
 }
 
+#ifdef G3_QEMU_DRAWTEST
+// A test build for QEMU's raspi4b (tools/build-pi.sh is not involved: see
+// docs/devlog): core 0 plays the Mac, publishing a 320x240 picture at 8 bits
+// that changes every frame, with pause/resume cycles; core 1 draws it.
+// Results go to the log (UART); QEMU's screendump shows the picture.
+static u8 s_TestVram[800 * 600 * 4];
+
+void CKernel::DrawTest (void)
+{
+	if (!m_bDrawCore)
+	{
+		m_Logger.Write (FromKernel, LogError, "drawtest: core 1 is not drawing");
+		return;
+	}
+	g3::ScreenFrame &F = m_Frame;
+	F.on = TRUE;
+	F.width = 320;
+	F.height = 240;
+	F.depth = 8;
+	F.pitch = 320;
+	F.vram = s_TestVram;
+	F.vram_size = sizeof s_TestVram;
+	for (unsigned i = 0; i < 256; i++)
+	{
+		F.palette[i] = (i << 16) | ((255 - i) << 8) | 0x40;	// red rises, green falls
+	}
+	for (unsigned y = 0; y < 240; y++)
+	{
+		for (unsigned x = 0; x < 320; x++)
+		{
+			s_TestVram[y * 320 + x] = (u8) x;	// a horizontal gradient
+		}
+	}
+	m_pPresenter->publish (F);
+	m_pPresenter->resume ();
+	boolean bPauseOk = TRUE;
+	unsigned nPauses = 0;
+	for (unsigned nFrame = 0; nFrame < 300; nFrame++)
+	{
+		// A white square moving down the picture: about 20 rows change per frame.
+		const unsigned y0 = (nFrame * 2) % 220;
+		for (unsigned y = 0; y < 20; y++)
+		{
+			for (unsigned x = 100; x < 120; x++)
+			{
+				s_TestVram[(y0 + y) * 320 + x] = 255;
+			}
+		}
+		m_pPresenter->publish (F);
+		CTimer::SimpleMsDelay (20);
+		if (nFrame % 50 == 49)
+		{
+			m_pPresenter->pause ();
+			const u64 nRows = m_pPresenter->rows_redrawn ();
+			s_TestVram[0] ^= 0xFF;		// a change core 1 must not draw while paused
+			CTimer::SimpleMsDelay (100);
+			if (m_pPresenter->rows_redrawn () != nRows)
+			{
+				bPauseOk = FALSE;
+			}
+			m_pPresenter->resume ();
+			nPauses++;
+		}
+	}
+	CTimer::SimpleMsDelay (200);
+	m_Logger.Write (FromKernel, LogNotice, "drawtest: %u frames drawn, %u rows redrawn, %u rows skipped, "
+			"%u pauses %s", m_pPresenter->frames_rendered (), (unsigned) m_pPresenter->rows_redrawn (),
+			(unsigned) m_pPresenter->rows_skipped (), nPauses, bPauseOk ? "held" : "FAILED");
+	m_Logger.Write (FromKernel, LogNotice, "drawtest: done; holding the picture");
+	for (;;)
+	{
+		CTimer::SimpleMsDelay (1000);
+	}
+}
+#endif
+
 TShutdownMode CKernel::Run (void)
 {
+#ifdef G3_QEMU_DRAWTEST
+	LogHostInfo ();
+	DrawTest ();
+#endif
 	LogHostInfo ();
 	RunCoreSelfTest ();
 

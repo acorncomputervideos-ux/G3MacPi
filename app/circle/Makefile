@@ -30,6 +30,8 @@ WARNINGS = -Wall -Werror
 
 G3_GIT_REV := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 DEFINE	+= -DG3_GIT_REV=\"$(G3_GIT_REV)\"
+# Extra defines for test builds, e.g. G3_DEFINES=-DG3_QEMU_DRAWTEST (docs/devlog).
+DEFINE	+= $(G3_DEFINES)
 
 include $(CIRCLEHOME)/Rules.mk
 
