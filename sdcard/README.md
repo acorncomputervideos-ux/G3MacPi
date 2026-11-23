@@ -62,3 +62,12 @@ sound volume and other control-panel settings) alive on a battery. The Pi
 
 Delete the file to start afresh (like zapping the PRAM). A damaged file
 (wrong size or checksum) is ignored.
+
+## Speed: clock and temperature
+
+The emulator runs the Pi 400's ARM cores at full speed (1.8 GHz). Circle
+slows them to 600 MHz when the chip is hotter than `socmaxtemp`
+(`cmdline.txt`; Circle's default is 60 °C, G3MacPi sets 78, the most Circle
+allows; the Pi firmware itself protects the chip from 80 °C). The UART log
+shows the clock and temperature every 10 seconds and warns when the clock
+is reduced. `config.txt` has an optional overclock (2.0 GHz), commented out.

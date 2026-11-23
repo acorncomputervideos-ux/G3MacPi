@@ -936,9 +936,18 @@ void CKernel::RunMac (void)
 	}
 	if (nNow - m_nLastStatsTicks >= 10 * HZ)	// speed, to the log (UART)
 	{
-		m_Logger.Write (FromKernel, LogNotice, "Mac: %u ms guest time, %u ms real, %u M instructions",
+		const unsigned nClock = m_CPUThrottle.GetClockRate () / 1000000;
+		const unsigned nMaxClock = m_CPUThrottle.GetMaxClockRate () / 1000000;
+		m_Logger.Write (FromKernel, LogNotice, "Mac: %u ms guest time, %u ms real, %u M instructions; "
+				"ARM %u MHz, SoC %u C",
 				(unsigned) m_nGuestMs, (unsigned) ((nNow - m_nLastStatsTicks) * (1000 / HZ)),
-				(unsigned) (m_Session.instructions () / 1000000));
+				(unsigned) (m_Session.instructions () / 1000000), nClock,
+				m_CPUThrottle.GetTemperature ());
+		if (nClock < nMaxClock)
+		{
+			m_Logger.Write (FromKernel, LogWarning, "The ARM clock is reduced to %u MHz (max %u): "
+					"the SoC is too hot (socmaxtemp in cmdline.txt)", nClock, nMaxClock);
+		}
 		m_nGuestMs = 0;
 		m_nLastStatsTicks = nNow;
 	}
