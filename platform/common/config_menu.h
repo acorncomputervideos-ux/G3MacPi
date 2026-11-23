@@ -10,7 +10,9 @@
 //    available: the Blue & White G3 has none), start-up disk, screen size,
 //    colours, then "Save settings" and "Start the Mac" / "Resume".
 //  - Drive: type (none / hard disk / CD-ROM), image (file picker), eject,
-//    read-only (hard disks), back.
+//    read-only (hard disks), new blank disk (hard disks: Left/Right picks
+//    the size, Enter asks the front end to create it; Action::CreateDisk),
+//    back.
 //  - File picker: directories first, ".." to go up; Enter picks a file.
 //
 // Keys: Up/Down (and PageUp/PageDown/Home/End) move, Left/Right change a
@@ -64,7 +66,7 @@ public:
         char text[kRows][kCols + 1];
         Attr attr[kRows];
     };
-    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest };
+    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest, CreateDisk };
 
     // `disks_dir`/`rom_dir`: where the file pickers start (e.g. "/g3macpi/disks").
     ConfigMenu(const MachineConfig& config, DirectoryLister& lister, const char* disks_dir,
@@ -85,11 +87,30 @@ public:
     // The running Mac ejected the disc in `drive` itself: forget its image.
     void disc_ejected(u32 drive);
 
+    // Separate starting folders for CD images and hard-disk images (both
+    // default to disks_dir). New blank disks are made in the hard-disk folder.
+    void set_media_folders(const char* cd_dir, const char* hdd_dir)
+    {
+        cd_dir_ = cd_dir;
+        hdd_dir_ = hdd_dir;
+    }
+
+    // New blank hard disk (after Action::CreateDisk): the file to create,
+    // a free name in the hard-disk folder ("hd1.img", "hd2.img", ...), and its size.
+    // Sizes stay below 4 GB, the largest file FAT32 holds.
+    const char* new_disk_path() const { return new_disk_path_; }
+    u64 new_disk_bytes() const;
+    // The front end reports the result; on success the disk goes into the
+    // drive being edited (as a writable hard disk).
+    void disk_created(bool ok, const char* message);
+    static constexpr u32 kDiskSizes = 5;
+    static u32 disk_size_mb(u32 index);  // 256, 512, 1024, 2048, 4095
+
 private:
     enum class Page : u8 { Main, Drive, Files };
     enum MainItem : u8 { kRam, kRom, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kMode,
                          kDepth, kSave, kStart, kSelfTest, kMainItems };
-    enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kBack, kDriveItems };
+    enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
 
     Action key_main(u8 usage);
     Action key_drive(u8 usage);
@@ -104,6 +125,7 @@ private:
     void load_dir();
     Action pick_file();
     Action set_drive_image(const char* path);
+    Action request_new_disk();
     // A row: two spaces, `left`, and `right` starting at column `col`.
     void line(Screen& s, u32& row, Attr a, const char* left, const char* right = nullptr, u32 col = 26) const;
     bool restart_differs(u32 main_item) const;
@@ -112,6 +134,8 @@ private:
     DirectoryLister& lister_;
     const char* disks_dir_;
     const char* rom_dir_;
+    const char* cd_dir_;
+    const char* hdd_dir_;
     Page page_ = Page::Main;
     u32 sel_ = 0, drive_sel_ = 0, file_sel_ = 0;
     mutable u32 file_top_ = 0;  // first visible file (render scrolls)
@@ -126,6 +150,8 @@ private:
     u32 nfiles_ = 0;
     bool has_parent_ = false;  // ".." shown as the first entry
     bool dir_error_ = false;
+    u32 disk_size_ = 2;  // index into the sizes: 1 GB
+    char new_disk_path_[MachineConfig::kPathMax] = {};
 };
 
 } // namespace g3

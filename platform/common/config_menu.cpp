@@ -97,7 +97,7 @@ u32 cycle(u32 i, u32 n, int dir) { return static_cast<u32>(static_cast<int>(i + 
 
 ConfigMenu::ConfigMenu(const MachineConfig& config, DirectoryLister& lister, const char* disks_dir,
                        const char* rom_dir)
-    : cfg_(config), running_cfg_(config), lister_(lister), disks_dir_(disks_dir), rom_dir_(rom_dir)
+    : cfg_(config), running_cfg_(config), lister_(lister), disks_dir_(disks_dir), rom_dir_(rom_dir), cd_dir_(disks_dir), hdd_dir_(disks_dir)
 {
 }
 
@@ -193,7 +193,7 @@ bool ConfigMenu::drive_enabled(u32 i) const
     const auto& d = cfg_.drive[drive_];
     if (i == kImage) return d.type != DriveType::None;
     if (i == kEject) return d.type != DriveType::None && d.image[0] != 0;
-    if (i == kReadOnly) return d.type == DriveType::Disk;
+    if (i == kReadOnly || i == kNewDisk) return d.type == DriveType::Disk;
     return true;
 }
 
@@ -291,6 +291,8 @@ ConfigMenu::Action ConfigMenu::key_drive(u8 usage)
         }
         if (drive_sel_ == kEject)
             return set_drive_image("");
+        if (drive_sel_ == kNewDisk)
+            return request_new_disk();
         change_drive(drive_sel_, 1);
         return Action::None;
     default:
@@ -312,10 +314,85 @@ void ConfigMenu::change_drive(u32 item, int dir)
         d.read_only = d.type == DriveType::CdRom;
     } else if (item == kReadOnly && d.type == DriveType::Disk) {
         d.read_only = !d.read_only;
+    } else if (item == kNewDisk && d.type == DriveType::Disk) {
+        disk_size_ = cycle(disk_size_, kDiskSizes, dir);
+        return;  // only the size to create changed, not the settings
     } else {
         return;
     }
     dirty_ = true;
+}
+
+u32 ConfigMenu::disk_size_mb(u32 index)
+{
+    static const u32 kSizes[kDiskSizes] = {256, 512, 1024, 2048, 4095};
+    return kSizes[index < kDiskSizes ? index : 0];
+}
+
+u64 ConfigMenu::new_disk_bytes() const { return static_cast<u64>(disk_size_mb(disk_size_)) << 20; }
+
+// A free name in disks_dir: hd1.img, hd2.img, ... (case-insensitive check,
+// FAT names are). Nothing is created here: the front end does that.
+ConfigMenu::Action ConfigMenu::request_new_disk()
+{
+    s32 n = lister_.list(hdd_dir_, files_, kMaxFiles);
+    if (n < 0) {
+        set_status("The hard-disk folder cannot be read.");
+        return Action::None;
+    }
+    char name[16];
+    for (u32 k = 1; k < 1000; ++k) {
+        char num[8];
+        u32 len = 0;
+        for (u32 v = k; v; v /= 10)
+            num[len++] = static_cast<char>('0' + v % 10);
+        u32 j = 0;
+        name[j++] = 'h';
+        name[j++] = 'd';
+        while (len)
+            name[j++] = num[--len];
+        name[j++] = '.';
+        name[j++] = 'i';
+        name[j++] = 'm';
+        name[j++] = 'g';
+        name[j] = 0;
+        bool used = false;
+        for (s32 i = 0; i < n && !used; ++i) {
+            const char* a = files_[i].name;
+            const char* b = name;
+            while (*a && *b && (*a | 0x20) == (*b | 0x20)) {
+                ++a;
+                ++b;
+            }
+            used = *a == 0 && *b == 0;
+        }
+        if (used)
+            continue;
+        scopy(new_disk_path_, sizeof new_disk_path_, hdd_dir_);
+        scat(new_disk_path_, sizeof new_disk_path_, "/");
+        scat(new_disk_path_, sizeof new_disk_path_, name);
+        set_status("Creating the disk...");
+        return Action::CreateDisk;
+    }
+    set_status("No free disk name (hd1.img ... hd999.img all exist).");
+    return Action::None;
+}
+
+void ConfigMenu::disk_created(bool ok, const char* message)
+{
+    if (!ok) {
+        set_status(message && message[0] ? message : "The disk could not be created.");
+        return;
+    }
+    auto& d = cfg_.drive[drive_];
+    d.type = DriveType::Disk;
+    d.read_only = false;
+    set_drive_image(new_disk_path_);
+    char buf[kCols + 1];
+    scopy(buf, sizeof buf, "Created ");
+    scat(buf, sizeof buf, new_disk_path_);
+    scat(buf, sizeof buf, ": initialise it in Mac OS with Drive Setup.");
+    set_status(message && message[0] ? message : buf);
 }
 
 ConfigMenu::Action ConfigMenu::set_drive_image(const char* path)
@@ -348,7 +425,8 @@ void ConfigMenu::open_files(bool rom)
         scopy(dir_, sizeof dir_, current);
         dir_[base_name(current) - current - 1] = 0;
     } else {
-        scopy(dir_, sizeof dir_, rom ? rom_dir_ : disks_dir_);
+        scopy(dir_, sizeof dir_,
+              rom ? rom_dir_ : cfg_.drive[drive_].type == DriveType::CdRom ? cd_dir_ : hdd_dir_);
     }
     page_ = Page::Files;
     load_dir();
@@ -553,6 +631,21 @@ void ConfigMenu::render(Screen& s) const
                 line(s, row, a, d.type == DriveType::CdRom ? "Eject disc" : "Remove image");
             } else if (i == kReadOnly) {
                 line(s, row, a, "Read-only", d.type == DriveType::CdRom ? "yes (CD-ROM)" : d.read_only ? "yes" : "no");
+            } else if (i == kNewDisk) {
+                const u32 mb = disk_size_mb(disk_size_);
+                char size[32];
+                u32 j = 0;
+                char num[8];
+                u32 len = 0;
+                const u32 v0 = mb >= 1024 ? (mb + 1) / 1024 : mb;
+                for (u32 v = v0; v; v /= 10)
+                    num[len++] = static_cast<char>('0' + v % 10);
+                while (len)
+                    size[j++] = num[--len];
+                size[j] = 0;
+                scat(size, sizeof size, mb >= 1024 ? " GB" : " MB");
+                scat(size, sizeof size, "  (Left/Right: size, Enter: create)");
+                line(s, row, a, "New blank disk", size);
             } else {
                 ++row;
                 line(s, row, a, "Back");

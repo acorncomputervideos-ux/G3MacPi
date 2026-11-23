@@ -25,7 +25,9 @@ menu and the log view; Ctrl+Alt+Delete reboots). On first start it creates:
 | Folder / file | Put there |
 |---|---|
 | `/g3macpi/rom/` | the Mac OS ROM file (from your own Mac OS 9 install) |
-| `/g3macpi/disks/` | CD images (`.iso`, `.toast`, `.cdr`) and hard-disk images |
+| `/g3macpi/cd/` | CD images (`.iso`, `.toast`, `.cdr`); the file picker starts here for CD-ROM drives |
+| `/g3macpi/hdd/` | hard-disk images; the picker starts here for hard disks, and new blank disks are made here |
+| `/g3macpi/disks/` | any images (kept for older setups; still usable from the picker) |
 | `/g3macpi/g3macpi.ini` | written by "Save settings" (docs/machine-config.md) |
 | `/g3macpi/machine.state` | the Mac's clock, NVRAM and PRAM, kept between runs (see below) |
 
@@ -71,3 +73,13 @@ slows them to 600 MHz when the chip is hotter than `socmaxtemp`
 allows; the Pi firmware itself protects the chip from 80 °C). The UART log
 shows the clock and temperature every 10 seconds and warns when the clock
 is reduced. `config.txt` has an optional overclock (2.0 GHz), commented out.
+
+## A new hard disk
+
+In the menu, open a drive position, set Type to Hard disk, then go to
+"New blank disk": Left/Right picks the size (256 MB to 4 GB; FAT32 files
+can't reach 4 GB), Enter creates `/g3macpi/hdd/hdN.img` and puts it in the
+drive. The disk is blank: start the Mac from the Mac OS CD, open Drive
+Setup (in the CD's Utilities folder), initialise the disk, then install
+Mac OS on it. (Drive Setup writes Apple's disk driver onto the disk; Mac
+OS doesn't mount an ATA disk without it.)

@@ -19,8 +19,10 @@
 
 #define G3_SD_DRIVE		"SD:"
 #define G3_CONFIG_FILE		"/g3macpi/g3macpi.ini"
-#define G3_DISKS_DIR		"/g3macpi/disks"
-#define G3_ROM_DIR		"/g3macpi/rom"
+#define G3_DISKS_DIR		"/g3macpi/disks"	// any images (kept for older setups)
+#define G3_ROM_DIR		"/g3macpi/rom"		// the Mac OS ROM file
+#define G3_CD_DIR		"/g3macpi/cd"		// CD images
+#define G3_HDD_DIR		"/g3macpi/hdd"		// hard-disk images (new blank disks go here)
 #define G3_STATE_FILE		"/g3macpi/machine.state"	// clock, NVRAM, PRAM
 
 class CFatFsLister : public g3::DirectoryLister
@@ -42,9 +44,15 @@ boolean SaveSettings (const g3::MachineConfig &Config);
 boolean LoadMachineState (g3::MachineState &State);
 boolean SaveMachineState (const g3::MachineState &State);
 
-// Creates /g3macpi/disks and /g3macpi/rom if missing, so the user knows
-// where to put images.
+// Creates the folders (/g3macpi/rom, cd, hdd, disks) if missing, so the
+// user knows where to put files.
 void CreateSettingsFolders (void);
+
+// A new blank hard-disk image of nBytes at pPath (SD path): the space is
+// allocated and the first megabyte zeroed, so Mac OS sees an uninitialised
+// disk (Drive Setup then initialises it). FALSE with a message on failure;
+// a partly made file is removed.
+boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage);
 
 // Draws the menu's screen (ANSI sequences understood by CScreenDevice).
 void DrawSettings (CDevice *pScreen, const g3::ConfigMenu::Screen &Screen);

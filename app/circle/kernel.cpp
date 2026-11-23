@@ -614,6 +614,7 @@ void CKernel::SetUpSettings (void)
 	}
 
 	m_pMenu = new g3::ConfigMenu (Config, m_Lister, G3_DISKS_DIR, G3_ROM_DIR);
+	m_pMenu->set_media_folders (G3_CD_DIR, G3_HDD_DIR);
 	if (!m_bSDMounted)
 	{
 		m_pMenu->set_status ("No SD card file system: settings cannot be saved.");
@@ -703,6 +704,24 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 	case g3::ConfigMenu::Action::SelfTest:
 		RunSelfTest ();
 		break;
+
+	case g3::ConfigMenu::Action::CreateDisk: {
+		// Show "Creating the disk..." first: allocating a few GB takes a while.
+		g3::ConfigMenu::Screen Screen;
+		m_pMenu->render (Screen);
+		DrawSettings (&m_Screen, Screen);
+		const char *pMessage = "";
+		const boolean bOK = m_bSDMounted
+				    && CreateBlankDisk (m_pMenu->new_disk_path (), m_pMenu->new_disk_bytes (), &pMessage);
+		if (!m_bSDMounted)
+		{
+			pMessage = "No SD card file system.";
+		}
+		m_Logger.Write (FromKernel, bOK ? LogNotice : LogWarning, "New disk %s (%u MB): %s",
+				m_pMenu->new_disk_path (), (unsigned) (m_pMenu->new_disk_bytes () >> 20),
+				bOK ? "created" : pMessage);
+		m_pMenu->disk_created (bOK, bOK ? 0 : pMessage);
+		break; }
 
 	case g3::ConfigMenu::Action::None:
 		break;

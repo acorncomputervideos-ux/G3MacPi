@@ -52,6 +52,9 @@ Up/Down move, Left/Right change a value, Enter opens a drive page or a
 file picker, Esc goes back (on the main page: start or resume).
 
 A drive page sets the type, picks the image (a file browser over the SD
-card, folders first), ejects it and sets read-only. While the Mac runs,
+card, folders first; it starts in `/g3macpi/cd` for CD-ROM drives and
+`/g3macpi/hdd` for hard disks), ejects it, sets read-only, and for hard
+disks makes a new blank disk image ("New blank disk": 256 MB to 4 GB,
+created as `/g3macpi/hdd/hdN.img`; sdcard/README.md). While the Mac runs,
 inserting or ejecting a CD takes effect at once; memory, ROM, screen,
 drive types and hard-disk images are marked `*` and apply at the next start.

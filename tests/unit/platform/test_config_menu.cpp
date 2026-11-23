@@ -367,3 +367,81 @@ TEST_CASE("platform/menu/disc_ejected_by_the_mac")
     menu.disc_ejected(2);                // not a CD-ROM drive: no effect
     CHECK(menu.config().drive[2].type == MachineConfig::DriveType::None);
 }
+
+TEST_CASE("platform/menu/new_blank_hard_disk")
+{
+    Rig r;
+    r.fs.dirs["/g3macpi/hdd"] = {{"HD1.IMG", false, 1u << 30}, {"notes.txt", false, 10}};
+    r.fs.dirs["/g3macpi/cd"] = {{"Mac OS 9.iso", false, 650u << 20}};
+    r.menu.set_media_folders("/g3macpi/cd", "/g3macpi/hdd");
+    r.press(kDown, 4);                                 // Hard disk bus master: no drive
+    r.press(kEnter);
+    // Only offered for hard disks.
+    r.press(kRight);                                   // Type -> Hard disk
+    CHECK(r.has("New blank disk"));
+    CHECK(r.has("1 GB"));
+    r.press(kDown, 3);                                 // Image, Read-only, New blank disk (Remove: no image)
+    CHECK(r.selected().find("New blank disk") != std::string::npos);
+    r.menu.mark_saved();
+    r.press(kRight);                                   // 2 GB
+    CHECK(r.has("2 GB"));
+    CHECK_EQ(r.menu.new_disk_bytes(), 2048ull << 20);
+    r.press(kRight, 2);                                // 4 GB (4095 MB: FAT32's limit), then wraps to 256 MB
+    CHECK(r.has("256 MB"));
+    CHECK_EQ(r.menu.new_disk_bytes(), 256ull << 20);
+    r.press(kLeft);                                    // back to 4 GB
+    CHECK_EQ(r.menu.new_disk_bytes(), 4095ull << 20);
+    CHECK(!r.menu.dirty());                            // picking a size is not a settings change
+    // Enter: a free name in the hard-disk folder (HD1.IMG exists, case-insensitively).
+    CHECK(r.press(kEnter) == ConfigMenu::Action::CreateDisk);
+    CHECK(std::string(r.menu.new_disk_path()) == "/g3macpi/hdd/hd2.img");
+    // Failure: reported, the drive is unchanged.
+    r.menu.disk_created(false, "Not enough space on the SD card.");
+    CHECK(r.has("Not enough space on the SD card."));
+    CHECK(r.menu.config().drive[2].image[0] == 0);
+    // Success: the disk is in the drive, writable, and the settings changed.
+    CHECK(r.press(kEnter) == ConfigMenu::Action::CreateDisk);
+    r.menu.disk_created(true, nullptr);
+    CHECK(std::strcmp(r.menu.config().drive[2].image, "/g3macpi/hdd/hd2.img") == 0);
+    CHECK(r.menu.config().drive[2].type == MachineConfig::DriveType::Disk);
+    CHECK(!r.menu.config().drive[2].read_only);
+    CHECK(r.menu.dirty());
+    CHECK(r.has("Drive Setup"));
+    // A CD-ROM drive: the item can't be selected.
+    r.press(kUp, 4);                                   // Read-only, Remove, Image, Type
+    CHECK(r.selected().find("Type") != std::string::npos);
+    r.press(kRight);                                   // CD-ROM
+    r.press(kDown, 3);                                 // Disc image, Read-only? no: Eject disabled too -> Back
+    CHECK(r.selected().find("New blank disk") == std::string::npos);
+    r.press(kUp, 3);
+    CHECK(r.selected().find("Type") != std::string::npos);
+    r.press(kDown);                                    // Disc image: the picker starts in the CD folder
+    r.press(kEnter);
+    CHECK(r.has("/g3macpi/cd"));
+    CHECK(r.has("Mac OS 9.iso"));
+}
+
+TEST_CASE("platform/menu/hard_disk_picker_starts_in_the_hdd_folder")
+{
+    Rig r;
+    r.fs.dirs["/g3macpi/hdd"] = {{"system.img", false, 1u << 30}};
+    r.menu.set_media_folders("/g3macpi/cd", "/g3macpi/hdd");
+    r.press(kDown, 4);
+    r.press(kEnter);
+    r.press(kRight);                                   // Hard disk
+    r.press(kDown);                                    // Disk image
+    r.press(kEnter);
+    CHECK(r.has("/g3macpi/hdd"));
+    r.press(kDown);                                    // past ".."
+    r.press(kEnter);                                   // system.img
+    CHECK(std::strcmp(r.menu.config().drive[2].image, "/g3macpi/hdd/system.img") == 0);
+    // No disks folder: creating a disk reports it.
+    Rig q;
+    q.menu.set_media_folders("/g3macpi/cd", "/nowhere");
+    q.press(kDown, 4);
+    q.press(kEnter);
+    q.press(kRight);
+    q.press(kDown, 3);
+    CHECK(q.press(kEnter) == ConfigMenu::Action::None);
+    CHECK(q.has("cannot be read"));
+}

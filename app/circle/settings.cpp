@@ -154,6 +154,59 @@ void CreateSettingsFolders (void)
 	f_mkdir (Path);
 	SdPath (Path, sizeof Path, G3_ROM_DIR);
 	f_mkdir (Path);
+	SdPath (Path, sizeof Path, G3_CD_DIR);
+	f_mkdir (Path);
+	SdPath (Path, sizeof Path, G3_HDD_DIR);
+	f_mkdir (Path);
+}
+
+boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
+{
+	*ppMessage = "";
+	char Path[g3::MachineConfig::kPathMax + 8];
+	SdPath (Path, sizeof Path, pPath);
+	if (nBytes >= 0x100000000ull)			// FAT32: files below 4 GB
+	{
+		*ppMessage = "Too big for the SD card's FAT32 file system (4 GB at most).";
+		return FALSE;
+	}
+
+	FATFS *pFileSystem;
+	DWORD nFreeClusters;
+	if (f_getfree (G3_SD_DRIVE, &nFreeClusters, &pFileSystem) == FR_OK
+	    && (u64) nFreeClusters * pFileSystem->csize * 512 < nBytes + (1u << 20))
+	{
+		*ppMessage = "Not enough free space on the SD card for that size.";
+		return FALSE;
+	}
+
+	FIL File;
+	if (f_open (&File, Path, FA_WRITE | FA_CREATE_NEW) != FR_OK)
+	{
+		*ppMessage = "Could not create the file (does it exist already?).";
+		return FALSE;
+	}
+	// Seeking past the end in write mode allocates the space (its old
+	// contents stay; FatFs doesn't write it). Then zero the first megabyte:
+	// no partition map, so Mac OS sees an uninitialised disk.
+	boolean bOK = f_lseek (&File, (FSIZE_t) nBytes) == FR_OK && f_tell (&File) == nBytes
+		      && f_lseek (&File, 0) == FR_OK;
+	static u8 Zero[64 * 1024];
+	for (u32 nDone = 0; bOK && nDone < (1u << 20); nDone += sizeof Zero)
+	{
+		UINT nWritten = 0;
+		bOK = f_write (&File, Zero, sizeof Zero, &nWritten) == FR_OK && nWritten == sizeof Zero;
+	}
+	if (f_close (&File) != FR_OK)
+	{
+		bOK = FALSE;
+	}
+	if (!bOK)
+	{
+		f_unlink (Path);
+		*ppMessage = "Writing the new disk failed (SD card full or read-only?).";
+	}
+	return bOK;
 }
 
 void DrawSettings (CDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
