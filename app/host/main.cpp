@@ -13,6 +13,9 @@
 // are read from that file at the start (if valid) and written at the end.
 // G3_INPUT=s:dx:dy:b,...: at guest second s, move the mouse by (dx, dy) in
 // steps of at most 2 pixels per 10 ms, then set the button to b (0/1).
+// G3_VIDEO=file.mp4: a video of the screen, one frame per 40 ms of guest
+// time (25 frames per guest second), each frame fitted into 1152x870; needs
+// ffmpeg on PATH.
 
 #include "platform/common/cpu_selftest.h"
 #include "tools/a64sim/a64_sim.h"
@@ -90,6 +93,36 @@ bool write_ppm(const char* path, MacSession& s)
     }
     std::fclose(f);
     return true;
+}
+
+// One video frame: the Mac's screen scaled to fit kVideoW x kVideoH (nearest
+// pixel, aspect kept, centred on black), as RGB24.
+constexpr u32 kVideoW = 1152, kVideoH = 870;
+void video_frame(MacSession& s, std::vector<u8>& out)
+{
+    out.assign(static_cast<size_t>(kVideoW) * kVideoH * 3, 0);
+    const u32 w = s.screen_width(), h = s.screen_height();
+    if (!s.screen_on() || w == 0 || h == 0)
+        return;
+    std::vector<u32> px(static_cast<size_t>(w) * h);
+    s.screen(px.data(), w);
+    // Largest size that fits, keeping the aspect ratio.
+    u32 ow = kVideoW, oh = static_cast<u32>(static_cast<u64>(h) * kVideoW / w);
+    if (oh > kVideoH) {
+        oh = kVideoH;
+        ow = static_cast<u32>(static_cast<u64>(w) * kVideoH / h);
+    }
+    const u32 x0 = (kVideoW - ow) / 2, y0 = (kVideoH - oh) / 2;
+    for (u32 y = 0; y < oh; ++y) {
+        const u32* src = px.data() + static_cast<size_t>(y * h / oh) * w;
+        u8* d = out.data() + (static_cast<size_t>(y0 + y) * kVideoW + x0) * 3;
+        for (u32 x = 0; x < ow; ++x) {
+            const u32 p = src[x * w / ow];
+            *d++ = static_cast<u8>(p >> 16);
+            *d++ = static_cast<u8>(p >> 8);
+            *d++ = static_cast<u8>(p);
+        }
+    }
 }
 
 } // namespace
@@ -194,6 +227,17 @@ int main(int argc, char** argv)
     size_t next_step = 0;
     s32 move_x = 0, move_y = 0;
     u32 button = 0;
+    FILE* video = nullptr;
+    std::vector<u8> frame;
+    if (const char* vp = std::getenv("G3_VIDEO")) {
+        const std::string cmd = std::string("ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgb24 -s ") +
+                                std::to_string(kVideoW) + "x" + std::to_string(kVideoH) +
+                                " -r 25 -i - -c:v libx264 -pix_fmt yuv420p -crf 20 '" + vp + "'";
+        video = popen(cmd.c_str(), "w");
+        if (!video)
+            std::fprintf(stderr, "cannot start ffmpeg\n");
+    }
+    u32 frames = 0;
     const u32 seconds = static_cast<u32>(std::strtoul(argv[2], nullptr, 10));
     const auto t0 = std::chrono::steady_clock::now();
     for (u32 s = 0; s < seconds && !session.halted() && !session.powered_off(); ++s) {
@@ -214,10 +258,19 @@ int main(int argc, char** argv)
                 session.mouse(dx, dy, button);
             }
             session.run(10000000000ull);  // 10 ms of guest time
+            if (video && slice % 4 == 3) {     // every 40 ms
+                video_frame(session, frame);
+                std::fwrite(frame.data(), 1, frame.size(), video);
+                ++frames;
+            }
         }
         const double real = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         std::printf("[g3_host] %u s guest, %.1f s real, screen %s\n", s + 1, real, session.screen_on() ? "on" : "off");
         std::fflush(stdout);
+    }
+    if (video) {
+        const int rc = pclose(video);
+        std::printf("[g3_host] video: %u frames, %s\n", frames, rc == 0 ? "written" : "ffmpeg FAILED");
     }
     if (session.halted())
         std::printf("[g3_host] the CPU halted (checkstop)\n");
