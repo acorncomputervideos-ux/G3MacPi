@@ -392,6 +392,24 @@ TEST_CASE("firmware/bw-tree/usb_placeholder_and_cuda_compatible")
     CHECK(std::strcmp(reinterpret_cast<const char*>(p), "cuda") == 0);
 }
 
+TEST_CASE("firmware/bw-tree/rtc_under_cuda")
+{
+    Built b;
+    REQUIRE(b.ok);
+    const DeviceTree& t = *b.t;
+    // As OpenBIOS: via-cuda/rtc with device_type and compatible "rtc"
+    // (Mac OS's UTCUtils searches for device_type "rtc").
+    REQUIRE(b.n.rtc != kNone);
+    CHECK_EQ(t.parent(b.n.rtc), b.n.cuda);
+    CHECK(std::strcmp(t.name(b.n.rtc), "rtc") == 0);
+    const u8* p = nullptr;
+    u32 len = 0;
+    REQUIRE(t.get_property(b.n.rtc, "device_type", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "rtc") == 0);
+    REQUIRE(t.get_property(b.n.rtc, "compatible", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "rtc") == 0);
+}
+
 TEST_CASE("firmware/bw-tree/serial_channels_have_slot_names")
 {
     Built b;

@@ -261,7 +261,7 @@ int main(int argc, char** argv)
             if (std::getenv("G3_ATAPI")) {
                 static u32 shown = 0;
                 cdrom[i].set_packet_trace([](void*, const u8* c, u32 sense) {
-                    if (shown++ >= 300)
+                    if (shown++ >= std::strtoul(std::getenv("G3_ATAPI"), nullptr, 0))
                         return;
                     std::printf("[atapi]");
                     for (u32 k = 0; k < 12; ++k)
@@ -382,6 +382,9 @@ int main(int argc, char** argv)
                 auto* x = static_cast<ExcLog*>(c);
                 ++x->count[(vector >> 8) & 31];
                 static const char* only = std::getenv("G3_EXC_VEC");  // e.g. "200": only that vector
+                static const u64 from = std::getenv("G3_EXC_FROM") ? std::strtoull(std::getenv("G3_EXC_FROM"), nullptr, 0) : 0;
+                if (x->cpu->instructions_executed() < from)
+                    return;
                 if (only && vector != std::strtoul(only, nullptr, 16))
                     return;
                 if (!x->left || (!only && !x->all && (vector == 0x300 || vector == 0x400 || vector == 0x900 ||
@@ -620,10 +623,14 @@ int main(int argc, char** argv)
                 if (const char* path = std::getenv("G3_REGSAT_PATH")) {
                     char* e = nullptr;
                     if (path[0] == 'p') {  // p<hex>: 32 bytes of physical memory, as 8 little- and big-endian words
-                        const u32 pa = static_cast<u32>(std::strtoul(path + 1, nullptr, 16));
-                        std::printf("[regs] phys %08X:", pa);
-                        for (u32 k = 0; k < 32 && pa + k + 4 <= r->ram_size; k += 4)
+                        // p<hex>[,len]: len bytes (hex, default 32), 32 per line
+                        const u32 pa = static_cast<u32>(std::strtoul(path + 1, &e, 16));
+                        const u32 n = e && *e == ',' ? static_cast<u32>(std::strtoul(e + 1, nullptr, 16)) : 32;
+                        for (u32 k = 0; k < n && pa + k + 4 <= r->ram_size; k += 4) {
+                            if (k % 32 == 0)
+                                std::printf("%s[regs] phys %08X:", k ? "\n" : "", pa + k);
                             std::printf(" %08X", load_be32(r->ram + pa + k));
+                        }
                         std::printf("\n");
                         return;
                     }
@@ -750,10 +757,44 @@ int main(int argc, char** argv)
                 char text[96];
                 if (!ppc::disassemble(s.pc, insn, text, sizeof text))
                     std::snprintf(text, sizeof text, ".long 0x%08X", insn);
-                std::printf("[it] %llu %08X %-32s r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X r11=%08X r12=%08X r24=%08X\n",
-                            static_cast<unsigned long long>(n), s.pc, text, s.gpr[3], s.gpr[4], s.gpr[5], s.gpr[6],
+                std::printf("[it] %llu %08X %-32s r1=%08X r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X r11=%08X r12=%08X r24=%08X\n",
+                            static_cast<unsigned long long>(n), s.pc, text, s.gpr[1], s.gpr[3], s.gpr[4], s.gpr[5], s.gpr[6],
                             s.gpr[7], s.gpr[8], s.gpr[9], s.gpr[10], s.gpr[11], s.gpr[12], s.gpr[24]);
             }, &it);
+        }
+        // G3_R3RET=from,to,lo,hi: each blr in [from, to) with r3 in [lo, hi]
+        // (signed, decimal), e.g. CFM error codes -2830,-2800 (first 60).
+        struct R3Ret { u64 from = 0, to = 0; s32 lo = 0, hi = 0; u32 left = 100000; ppc::Ppc750* cpu = nullptr; const u8* ram = nullptr; u32 ram_size = 0; PhysicalBus* bus = nullptr; };
+        static R3Ret r3r;
+        if (const char* rr = std::getenv("G3_R3RET")) {
+            char* e = nullptr;
+            r3r.from = std::strtoull(rr, &e, 0);
+            r3r.to = std::strtoull(e + 1, &e, 0);
+            r3r.lo = static_cast<s32>(std::strtol(e + 1, &e, 0));
+            r3r.hi = static_cast<s32>(std::strtol(e + 1, &e, 0));
+            r3r.cpu = &m.cpu();
+            r3r.ram = ram.data();
+            r3r.ram_size = static_cast<u32>(ram.size());
+            r3r.bus = &m.bus();
+            m.cpu().set_step_hook([](void* c, const ppc::CpuState& s) {
+                auto* t = static_cast<R3Ret*>(c);
+                const u64 n = t->cpu->instructions_executed();
+                const s32 v = static_cast<s32>(s.gpr[3]);
+                if (!t->left || n < t->from || n >= t->to || v < t->lo || v > t->hi)
+                    return;
+                u32 pa = 0, insn = 0;
+                if (!t->cpu->probe_translate(s.pc, false, pa))
+                    return;
+                if (pa + 4 <= t->ram_size)
+                    insn = load_be32(t->ram + pa);
+                else
+                    t->bus->read32(pa, insn);
+                if (insn != 0x4E800020u)
+                    return;
+                --t->left;
+                std::printf("[r3ret] %llu blr at %08X r3=%d lr=%08X r1=%08X r24=%08X\n", static_cast<unsigned long long>(n), s.pc, v,
+                            s.lr(), s.gpr[1], s.gpr[24]);
+            }, &r3r);
         }
         // G3_R1IN=lo,hi[,from]: the first 40 times r1 enters [lo, hi) (pc, lr, r24).
         struct R1In { u32 lo = 0, hi = 0; u64 from = 0; bool in = false; u32 left = 40; ppc::Ppc750* cpu = nullptr; };

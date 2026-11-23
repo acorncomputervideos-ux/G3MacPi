@@ -305,6 +305,16 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
     n.adb = t.add_node(n.cuda, "adb", nullptr);
     t.set_string(n.adb, "device_type", "adb");
     t.set_string(n.adb, "compatible", "adb");
+    // The real-time clock behind Cuda, as OpenBIOS gives it (name, device_type
+    // and compatible "rtc"). Mac OS 9.2.1's UTCUtils library (System 'nlib')
+    // searches the Name Registry for a device_type "rtc" entry in its
+    // initialisation and fails with nrNotFoundErr (-2539) without one; then
+    // ControlDefinitions, which imports UTCUtils, cannot be prepared, and the
+    // trap patches of the library that loaded it are left pointing into freed
+    // memory (the "bomb" at the end of start-up). docs/firmware/bw-device-tree.md.
+    n.rtc = t.add_node(n.cuda, "rtc", nullptr);
+    t.set_string(n.rtc, "device_type", "rtc");
+    t.set_string(n.rtc, "compatible", "rtc");
     const u32 ata_reg[2][4] = {{0x20000, 0x1000, 0x8B00, 0x100}, {0x21000, 0x1000, 0x8D00, 0x100}};
     const u32 ata_irq[2][2] = {{13, 2}, {14, 3}};
     for (u32 i = 0; i < 2; ++i) {
