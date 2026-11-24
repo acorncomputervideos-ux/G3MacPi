@@ -115,7 +115,7 @@ async function status() {
     const s = await (await fetch("/api/status")).json();
     const h = Math.floor(s.uptime_s / 3600), m = Math.floor(s.uptime_s / 60) % 60;
     const rows = [["Emulator", s.name + " " + s.version], ["The Mac", s.mac_state],
-      ["Speed", s.mips + " MIPS"], ["Pi running for", h + " h " + m + " min"],
+      ["Speed", s.mips + " MIPS"], ["CPU emulation", s.jit || "interpreter"], ["Pi running for", h + " h " + m + " min"],
       ["Pi address", s.ip || "(none yet)"], ["Pi Ethernet", s.pi_ethernet], ["Mac Ethernet", s.mac_ethernet],
       ["Sound", s.sound ? "on (HDMI)" : "off"], ["Mac network", s.network ? "on" : "off"], ["Pi connection", s.port || "(none)"],
       ["Password", s.password ? "set" : "none (set web_password in the settings)"]];

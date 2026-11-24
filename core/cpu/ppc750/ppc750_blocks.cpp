@@ -349,6 +349,8 @@ void Ppc750::run_blocks(u64 count)
             ++op;
         } while (op != stop && !exit_);
         done += static_cast<u64>(op - b->ops);
+        if (jit_code_)
+            jit_stats_.interpreted += static_cast<u64>(op - b->ops);
     }
 }
 

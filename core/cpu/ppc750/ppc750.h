@@ -144,7 +144,21 @@ public:
         u64 memory_slow = 0;  // generated loads/stores that took the handler
         u64 queued = 0, queue_full = 0, installed = 0, stale = 0;  // with a worker
         u64 chained = 0;      // blocks entered straight from the previous block's code
+        u64 interpreted = 0;  // instructions run_blocks ran without generated code
     };
+    // Profile of the JIT's handler calls (docs/cpu/jit-a64.md): generated
+    // code counts, per kind of instruction (jit_op_id), the instructions it
+    // hands to their handlers, and keeps one instruction word of each kind
+    // for naming it. Together with JitStats::interpreted and the
+    // instruction count this tells what share runs natively, and which
+    // instructions to compile natively next. Costs a few instructions per
+    // handler call; counted from set_jit() on.
+    static constexpr u32 kJitOpIds = 64 + 4 * 1024;
+    // Primary opcode; for opcodes 19, 31, 59 and 63 also the extended
+    // opcode (A-form floating point: its 5-bit one).
+    static u32 jit_op_id(u32 insn);
+    const u64* jit_profile() const { return jit_profile_; }
+    u32 jit_profile_sample(u32 id) const { return __atomic_load_n(&jit_sample_[id], __ATOMIC_RELAXED); }
     // Background compilation (jit_worker.h): blocks are compiled by `w`,
     // polled on another core, instead of here. After set_jit(); nullptr
     // compiles here again. Only while the CPU isn't running.
@@ -419,6 +433,9 @@ private:
     bool break_run_ = false;
     void* exception_ctx_ = nullptr;
     void* hle_ctx_ = nullptr;
+    // The JIT profile (last: large).
+    u64 jit_profile_[kJitOpIds] = {};
+    u32 jit_sample_[kJitOpIds] = {};  // written by whoever compiles (relaxed atomics)
 };
 
 // Instruction field helpers (PowerPC bit numbering, PEM Appendix A).

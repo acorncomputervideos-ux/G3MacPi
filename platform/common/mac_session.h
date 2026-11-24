@@ -90,6 +90,10 @@ public:
         // Compile generated code on another core: the front end then polls
         // jit_worker() there (core/cpu/ppc750/jit_worker.h).
         bool jit_background = false;
+        // Runs a block's generated code (Ppc750::set_jit); nullptr calls it
+        // directly (AArch64). On other hosts: the A64 simulator (tools/a64sim).
+        void (*jit_runner)(void* code, void* cpu, void* context) = nullptr;
+        void* jit_runner_context = nullptr;
     };
     // Builds and starts the Mac. `driver`: our display driver (PEF), which
     // Mac OS needs to draw; `unix_time`: the real-time clock at power-on;
@@ -121,6 +125,9 @@ public:
     u64 nominal_hz() const;
     bool block_cache_on() const;      // the CPU uses its decoded-block cache
     bool jit_on() const;              // ... and generated code
+    // With generated code: what share of the Mac's code runs natively and
+    // which instructions go to handlers most (jit_report.h); "" otherwise.
+    u32 jit_report(char* out, u32 cap) const;
     // The background compiler to poll on another core (Memory::jit_background),
     // or nullptr. Stop polling it before stop().
     ppc::JitWorker* jit_worker();

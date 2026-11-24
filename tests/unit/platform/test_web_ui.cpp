@@ -45,6 +45,7 @@ struct MemHost final : WebHost {
         net_switch::mac_address_for(m, s.mac_mac);
         s.sound = true;
         s.port = "WiFi: Home \"5G\" (connected)";
+        s.jit = "JIT: 70.0% native";
         s.drives[0] = {"CD-ROM (ATA 0)", "cdrom", cd_image.c_str()};
         s.drives[2] = {"Hard disk (ATA 1)", "disk", "/g3macpi/hdd/sys.img"};
     }
@@ -208,6 +209,7 @@ TEST_CASE("platform/web/page_status_and_errors")
     r = exchange(ui, req("GET", "/api/status"));
     CHECK_EQ(r.status, 200u);
     CHECK(r.body.find("\"mips\":\"12.3\"") != std::string::npos);
+    CHECK(r.body.find("\"jit\":\"JIT: 70.0% native\"") != std::string::npos);
     CHECK(r.body.find("\"port\":\"WiFi: Home \\\"5G\\\" (connected)\"") != std::string::npos);  // escaped
     CHECK(r.body.find("\"ip\":\"192.168.1.20\"") != std::string::npos);
     CHECK(r.body.find("\"pi_ethernet\":\"dc:a6:32:01:02:03\"") != std::string::npos);

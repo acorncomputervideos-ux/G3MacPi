@@ -485,6 +485,7 @@ void CKernel::WebStatus (void *pContext, g3::WebStatus &Out)
 	Out.sound = pThis->m_pMenu->config ().sound;
 	Out.network = pThis->m_pMenu->config ().network;
 	Out.port = pThis->m_Port;
+	Out.jit = pThis->m_bMacRunning ? pThis->m_JitReport : "";
 	const g3::MachineConfig &Config = pThis->m_pMenu->config ();
 	for (unsigned i = 0; i < g3::MachineConfig::kDrives && i < 4; i++)
 	{
@@ -1653,6 +1654,10 @@ void CKernel::RunMac (void)
 			m_nMipsX10 = (unsigned) ((nInstructions - m_nLastInstructions) / (100 * (u64) nMs));
 		}
 		m_nLastInstructions = nInstructions;
+		if (m_Session.jit_report (m_JitReport, sizeof m_JitReport) != 0)
+		{
+			m_Logger.Write (FromKernel, LogNotice, "Mac: %s", m_JitReport);
+		}
 		m_nGuestMs = 0;
 		m_nLastStatsTicks = nNow;
 	}

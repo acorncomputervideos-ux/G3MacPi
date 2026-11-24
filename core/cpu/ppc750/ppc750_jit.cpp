@@ -36,6 +36,23 @@ namespace g3::ppc {
 
 using namespace a64;
 
+u32 Ppc750::jit_op_id(u32 insn)
+{
+    const u32 op = field::opcd(insn);
+    u32 group;
+    switch (op) {
+    case 19: group = 0; break;
+    case 31: group = 1; break;
+    case 59: group = 2; break;
+    case 63: group = 3; break;
+    default: return op;
+    }
+    u32 xo = field::xo10(insn);
+    if ((op == 59 || op == 63) && (xo & 0x10))
+        xo &= 0x1F;  // A-form: the extended opcode is bits 26-30 only
+    return 64 + group * 1024 + xo;
+}
+
 bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
 {
     jit_code_ = nullptr;
@@ -74,7 +91,7 @@ struct JitCompiler {
     u32 ram_off, ram_size_off, dtlb_off, tlb_on_off, slow_off;
     Ppc750::JitStats* st;  // compile-time counts (the worker keeps its own)
     // For chaining (set by jit_generate).
-    u32 break_off = 0, checkstop_off = 0, ext_off = 0, dec_off = 0, fetch_host_off = 0, fetch_page_off = 0,
+    u32 profile_off = 0, break_off = 0, checkstop_off = 0, ext_off = 0, dec_off = 0, fetch_host_off = 0, fetch_page_off = 0,
         fetch_msr_off = 0, fetch_pa_off = 0, limit_off = 0, chained_off = 0;
     BlockCache::Layout layout{};
     const u32* code_base = nullptr;
@@ -349,6 +366,15 @@ struct JitCompiler {
 
     void call_handler(u32 i, u32 count, const BlockOp& op, Assembler::Label& out)
     {
+        {   // the profile: ++jit_profile_[id]; one instruction word of the kind kept
+            const u32 id = Ppc750::jit_op_id(op.insn);
+            __atomic_store_n(&c.jit_sample_[id], op.insn, __ATOMIC_RELAXED);
+            u32 off = profile_off + 8 * id;
+            const Reg base = far(X19, off, 8);
+            a.ldr(true, X9, base, off);
+            a.add_imm(true, X9, X9, 1);
+            a.str(true, X9, base, off);
+        }
         a.mov(true, X0, X19);
         a.mov_imm32(X1, op.insn);
         a.mov_imm64(X16, reinterpret_cast<u64>(op.fn));
@@ -681,6 +707,7 @@ bool Ppc750::jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, Ji
     };
     JitCompiler jc{*this, a, off(&instr_count_), off(&exit_), off(&ram_), off(&ram_size_), off(&dtlb_[0]),
                    off(&tlb_enabled_), off(&jit_stats_.memory_slow), &st};
+    jc.profile_off = off(&jit_profile_[0]);
     jc.break_off = off(&break_run_);
     jc.checkstop_off = off(&checkstop_);
     jc.ext_off = off(&external_pending_);

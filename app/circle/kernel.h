@@ -160,6 +160,7 @@ private:
 	boolean			m_bUSBReady = FALSE;	// the USB host controller started
 	void			BootToMac (void);
 	unsigned		m_nMipsX10 = 0;	// the last measured emulation speed
+	char			m_JitReport[200] = {};	// the JIT's share and top handled kinds (every 10 s)
 	g3::GuestPacer		m_Pacer;	// the Mac's time follows real time
 	boolean			m_bPacerStarted = FALSE;
 	static u64 HostPs (void)	{ return CTimer::GetClockTicks64 () * 1000000u; }	// 1 MHz ticks

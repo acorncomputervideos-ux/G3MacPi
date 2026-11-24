@@ -104,6 +104,23 @@ another check, so it is kept as a cheap safeguard. The Mac OS ROM boot
 and RAM hash as the interpreter; run_blocks entered generated code 10 562
 times (it was about 3.9 × 10⁸ times without chaining).
 
+## Profile: what still goes to handlers
+
+Generated code counts each instruction it hands to a handler, per kind
+(`Ppc750::jit_op_id`: the primary opcode, plus the extended opcode for
+opcodes 19, 31, 59 and 63), and keeps one instruction word of each kind
+for its name. `JitStats::interpreted` counts what `run_blocks` ran
+without generated code (blocks whose code is not ready, the end of a
+budget). `platform/common/jit_report.h` turns this into one line:
+
+    JIT: 66.4% native, 33.6% handlers, 0.0% interpreted; most handled: mullw 32.9%, mtspr 0.7%
+
+The Pi writes it to the log every 10 s with the speed line, and the web
+page shows it under Status ("CPU emulation"); `g3_host` prints it every 10
+guest seconds (with `G3_JITSIM=1`: generated code on the simulator) and
+`g3_rom_probe` at the end. It costs four instructions per handler call.
+The kinds handled most are the ones to compile natively next.
+
 ## On the Pi (Circle)
 
 - **Executable memory:** Circle maps everything after `_etext` as not

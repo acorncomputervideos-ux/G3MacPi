@@ -19,6 +19,7 @@
 #include "tests/framework/g3test.h"
 #include "tests/unit/cpu/ppc_asm.h"
 #include "tools/a64sim/a64_sim.h"
+#include "platform/common/jit_report.h"
 
 #include <cstdio>
 #include <cstring>
@@ -1005,4 +1006,79 @@ BOTH(chaining_follows_an_msr_change)
     CHECK(same(a, c, "msr change", 0, 0));
     CHECK_EQ(c.cpu.state().gpr[3], 101u);
     CHECK_EQ(c.cpu.state().pc, 0x5008u);
+}
+
+TEST_CASE("cpu/jit/profile_counts_handler_calls")
+{
+    // jit_op_id: primary opcodes, and the extended ones where they matter.
+    CHECK_EQ(Ppc750::jit_op_id(addi(3, 3, 1)), 14u);
+    CHECK_EQ(Ppc750::jit_op_id(mtspr(9, 7)), 64u + 1024u + 467u);
+    CHECK_EQ(Ppc750::jit_op_id(rfi()), 64u + 50u);
+    CHECK(Ppc750::jit_op_id(0xFC00002Au) == 64u + 3u * 1024u + 21u);  // fadd: A-form, xo 21
+    CHECK(Ppc750::jit_op_id(0xFC2000AAu) == 64u + 3u * 1024u + 21u);  // with FRC bits: still fadd
+    CHECK(Ppc750::jit_op_id(0xEC00002Au) == 64u + 2u * 1024u + 21u);  // fadds
+    CHECK(Ppc750::jit_op_id(0xFC000090u) == 64u + 3u * 1024u + 72u);  // fmr: X-form
+    for (u32 insn : {0u, 0xFFFFFFFFu, 0x7FFFFFFFu, 0x4FFFFFFFu})
+        CHECK(Ppc750::jit_op_id(insn) < Ppc750::kJitOpIds);
+
+    // A loop whose body has one instruction generated code hands to its
+    // handler (mullw): the profile counts each pass, and keeps the word.
+    g_jit = true;
+    Machine c(4u << 20);
+    place(c, {
+        {0x5000, li(7, 50)},
+        {0x5004, mtspr(9, 7)},
+        {0x5008, mullw(3, 4, 5)},
+        {0x500C, addi(4, 4, 1)},
+        {0x5010, bdnz(-8)},
+        {0x5014, b(0)},
+    });
+    c.cpu.state().pc = 0x5000;
+    c.cpu.state().msr = msr::ME;
+    c.cpu.run(2 + 50 * 3);
+    g_jit = false;
+    const u32 id = Ppc750::jit_op_id(mullw(3, 4, 5));
+    // The first pass may run before its code exists (interpreted).
+    CHECK(c.cpu.jit_profile()[id] >= 49u);
+    CHECK(c.cpu.jit_profile()[id] + c.cpu.jit_stats().interpreted >= 50u);
+    CHECK_EQ(c.cpu.jit_profile_sample(id), mullw(3, 4, 5));
+    CHECK_EQ(c.cpu.jit_profile()[Ppc750::jit_op_id(addi(4, 4, 1))], 0u);  // native: not counted
+
+    // The report: shares add up; mullw is the most handled kind.
+    JitReport rep;
+    make_jit_report(c.cpu, rep);
+    CHECK_EQ(rep.total, c.cpu.instructions_executed());
+    CHECK_EQ(rep.native + rep.handlers + rep.interpreted, rep.total);
+    CHECK(rep.ntop >= 1);
+    CHECK(std::strcmp(rep.top[0].name, "mullw") == 0);
+    char line[200];
+    const u32 n = format_jit_report(rep, line, sizeof line);
+    CHECK_EQ(std::strlen(line), n);
+    std::printf("    %s\n", line);
+    CHECK(std::strncmp(line, "JIT: ", 5) == 0);
+    CHECK(std::strstr(line, "most handled: mullw ") != nullptr);
+    char tiny[8];
+    format_jit_report(rep, tiny, sizeof tiny);
+    CHECK_EQ(std::strlen(tiny), 7u);  // cut, still terminated
+}
+
+TEST_CASE("platform/jitreport/top_list_order")
+{
+    // Five kinds and more, in a fresh CPU's profile? Build one by hand.
+    JitReport r;
+    r.total = 1000;
+    const char* names[] = {"a", "b", "c"};
+    for (u32 k = 0; k < 3; ++k) {
+        std::strcpy(r.top[k].name, names[k]);
+        r.top[k].count = 100 - 10 * k;
+    }
+    r.ntop = 3;
+    r.handlers = 270;
+    r.native = 730;
+    char line[200];
+    format_jit_report(r, line, sizeof line);
+    CHECK(std::strcmp(line, "JIT: 73.0% native, 27.0% handlers, 0.0% interpreted; most handled: a 10.0%, b 9.0%, c 8.0%") == 0);
+    JitReport empty;
+    CHECK_EQ(format_jit_report(empty, line, sizeof line), 0u);
+    CHECK_EQ(line[0], 0);
 }

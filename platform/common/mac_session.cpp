@@ -3,6 +3,7 @@
 // platform/common/mac_session.cpp — see mac_session.h.
 
 #include "platform/common/mac_session.h"
+#include "platform/common/jit_report.h"
 #include "platform/common/rom_from_disc.h"
 
 #include "core/machine/bw_firmware.h"
@@ -120,6 +121,8 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
         yc.jit_code = mem.code;
         yc.jit_code_words = mem.code_words;
         yc.jit_background = mem.jit_background;
+        yc.jit_runner = mem.jit_runner;
+        yc.jit_runner_context = mem.jit_runner_context;
     }
     yc.rtc_seconds_since_1904 = static_cast<u32>(unix_time + kUnixTo1904);
     m_ = new YosemiteMachine(yc);
@@ -257,6 +260,18 @@ void MacSession::run(u64 picoseconds)
 bool MacSession::halted() const { return m_ && m_->cpu().checkstopped(); }
 bool MacSession::block_cache_on() const { return m_ && m_->cpu().block_cache() != nullptr; }
 bool MacSession::jit_on() const { return m_ && m_->jit_enabled(); }
+
+u32 MacSession::jit_report(char* out, u32 cap) const
+{
+    if (cap == 0)
+        return 0;
+    out[0] = 0;
+    if (!jit_on())
+        return 0;
+    JitReport r;
+    make_jit_report(m_->cpu(), r);
+    return format_jit_report(r, out, cap);
+}
 ppc::JitWorker* MacSession::jit_worker() { return m_ ? m_->jit_worker() : nullptr; }
 
 u64 MacSession::instructions() const { return m_ ? m_->cpu().instructions_executed() : 0; }

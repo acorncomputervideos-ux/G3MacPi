@@ -196,6 +196,8 @@ void WebUi::json_status(HttpResponse& r)
     o.str(s.network ? "true" : "false");
     o.str(",\"port\":");
     o.jstr(s.port);
+    o.str(",\"jit\":");
+    o.jstr(s.jit);
     o.str(",\"drives\":[");
     for (u32 i = 0; i < 4; ++i) {
         if (i)

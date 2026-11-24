@@ -11,6 +11,7 @@
 
 #include "tools/a64sim/a64_sim.h"
 #include "core/cpu/ppc750/disasm.h"
+#include "platform/common/jit_report.h"
 #include "core/machine/bw_firmware.h"
 #include "core/machine/bw_nvram.h"
 #include "core/devices/ata/atapi_cdrom.h"
@@ -1012,6 +1013,13 @@ int main(int argc, char** argv)
                         static_cast<unsigned long long>(js.chained),
                         static_cast<unsigned long long>(js.native_ops), static_cast<unsigned long long>(js.helper_ops),
                         static_cast<unsigned long long>(js.resets), static_cast<unsigned long long>(js.memory_slow));
+        if (m.jit_enabled()) {
+            JitReport jr;
+            make_jit_report(m.cpu(), jr);
+            char line[200];
+            format_jit_report(jr, line, sizeof line);
+            std::printf("[probe] %s\n", line);
+        }
     }
     // Interrupt controller state at the end.
     std::printf("[pic] enabled=%016llX output=%d\n",

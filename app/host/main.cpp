@@ -15,7 +15,9 @@
 // steps of at most 2 pixels per 10 ms, then set the button to b (0/1).
 // G3_VIDEO=file.mp4: a video of the screen, one frame per 40 ms of guest
 // time (25 frames per guest second), each frame fitted into 1152x870; needs
-// ffmpeg on PATH.
+// ffmpeg on PATH. With jit = yes in the .ini: the block cache; G3_JITSIM=1
+// adds generated code on the A64 simulator (slow), and every 10 guest
+// seconds a line of the JIT's profile (platform/common/jit_report.h).
 
 #include "platform/common/cpu_selftest.h"
 #include "tools/a64sim/a64_sim.h"
@@ -236,6 +238,27 @@ int main(int argc, char** argv)
     mem.ram_size = static_cast<u32>(ram.size());
     mem.vram = vram.data();
     mem.vram_size = static_cast<u32>(vram.size());
+    // jit = yes: the block cache. G3_JITSIM=1 adds generated code, run on
+    // the A64 simulator unless on AArch64 (slow; for the JIT's profile).
+    static std::vector<u8> blocks;
+    static std::vector<u32> code;
+    static const void* code_range[2] = {};
+    if (config.jit) {
+        blocks.resize(8u << 20);
+        mem.blocks = blocks.data();
+        mem.blocks_size = static_cast<u32>(blocks.size());
+        if (std::getenv("G3_JITSIM")) {
+            code.resize(512 * 1024);  // 2 MB, as on the Pi
+            code_range[0] = code.data();
+            code_range[1] = code.data() + code.size();
+            mem.code = code.data();
+            mem.code_words = static_cast<u32>(code.size());
+#if !defined(__aarch64__)
+            mem.jit_runner = a64::simulate_jit_block;
+            mem.jit_runner_context = code_range;
+#endif
+        }
+    }
     HostFiles host;
     MacSession session;
     const char* state_path = std::getenv("G3_STATE");
@@ -572,6 +595,9 @@ int main(int argc, char** argv)
         last_instr = instr;
         std::printf("[g3_host] %u s guest, %.1f s real, screen %s, %.1f MIPS\n", s + 1, real,
                     session.screen_on() ? "on" : "off", mips);
+        char jit_line[200];
+        if ((s + 1) % 10 == 0 && session.jit_report(jit_line, sizeof jit_line))
+            std::printf("[g3_host] %s\n", jit_line);
         std::fflush(stdout);
     }
     if (video) {
