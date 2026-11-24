@@ -40,6 +40,7 @@ struct JitRequest {
     BlockCache::Block* block;  // where the code goes (identifies the block)
     u64 epoch;                 // the cache's flush count when requested
     u32 pa;
+    u32 gen;    // the page generation it was built under (its code depends on it)
     u32 count;
     BlockOp ops[BlockCache::kMaxOps];
 };

@@ -19,6 +19,7 @@
 #include "core/devices/ata/atapi_cdrom.h"
 #include "core/devices/macio/bmac.h"
 #include "core/devices/macio/davbus.h"
+#include "core/cpu/ppc750/ppc750.h"
 #include "core/machine/machine_config.h"
 #include "core/storage/block_device.h"
 
@@ -128,6 +129,7 @@ public:
     // With generated code: what share of the Mac's code runs natively and
     // which instructions go to handlers most (jit_report.h); "" otherwise.
     u32 jit_report(char* out, u32 cap) const;
+    const ppc::Ppc750::JitStats* jit_stats() const;  // nullptr without a running Mac
     // The background compiler to poll on another core (Memory::jit_background),
     // or nullptr. Stop polling it before stop().
     ppc::JitWorker* jit_worker();

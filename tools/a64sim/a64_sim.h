@@ -42,6 +42,9 @@ private:
 
 // Adapter for Ppc750::set_jit_runner: runs `code` with x0 = cpu.
 void simulate_jit_block(void* code, void* cpu, void* context);
+// AArch64 instructions simulate_jit_block has executed so far (all calls):
+// the generated code's own work, without the handlers it calls.
+u64 simulated_instructions();
 
 } // namespace g3::a64
 

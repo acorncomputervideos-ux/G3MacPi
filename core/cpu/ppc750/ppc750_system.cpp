@@ -122,6 +122,7 @@ void Ppc750::op_mtspr(u32 insn)
         if (time_hook_)
             time_hook_(time_ctx_);  // ticks up to now count against the old value
         break_run_ = true;          // the next expiry must be planned from the new one
+        exit_ = 1;                  // (generated code checks exit_ alone between blocks)
     }
     switch (n) {
     case spr::XER:

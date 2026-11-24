@@ -145,6 +145,7 @@ public:
         u64 queued = 0, queue_full = 0, installed = 0, stale = 0;  // with a worker
         u64 chained = 0;      // blocks entered straight from the previous block's code
         u64 interpreted = 0;  // instructions run_blocks ran without generated code
+        u64 code_words = 0;   // AArch64 instructions generated (compiled here)
     };
     // Profile of the JIT's handler calls (docs/cpu/jit-a64.md): generated
     // code counts, per kind of instruction (jit_op_id), the instructions it
@@ -360,8 +361,6 @@ private:
     };
     static constexpr u32 kTlbSize = 256;
     static constexpr u32 kTlbValid = 0x80000000u;
-    TlbEntry itlb_[kTlbSize];
-    TlbEntry dtlb_[kTlbSize];
     bool tlb_enabled_ = true;
 
     // --- system (ppc750_system.cpp)
@@ -416,6 +415,10 @@ private:
     // run_blocks' budget as an instruction count: generated code goes on
     // to the next block only if it fits (as run_blocks itself decides).
     u64 jit_limit_ = 0;
+    // The block cache's lookup data, for generated code (fixed after set_jit).
+    const u32* jit_table_ = nullptr;
+    const u8* jit_pool_ = nullptr;
+    const u32* jit_gen_ = nullptr;
     friend struct JitCompiler;
     // Direct RAM window, refreshed at the start of run().
     u8* ram_ = nullptr;
@@ -428,7 +431,6 @@ private:
     u32 watch_lo_ = 0, watch_hi_ = 0;
     CodeWatch watch_cb_ = nullptr;
     void* watch_ctx_ = nullptr;
-    CpuState s_;
     u32 pvr_;
     u32 next_pc_ = 0;        // set by execute(); exceptions/branches overwrite
     bool external_pending_ = false;
@@ -443,7 +445,14 @@ private:
     bool break_run_ = false;
     void* exception_ctx_ = nullptr;
     void* hle_ctx_ = nullptr;
-    // The JIT profile (last: large).
+    // The large members last, so that the small ones generated code reads
+    // between blocks (exit_, the fetch page, the interrupt inputs, the
+    // instruction count ...) sit within a single load's reach of the start
+    // of the object. Generated code reaches these through base registers.
+    CpuState s_;
+    TlbEntry itlb_[kTlbSize];
+    TlbEntry dtlb_[kTlbSize];
+    // The JIT profile.
     u64 jit_profile_[kJitOpIds] = {};
     u32 jit_sample_[kJitOpIds] = {};  // written by whoever compiles (relaxed atomics)
 };

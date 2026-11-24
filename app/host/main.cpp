@@ -600,6 +600,20 @@ int main(int argc, char** argv)
             std::printf("[g3_host] %s\n", jit_line);
         std::fflush(stdout);
     }
+#if !defined(__aarch64__)
+    if (mem.jit_runner) {
+        char jit_line[200];
+        session.jit_report(jit_line, sizeof jit_line);
+        std::printf("[g3_host] %s\n[g3_host] generated code: %llu AArch64 instructions executed (simulator) "
+                    "for %llu guest instructions\n", jit_line,
+                    static_cast<unsigned long long>(a64::simulated_instructions()),
+                    static_cast<unsigned long long>(session.instructions()));
+        if (const auto* js = session.jit_stats())
+            std::printf("[g3_host] blocks: %llu entered from run_blocks, %llu chained, %llu instructions run without code\n",
+                        static_cast<unsigned long long>(js->runs), static_cast<unsigned long long>(js->chained),
+                        static_cast<unsigned long long>(js->interpreted));
+    }
+#endif
     if (video) {
         const int rc = pclose(video);
         std::printf("[g3_host] video: %u frames, %s\n", frames, rc == 0 ? "written" : "ffmpeg FAILED");

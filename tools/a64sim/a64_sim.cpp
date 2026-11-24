@@ -285,10 +285,21 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
     return fail("too many steps", pc, lo);
 }
 
+namespace {
+u64 g_simulated = 0;
+} // namespace
+
+u64 simulated_instructions() { return g_simulated; }
+
 void simulate_jit_block(void* code, void* cpu, void* context)
 {
     auto* range = static_cast<const void* const*>(context);  // {code_lo, code_hi}
     static Simulator sim;
+    struct Count {
+        const Simulator& s;
+        u64 before;
+        ~Count() { g_simulated += s.executed() - before; }
+    } count{sim, sim.executed()};
     if (!sim.call(static_cast<const u32*>(code), reinterpret_cast<u64>(cpu), range[0], range[1])) {
         std::fprintf(stderr, "a64 simulator: %s at code word %u (0x%08X)\n", sim.error(), sim.error_pc_offset(),
                      static_cast<const u32*>(range[0])[sim.error_pc_offset()]);

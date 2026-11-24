@@ -1123,3 +1123,61 @@ BOTH(dozing_stops_until_an_interrupt)
     CHECK_EQ(c.cpu.state().gpr[4], 6u);      // woken six times
     CHECK(c.cpu.state().gpr[3] >= 6u);
 }
+
+TEST_CASE("cpu/jit/register_cache_keeps_values_in_registers")
+{
+    // A block of n "addi r3,r3,1": with r3 in a host register each one is
+    // one AArch64 instruction (it was three: load, add, store). The code
+    // for 17 of them is at most ~1.5 words per extra addi longer than for 1.
+    auto words_for = [](u32 n) {
+        g_jit = true;
+        Machine c(4u << 20);
+        std::vector<std::pair<u32, u32>> code;
+        for (u32 k = 0; k < n; ++k)
+            code.push_back({0x5000 + 4 * k, addi(3, 3, 1)});
+        code.push_back({0x5000 + 4 * n, b(0)});
+        for (auto& w : code)
+            store_be32(c.ram.data() + w.first, w.second);
+        c.cpu.state().pc = 0x5000;
+        c.cpu.state().msr = msr::ME;
+        c.cpu.run(n + 1);
+        g_jit = false;
+        CHECK_EQ(c.cpu.state().gpr[3], n);
+        return c.cpu.jit_stats().code_words;
+    };
+    const u64 one = words_for(1), many = words_for(17);
+    std::printf("    code words: 1 addi %llu, 17 addi %llu\n", static_cast<unsigned long long>(one),
+                static_cast<unsigned long long>(many));
+    CHECK(many > one);
+    CHECK(many - one <= 24u);  // 16 more addi: ~1 word each (48 without the cache)
+}
+
+BOTH(chained_static_target_slot_collision)
+{
+    // The block table is indexed by (pa >> 2) mod 2^15: blocks 128 KB apart
+    // share a slot. A block at 0x25010 fills the slot that 0x5010 would
+    // use; then code at 0x5000 jumps to 0x5010 (a target known when it is
+    // compiled). The chained jump must see that the slot holds another
+    // block and not run it.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25010, addi(4, 4, 100)},   // the block in the shared slot
+            {0x25014, b(-0x20018)},       // -> 0x4FFC
+            {0x4FFC, 0x60000000u},       // nop
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, b(0xC)},             // -> 0x5010: same page, known target
+            {0x5010, addi(5, 5, 1)},      // the real target (no block yet)
+            {0x5014, b(0)},
+        });
+        m->cpu.state().pc = 0x25010;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.run(100);  // long enough that 0x5000's block chains on (no budget stop)
+    }
+    CHECK(same(a, c, "slot collision", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 100u);
+    CHECK_EQ(c.cpu.state().gpr[3], 1u);
+    CHECK(c.cpu.state().gpr[5] >= 1u);
+    if (g_jit && !g_jit_bg)
+        CHECK_EQ(c.cpu.state().pc, 0x5014u);
+}

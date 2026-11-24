@@ -110,6 +110,56 @@ another check, so it is kept as a cheap safeguard. The Mac OS ROM boot
 and RAM hash as the interpreter; run_blocks entered generated code 10 562
 times (it was about 3.9 × 10⁸ times without chaining).
 
+## Register cache, and cheaper chaining (2026-11-24)
+
+Measured on the CD boot (6 guest seconds, 1.59 × 10⁹ instructions) with the
+generated code on the simulator, which counts the AArch64 instructions it
+executes (`g3_host` prints them with `G3_JITSIM=1`):
+
+| step | AArch64 instructions | returns to run_blocks |
+|---|---|---|
+| before | 54.6 × 10⁹ | 194 M (46% of block ends) |
+| register cache | about the same (+2%) | 194 M |
+| chaining across pages (inline ITLB) | 66.4 × 10⁹ (*) | 10.9 M |
+| small fields first in Ppc750 | 61.1 × 10⁹ | 10.5 M |
+| known targets, fields for pointers, one stop flag | 52.5 × 10⁹ | 10.3 M |
+
+(*) work run_blocks did in C++ (not counted by the simulator) moved into
+generated code. Every step ends the 6 s with the same screen, pixel for
+pixel, and the Mac OS ROM boot with the interpreter's registers and RAM.
+Mac OS's blocks are short (3.7 instructions on average), so the work
+between blocks dominated:
+
+- **Register cache.** The most used GPRs of a block live in x25-x28 (and
+  x22-x24 without loads/stores), loaded at first use, written back before
+  handler calls, a memory access's slow path and the block's end, and
+  reloaded after a handler. Hot instructions (addi, logic, rotates,
+  compares, loads/stores) work on them directly: a run of `addi r3,r3,1`
+  costs one AArch64 instruction each (three before;
+  `cpu/jit/register_cache_keeps_values_in_registers`). With blocks this
+  short it saves little yet; it pays off as blocks get longer.
+- **Chaining across pages.** On a fetch-page change the chain sequence now
+  does run_blocks' miss itself when its fast case applies (no code watch;
+  real mode or an ITLB hit; a page of RAM) and updates the fetch page.
+- **Layout.** The large members of Ppc750 (CpuState, the two TLBs, the
+  profile) come last, so the small fields read between blocks are within
+  one load's reach of x19 (they used to need 4-5 instructions each).
+- **Known targets.** For a final b/bc whose targets (taken, fall-through)
+  lie in the block's page, the next block is looked for at a fixed table
+  slot and checked against fixed values (its physical address; the
+  page's generation, which is this block's own as long as exit_ is clear):
+  no fetch-page work, no generation lookup.
+- `mtspr DEC` now sets `exit_` as well as `break_run_`, so one flag stops
+  chaining; table, pool, generation and code-buffer pointers are fields
+  (one load each, not a 64-bit constant).
+
+Sabotage runs: no write-back before a handler, no reload after one, none
+around the slow path, none at the block's end, x25 not saved, the ITLB
+tag check, the code-watch check, the RAM check (a crash), the known
+target's offset, address and generation checks, and `mtspr DEC` not
+setting `exit_`: all caught (the slot check by
+`chained_static_target_slot_collision`, added for it).
+
 ## Profile: what still goes to handlers
 
 Generated code counts each instruction it hands to a handler, per kind
