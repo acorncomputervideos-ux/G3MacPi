@@ -46,6 +46,15 @@ everything valid still applies. Keys and words are case-insensitive.
 
 ## The menu
 
+On the Pi the menu is drawn as a classic Mac desktop: a grey desktop, a
+white menu bar (the keys at its right), and a window with a pinstriped
+title bar holding the settings, the selected row inverted
+(`platform/common/menu_painter`). Its bold bitmap font was drawn for this
+project in the spirit of the classic Mac system font
+(`tools/font/make_ui_font.py`; Apple's fonts are not used). It is scaled
+by a whole factor to the screen (2x on a 1080p screen).
+`g3_menu_preview <prefix> [w h]` renders the pages to PPM files.
+
 Main page: Memory, ROM file, the four drive positions, Floppy (not
 available), Start-up disk, Screen, Colours, Save settings, Start/Resume.
 Up/Down move, Left/Right change a value, Enter opens a drive page or a

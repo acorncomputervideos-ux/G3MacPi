@@ -1208,6 +1208,18 @@ void CKernel::DrawTest (void)
 	m_Logger.Write (FromKernel, LogNotice, "drawtest: %u frames drawn, %u rows redrawn, %u rows skipped, "
 			"%u pauses %s", m_pPresenter->frames_rendered (), (unsigned) m_pPresenter->rows_redrawn (),
 			(unsigned) m_pPresenter->rows_skipped (), nPauses, bPauseOk ? "held" : "FAILED");
+	// Then the settings menu, painted on the real frame buffer (the log to
+	// the UART only from here, as while the menu shows).
+	m_pPresenter->pause ();
+	m_LogTee.EnableFirst (FALSE);
+	{
+		g3::MachineConfig Config;
+		g3::ConfigMenu Menu (Config, m_Lister, G3_DISKS_DIR, G3_ROM_DIR);
+		Menu.set_status ("QEMU test build: the menu as the Pi draws it");
+		g3::ConfigMenu::Screen Screen;
+		Menu.render (Screen);
+		DrawSettings (&m_Screen, Screen);
+	}
 	m_Logger.Write (FromKernel, LogNotice, "drawtest: done; holding the picture");
 	for (;;)
 	{

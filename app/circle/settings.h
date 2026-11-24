@@ -11,6 +11,7 @@
 #define G3_APP_CIRCLE_SETTINGS_H
 
 #include <circle/device.h>
+#include <circle/screen.h>
 #include <circle/types.h>
 
 #include "core/machine/machine_config.h"
@@ -54,7 +55,7 @@ void CreateSettingsFolders (void);
 // a partly made file is removed.
 boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage);
 
-// Draws the menu's screen (ANSI sequences understood by CScreenDevice).
-void DrawSettings (CDevice *pScreen, const g3::ConfigMenu::Screen &Screen);
+// Draws the menu's screen: a classic Mac desktop and window (menu_painter.h).
+void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen);
 
 #endif

@@ -3,6 +3,7 @@
 // app/circle/settings.cpp — see settings.h.
 
 #include "settings.h"
+#include "platform/common/menu_painter.h"
 
 #include <circle/string.h>
 #include <circle/util.h>
@@ -209,43 +210,22 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
 	return bOK;
 }
 
-void DrawSettings (CDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
+void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
 {
-	using Attr = g3::ConfigMenu::Attr;
-
-	// Hide the cursor, then each row at a fixed place: redraws do not scroll.
-	CString Out ("\x1b[?25l");
-	for (unsigned nRow = 0; nRow < g3::ConfigMenu::kRows; nRow++)
+	// The menu as a classic Mac desktop (platform/common/menu_painter.h),
+	// drawn straight into the frame buffer; the text cursor stays hidden.
+	static const char HideCursor[] = "\x1b[?25l";
+	pScreen->Write (HideCursor, sizeof HideCursor - 1);
+	CBcmFrameBuffer *pFrameBuffer = pScreen->GetFrameBuffer ();
+	if (pFrameBuffer == 0)
 	{
-		CString Line;
-		Line.Format ("\x1b[%u;1H", nRow + 1);
-		Out.Append (Line);
-
-		switch (Screen.attr[nRow])
-		{
-		case Attr::Title:	Out.Append ("\x1b[44m\x1b[97m");	break;	// white on blue
-		case Attr::Selected:	Out.Append ("\x1b[7m");			break;	// reverse
-		case Attr::Dim:		Out.Append ("\x1b[90m");		break;	// grey
-		case Attr::Status:	Out.Append ("\x1b[93m");		break;	// yellow
-		case Attr::Changed:	Out.Append ("\x1b[96m");		break;	// cyan
-		case Attr::Normal:	break;
-		}
-
-		// Pad to the full width so a highlight bar has a fixed length.
-		char Text[g3::ConfigMenu::kCols + 1];
-		unsigned n = 0;
-		for (; Screen.text[nRow][n] != '\0' && n < g3::ConfigMenu::kCols; n++)
-		{
-			Text[n] = Screen.text[nRow][n];
-		}
-		for (; n < g3::ConfigMenu::kCols; n++)
-		{
-			Text[n] = ' ';
-		}
-		Text[n] = '\0';
-		Out.Append (Text);
-		Out.Append ("\x1b[0m");
+		return;
 	}
-
-	pScreen->Write ((const char *) Out, Out.GetLength ());
+	g3::ScreenSurface Surface;
+	Surface.base = (u8 *) (uintptr) pFrameBuffer->GetBuffer ();
+	Surface.width = pFrameBuffer->GetWidth ();
+	Surface.height = pFrameBuffer->GetHeight ();
+	Surface.pitch = pFrameBuffer->GetPitch ();
+	Surface.depth = pFrameBuffer->GetDepth ();
+	g3::MenuPainter::paint (Screen, Surface);
 }

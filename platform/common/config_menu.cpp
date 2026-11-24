@@ -633,7 +633,7 @@ void ConfigMenu::render(Screen& s) const
                 line(s, row, a, "Read-only", d.type == DriveType::CdRom ? "yes (CD-ROM)" : d.read_only ? "yes" : "no");
             } else if (i == kNewDisk) {
                 const u32 mb = disk_size_mb(disk_size_);
-                char size[32];
+                char size[64];
                 u32 j = 0;
                 char num[8];
                 u32 len = 0;
