@@ -61,6 +61,7 @@ public:
 		const char *(*Password) (void *pContext);
 		void	(*Reboot) (void *pContext);
 		void	(*ConfigChanged) (void *pContext);
+		u32	(*InsertMedia) (void *pContext, u32 nDrive, const char *pPath);
 	};
 	CCircleWebHost (const TKernelHooks &Hooks) : m_Hooks (Hooks) {}
 
@@ -77,6 +78,10 @@ public:
 	const char *password (void) override		{ return (*m_Hooks.Password) (m_Hooks.pContext); }
 	void reboot_after_response (void) override	{ m_bReboot = TRUE; }
 	void config_changed (void) override		{ (*m_Hooks.ConfigChanged) (m_Hooks.pContext); }
+	u32 insert_media (u32 nDrive, const char *pPath) override
+	{
+		return (*m_Hooks.InsertMedia) (m_Hooks.pContext, nDrive, pPath);
+	}
 
 	boolean TakeReboot (void)	{ boolean b = m_bReboot; m_bReboot = FALSE; return b; }
 	void Reboot (void)		{ (*m_Hooks.Reboot) (m_Hooks.pContext); }

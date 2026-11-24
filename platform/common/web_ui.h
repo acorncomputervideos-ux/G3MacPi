@@ -19,6 +19,9 @@
 //                               only if it is between 64 KB and 32 MB and
 //                               contains kKernelMarker; the old image is kept
 //                               as kernel8-rpi4.bak
+//   POST /api/insert?drive=N[&dir=D&name=F]  put D/F into CD-ROM drive N
+//                               (0-3), or eject it without dir/name; at once
+//                               in a running Mac
 //   POST /api/reboot            restart the Pi (after the response)
 //
 // With a password set (web_password in the settings), every request needs
@@ -47,6 +50,9 @@ struct WebStatus {
     u8 host_mac[6] = {};
     u8 mac_mac[6] = {};
     bool sound = false, network = false;
+    // The four drive positions: "none", "cdrom" or "disk", and the image.
+    struct Drive { const char* label = ""; const char* type = "none"; const char* image = ""; };
+    Drive drives[4];
 };
 
 struct WebFileEntry {
@@ -73,6 +79,9 @@ public:
     virtual const char* password() = 0;  // "" for none
     virtual void reboot_after_response() = 0;
     virtual void config_changed() {}
+    // Put a disc image into CD-ROM drive `drive` ("" ejects). 0: done,
+    // 1: not a CD-ROM drive, 2: the image could not be opened.
+    virtual u32 insert_media(u32 drive, const char* path) { (void)drive; (void)path; return 1; }
 
 protected:
     ~WebHost() = default;

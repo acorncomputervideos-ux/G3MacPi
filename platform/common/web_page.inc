@@ -82,8 +82,8 @@ R"HTML(<!DOCTYPE html>
       <div class="row"><input type="file" id="ufile"><button onclick="upload()">Upload to this folder</button></div>
       <div class="bar"><div id="ubar"></div></div>
       <div class="msg" id="umsg"></div>
-      <p class="small">An image the running Mac is using can't be replaced or deleted: eject it in the
-         settings menu (F12) first.</p>
+      <p class="small">"Insert in CD drive" puts a disc into the Mac's CD-ROM drive at once. An image the
+         running Mac is using can't be replaced or deleted: eject it first (Status, or F12 on the Pi).</p>
     </div>
   </section>
 
@@ -100,6 +100,7 @@ R"HTML(<!DOCTYPE html>
 <script>
 "use strict";
 let dir = "cd";
+let cdDrive = -1;   // the first CD-ROM drive (from the status)
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function size(n) {
@@ -118,7 +119,12 @@ async function status() {
       ["Pi address", s.ip || "(none yet)"], ["Pi Ethernet", s.pi_ethernet], ["Mac Ethernet", s.mac_ethernet],
       ["Sound", s.sound ? "on (HDMI)" : "off"], ["Network", s.network ? "on" : "off"],
       ["Password", s.password ? "set" : "none (set web_password in the settings)"]];
-    $("status").innerHTML = rows.map(r => `<tr><td class="k">${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join("");
+    cdDrive = s.drives.findIndex(d => d.type === "cdrom");
+    const drives = s.drives.map((d, i) => d.type === "none" ? "" :
+      `<tr><td class="k">${esc(d.label)}</td><td>${d.type === "cdrom" ? "CD: " : "Disk: "}` +
+      `${esc(d.image ? d.image.split("/").pop() : "(empty)")}` +
+      `${d.type === "cdrom" && d.image ? ` <button onclick="eject(${i})">Eject</button>` : ""}</td></tr>`).join("");
+    $("status").innerHTML = rows.map(r => `<tr><td class="k">${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join("") + drives;
   } catch (e) { $("status").innerHTML = "<tr><td class='bad'>The Pi does not answer.</td></tr>"; }
 }
 
@@ -129,7 +135,19 @@ async function files() {
   if (!j.files.length) { $("files").innerHTML = `<tr><td class="small">${esc(j.dir)} is empty.</td></tr>`; return; }
   $("files").innerHTML = "<tr><th>Name</th><th>Size</th><th></th></tr>" + j.files.map(f =>
     `<tr><td>${esc(f.name)}${f.in_use ? " <b>(in use)</b>" : ""}</td><td>${size(f.size)}</td>` +
-    `<td>${f.in_use ? "" : `<button onclick="del('${encodeURIComponent(f.name)}')">Delete</button>`}</td></tr>`).join("");
+    `<td>${cdDrive >= 0 && !f.in_use ? `<button onclick="insert('${encodeURIComponent(f.name)}')">Insert in CD drive</button> ` : ""}` +
+    `${f.in_use ? "" : `<button onclick="del('${encodeURIComponent(f.name)}')">Delete</button>`}</td></tr>`).join("");
+}
+
+async function insert(name) {
+  const r = await fetch(`/api/insert?drive=${cdDrive}&dir=${dir}&name=${name}`, {method: "POST"});
+  msg($("umsg"), await r.text(), r.ok);
+  status(); files();
+}
+async function eject(drive) {
+  const r = await fetch(`/api/insert?drive=${drive}`, {method: "POST"});
+  msg($("umsg"), await r.text(), r.ok);
+  status(); files();
 }
 
 async function del(name) {
@@ -184,7 +202,7 @@ document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
 });
 setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString(); }, 1000);
 setInterval(status, 3000);
-status(); files(); loadCfg();
+status().then(files); loadCfg();
 </script>
 </body>
 </html>

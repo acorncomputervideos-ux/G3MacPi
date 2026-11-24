@@ -83,6 +83,11 @@ public:
     bool dirty() const { return dirty_; } // changed since the last Save
     void mark_saved() { dirty_ = false; }
     u32 media_changed_drive() const { return media_drive_; }
+    // A disc put in (path) or taken out ("") of a CD-ROM drive from outside
+    // the menu (the web interface): as choosing it in the drive page.
+    // MediaChanged when the running Mac must be told; None otherwise (also
+    // when the drive is not a CD-ROM drive: ok = false then).
+    Action insert_media(u32 drive, const char* path, bool& ok);
     void set_status(const char* message);  // one line under the menu (e.g. "Settings saved")
     // The running Mac ejected the disc in `drive` itself: forget its image.
     void disc_ejected(u32 drive);

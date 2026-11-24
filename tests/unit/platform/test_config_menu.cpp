@@ -455,3 +455,35 @@ TEST_CASE("platform/menu/hard_disk_picker_starts_in_the_hdd_folder")
     CHECK(q.press(kEnter) == ConfigMenu::Action::None);
     CHECK(q.has("cannot be read"));
 }
+
+TEST_CASE("platform/menu/insert_media_from_outside")
+{
+    // The web interface puts discs into CD-ROM drives through the menu.
+    Rig r;
+    REQUIRE(r.menu.config().drive[0].type == MachineConfig::DriveType::CdRom);
+    bool ok = false;
+    // Mac stopped: the setting changes, nothing to tell the Mac.
+    CHECK(r.menu.insert_media(0, "/g3macpi/cd/a.iso", ok) == ConfigMenu::Action::None);
+    CHECK(ok);
+    CHECK(std::strcmp(r.menu.config().drive[0].image, "/g3macpi/cd/a.iso") == 0);
+    CHECK(r.menu.dirty());
+    // Mac running: at once.
+    r.menu.set_running(true);
+    CHECK(r.menu.insert_media(0, "/g3macpi/cd/b.iso", ok) == ConfigMenu::Action::MediaChanged);
+    CHECK(ok);
+    CHECK_EQ(r.menu.media_changed_drive(), 0u);
+    CHECK(!r.menu.needs_restart());
+    CHECK(r.menu.insert_media(0, "", ok) == ConfigMenu::Action::MediaChanged);  // eject
+    CHECK(r.menu.config().drive[0].image[0] == 0);
+    // Not a CD-ROM drive: refused, unchanged.
+    for (u32 d = 1; d < MachineConfig::kDrives; ++d)
+        if (r.menu.config().drive[d].type != MachineConfig::DriveType::CdRom) {
+            char before[MachineConfig::kPathMax];
+            std::strcpy(before, r.menu.config().drive[d].image);
+            CHECK(r.menu.insert_media(d, "/g3macpi/cd/a.iso", ok) == ConfigMenu::Action::None);
+            CHECK(!ok);
+            CHECK(std::strcmp(r.menu.config().drive[d].image, before) == 0);
+        }
+    CHECK(r.menu.insert_media(9, "/x", ok) == ConfigMenu::Action::None);
+    CHECK(!ok);
+}

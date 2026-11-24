@@ -140,6 +140,7 @@ private:
 	static const char *WebPassword (void *pContext);
 	static void WebReboot (void *pContext);
 	static void WebConfigChanged (void *pContext);
+	static u32 WebInsertMedia (void *pContext, u32 nDrive, const char *pPath);
 	CNetSubSystem		*m_pNet = 0;
 	CPiNetPort		m_PiPort;
 	CCircleWebHost		*m_pWebHost = 0;

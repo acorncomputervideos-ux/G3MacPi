@@ -420,6 +420,19 @@ ConfigMenu::Action ConfigMenu::set_drive_image(const char* path)
     return Action::None;
 }
 
+ConfigMenu::Action ConfigMenu::insert_media(u32 drive, const char* path, bool& ok)
+{
+    ok = drive < MachineConfig::kDrives && cfg_.drive[drive].type == DriveType::CdRom;
+    if (!ok)
+        return Action::None;
+    const u32 saved = drive_;
+    drive_ = drive;
+    const Action a = set_drive_image(path);
+    drive_ = saved;
+    ok = seq(cfg_.drive[drive].image, path);
+    return a;
+}
+
 // --- file picker ---------------------------------------------------------------------
 
 void ConfigMenu::open_files(bool rom)

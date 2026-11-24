@@ -194,7 +194,19 @@ void WebUi::json_status(HttpResponse& r)
     o.str(s.sound ? "true" : "false");
     o.str(",\"network\":");
     o.str(s.network ? "true" : "false");
-    o.str(",\"password\":");
+    o.str(",\"drives\":[");
+    for (u32 i = 0; i < 4; ++i) {
+        if (i)
+            o.ch(',');
+        o.str("{\"label\":");
+        o.jstr(s.drives[i].label);
+        o.str(",\"type\":");
+        o.jstr(s.drives[i].type);
+        o.str(",\"image\":");
+        o.jstr(s.drives[i].image);
+        o.ch('}');
+    }
+    o.str("],\"password\":");
     o.str(host_.password()[0] ? "true" : "false");
     o.str("}");
     r.set(200, "application/json", out_);
@@ -343,6 +355,30 @@ bool WebUi::begin(const HttpRequest& req, HttpResponse& r)
         marker_found_ = false;
         body_ = Body::Update;
         return true;
+    }
+    if (seq(req.path, "/api/insert") && req.method == M::Post) {
+        char num[8], name[128];
+        if (!req.param("drive", num, sizeof num) || num[0] < '0' || num[0] > '3' || num[1]) {
+            text(r, 400, "Which drive (0-3)?");
+            return false;
+        }
+        target_[0] = 0;
+        if (req.param("name", name, sizeof name)) {
+            const char* dir = folder(req);
+            if (!dir || !valid_name(name)) {
+                text(r, 400, "Bad folder or file name.");
+                return false;
+            }
+            join(target_, sizeof target_, dir, name);
+        }
+        const u32 result = host_.insert_media(static_cast<u32>(num[0] - '0'), target_);
+        if (result == 1)
+            text(r, 409, "That drive is not a CD-ROM drive.");
+        else if (result == 2)
+            text(r, 404, "Could not open that image.");
+        else
+            text(r, 200, target_[0] ? "Inserted." : "Ejected.");
+        return false;
     }
     if (seq(req.path, "/api/reboot") && req.method == M::Post) {
         host_.reboot_after_response();

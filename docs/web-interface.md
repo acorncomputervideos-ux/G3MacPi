@@ -10,7 +10,9 @@ Pi has one from DHCP). One page, styled like the settings menu:
   with sizes; upload a file into one (with a progress bar) or delete one.
   An upload is written as `name.part` and renamed when complete, so an
   interrupted upload leaves nothing behind. Images the running Mac uses
-  can't be replaced or deleted.
+  can't be replaced or deleted. "Insert in CD drive" puts an image into
+  the first CD-ROM drive, at once in a running Mac (as the menu's drive
+  page does); the Status window lists the drives, with "Eject".
 - **Settings**: `g3macpi.ini` as text. It is checked line by line before
   it is saved (an invalid line is reported and nothing is written).
 - **Update the emulator**: upload a new `kernel8-rpi4.img`. It is accepted

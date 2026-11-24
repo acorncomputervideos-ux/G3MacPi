@@ -44,6 +44,8 @@ struct MemHost final : WebHost {
         std::memcpy(s.host_mac, m, 6);
         net_switch::mac_address_for(m, s.mac_mac);
         s.sound = true;
+        s.drives[0] = {"CD-ROM (ATA 0)", "cdrom", cd_image.c_str()};
+        s.drives[2] = {"Hard disk (ATA 1)", "disk", "/g3macpi/hdd/sys.img"};
     }
     bool read_file(const char* p, u8* buf, u32 cap, u32& len) override
     {
@@ -105,6 +107,17 @@ struct MemHost final : WebHost {
     }
     const char* password() override { return pw.c_str(); }
     void reboot_after_response() override { rebooted = true; }
+    // Drive 0 a CD-ROM drive, drive 2 a hard disk.
+    std::string cd_image = "/g3macpi/cd/old.iso";
+    u32 insert_media(u32 drive, const char* path) override
+    {
+        if (drive != 0)
+            return 1;
+        if (path[0] && !files.count(path))
+            return 2;
+        cd_image = path;
+        return 0;
+    }
     void config_changed() override { ++config_changes; }
 };
 
@@ -354,4 +367,27 @@ TEST_CASE("platform/net_switch/routes_and_addresses")
     std::memcpy(f, other, 6);
     CHECK_EQ(net_switch::route(f, 64, mac, host), 0u);
     CHECK_EQ(net_switch::route(f, 10, mac, host), 0u);
+}
+
+TEST_CASE("platform/web/insert_and_eject_discs")
+{
+    MemHost h;
+    WebUi ui(h);
+    h.files["/g3macpi/cd/Mac OS 9.iso"] = {1, 2, 3};
+    Reply r = exchange(ui, req("GET", "/api/status"));
+    CHECK(r.body.find("{\"label\":\"CD-ROM (ATA 0)\",\"type\":\"cdrom\",\"image\":\"/g3macpi/cd/old.iso\"}") !=
+          std::string::npos);
+    CHECK(r.body.find("\"type\":\"disk\"") != std::string::npos);
+    r = exchange(ui, req("POST", "/api/insert?drive=0&dir=cd&name=Mac%20OS%209.iso"));
+    CHECK_EQ(r.status, 200u);
+    CHECK(h.cd_image == "/g3macpi/cd/Mac OS 9.iso");
+    CHECK_EQ(exchange(ui, req("POST", "/api/insert?drive=0&dir=cd&name=missing.iso")).status, 404u);
+    CHECK(h.cd_image == "/g3macpi/cd/Mac OS 9.iso");
+    CHECK_EQ(exchange(ui, req("POST", "/api/insert?drive=2&dir=cd&name=Mac%20OS%209.iso")).status, 409u);
+    CHECK_EQ(exchange(ui, req("POST", "/api/insert?drive=7")).status, 400u);
+    CHECK_EQ(exchange(ui, req("POST", "/api/insert?drive=0&dir=cd&name=..")).status, 400u);
+    r = exchange(ui, req("POST", "/api/insert?drive=0"));  // eject
+    CHECK_EQ(r.status, 200u);
+    CHECK(r.body.find("Ejected") != std::string::npos);
+    CHECK(h.cd_image.empty());
 }

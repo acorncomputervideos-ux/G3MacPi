@@ -279,9 +279,10 @@ int main(int argc, char** argv)
     }
     // G3_MMIO_RANGE=lo,hi[,max]: device-register accesses in [lo, hi).
     if (const char* r = std::getenv("G3_MMIO_RANGE")) {
-        struct Range { u32 lo, hi, max, shown, last_addr, last_value; bool last_read; u64 repeats; PhysicalBus* bus; };
+        struct Range { u32 lo, hi, max, shown, last_addr, last_value; bool last_read; u64 repeats; PhysicalBus* bus; ppc::Ppc750* cpu; };
         static Range range{};
         range.bus = &session.machine()->bus();
+        range.cpu = &session.machine()->cpu();
         char* end = nullptr;
         range.lo = static_cast<u32>(std::strtoul(r, &end, 0));
         range.hi = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, &end, 0)) : ~0u;
@@ -301,7 +302,10 @@ int main(int argc, char** argv)
             g->last_value = value;
             g->last_read = !write;
             ++g->shown;
-            std::printf("[mmio] %s%u %08x = %08x\n", write ? "W" : "R", size, addr, value);
+            u32 pc_pa = 0;
+            const u32 pc = g->cpu->state().pc;
+            g->cpu->probe_translate(pc, false, pc_pa);
+            std::printf("[mmio] %s%u %08x = %08x  pc %08x (pa %08x)\n", write ? "W" : "R", size, addr, value, pc, pc_pa);
             // A DBDMA command pointer written: show the descriptors there.
             if (write && size == 4 && (addr & 0xFFFF8000u) == 0x80808000u && (addr & 0x7F) == 0x0C) {
                 const u32 cp = __builtin_bswap32(value);
@@ -529,6 +533,14 @@ int main(int argc, char** argv)
     }
     if (session.halted())
         std::printf("[g3_host] the CPU halted (checkstop)\n");
+    if (const char* rd = std::getenv("G3_RAMDUMP")) {  // the Mac's RAM at the end (experiments)
+        FILE* f = std::fopen(rd, "wb");
+        if (f) {
+            std::fwrite(ram.data(), 1, ram.size(), f);
+            std::fclose(f);
+            std::printf("[g3_host] RAM written to %s\n", rd);
+        }
+    }
     // G3_TREEDUMP=1: the device tree's mac-io nodes and their properties after
     // the run (Mac OS's ROM file adds driver properties to the nodes it knows).
     if (std::getenv("G3_TREEDUMP") && session.firmware()) {

@@ -69,7 +69,21 @@ output holds the last sample. Circle drives HDMI 0 only.
 - Mac OS 9.2.1 boots with the cell, runs its codec set-up and plays its
   (silent) start-up buffers at the right rate. **Not yet heard**: a Finder
   stop alert produced no sound and no output DMA, with the speaker volume
-  in PRAM (byte 0x08) at 0 or 7. Open questions: device-tree properties
-  Mac OS's sound software wants (a real B&W's tree is needed), and the
-  codec question above.
+  in PRAM (byte 0x08) at 0 or 7, and with the feature control register
+  kept (which fixed Ethernet).
+- **What is missing** (found by locating the code that drives the cell: it
+  is loaded from the CD, Apple's sound hardware plug-in architecture). The
+  plug-in manager (`SndHWPluginMgrLib`, `FindBuiltInSoundNode`) reads a
+  description of the hardware from the `sound` node: `device_type`
+  (its strings pair it with `soundchip`, and `davbus` with `soundbus`),
+  `#-detects`, `#-inputs`, `#-outputs`, `#-features`, `device-id`,
+  `icon-id`, `info-id`, `name-id`, `model`, `object-model-version`,
+  `sample-rates`, `frame-size`, `sample-precisions`, `AAPL,output-component`,
+  `AAPL,input-component`, `AAPL,port-handler-component`, and more. A real
+  B&W's Open Firmware creates them; they are not in the Mac OS ROM file
+  and no published dump was found. The two `device_type` values alone
+  change nothing (tried). **Needed: the `sound` node of a real Blue &
+  White G3** (Open Firmware: `dev /pci/pci-bridge/mac-io/davbus/sound
+  .properties`, or Linux: `/proc/device-tree/.../davbus/sound`). The
+  DAV-bus plug-in on the CD has Burgundy and AWACS register routines.
 - The HDMI path is built for the Pi but not yet run on hardware.

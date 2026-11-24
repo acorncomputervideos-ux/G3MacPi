@@ -319,7 +319,7 @@ void CKernel::StartNetwork (void)
 	if (Config.web)
 	{
 		CCircleWebHost::TKernelHooks Hooks = {this, WebStatus, WebInUse, WebPassword, WebReboot,
-						      WebConfigChanged};
+						      WebConfigChanged, WebInsertMedia};
 		m_pWebHost = new CCircleWebHost (Hooks);
 		new CWebServer (m_pNet, m_pWebHost);
 	}
@@ -365,6 +365,36 @@ void CKernel::WebStatus (void *pContext, g3::WebStatus &Out)
 	pThis->m_MacHost.mac_address (Out.mac_mac);
 	Out.sound = pThis->m_pMenu->config ().sound;
 	Out.network = pThis->m_pMenu->config ().network;
+	const g3::MachineConfig &Config = pThis->m_pMenu->config ();
+	for (unsigned i = 0; i < g3::MachineConfig::kDrives && i < 4; i++)
+	{
+		Out.drives[i].label = g3::MachineConfig::drive_label (i);
+		Out.drives[i].type = g3::MachineConfig::type_name (Config.drive[i].type);
+		Out.drives[i].image = Config.drive[i].image;
+	}
+}
+
+// A disc into a CD-ROM drive from the web page: as in the menu's drive
+// page, at once in a running Mac.
+u32 CKernel::WebInsertMedia (void *pContext, u32 nDrive, const char *pPath)
+{
+	CKernel *pThis = (CKernel *) pContext;
+	boolean bOK = FALSE;
+	const g3::ConfigMenu::Action Action = pThis->m_pMenu->insert_media (nDrive, pPath, bOK);
+	if (!bOK)
+	{
+		return 1;
+	}
+	if (Action == g3::ConfigMenu::Action::MediaChanged && !pThis->m_Session.change_disc (nDrive, pPath))
+	{
+		return 2;
+	}
+	pThis->m_pMenu->set_status (pPath[0] ? "Disc inserted from the web page." : "Disc ejected from the web page.");
+	if (pThis->m_bMenuShown)
+	{
+		pThis->ShowMenu (TRUE);
+	}
+	return 0;
 }
 
 // An image the running Mac has open (as set in the menu) can't be replaced.

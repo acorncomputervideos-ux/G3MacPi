@@ -41,6 +41,8 @@ struct FsHost final : WebHost {
         const u8 m[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
         std::memcpy(s.host_mac, m, 6);
         net_switch::mac_address_for(m, s.mac_mac);
+        s.drives[0] = {"CD-ROM bus master", "cdrom", cd.c_str()};
+        s.drives[2] = {"Hard disk bus master", "none", ""};
     }
     bool read_file(const char* p, u8* buf, u32 cap, u32& len) override
     {
@@ -84,6 +86,17 @@ struct FsHost final : WebHost {
     bool rename(const char* a, const char* b) override { return ::rename(at(a).c_str(), at(b).c_str()) == 0; }
     const char* password() override { return pw.c_str(); }
     void reboot_after_response() override { reboot = true; }
+    // One CD-ROM drive (drive 0) for trying inserts and ejects.
+    std::string cd;
+    u32 insert_media(u32 drive, const char* p) override
+    {
+        if (drive != 0)
+            return 1;
+        if (p[0] && access(at(p).c_str(), R_OK) != 0)
+            return 2;
+        cd = p;
+        return 0;
+    }
 };
 
 } // namespace
