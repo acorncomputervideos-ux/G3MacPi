@@ -46,6 +46,7 @@ public:
         u32 gen;    // the page generation it was built under
         u32 count;  // operations
         u32 code;   // generated code: word offset in the JIT buffer + 1; 0 = none
+        u32 asked;  // with a JIT worker: low 32 bits of the instruction count at the last request
         BlockOp ops[1];  // really `count`
     };
     static constexpr u32 block_bytes(u32 ops)

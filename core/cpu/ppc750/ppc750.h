@@ -146,6 +146,7 @@ public:
         u64 chained = 0;      // blocks entered straight from the previous block's code
         u64 interpreted = 0;  // instructions run_blocks ran without generated code
         u64 code_words = 0;   // AArch64 instructions generated (compiled here)
+        u64 retried = 0;      // blocks asked again for code (a request or result was dropped)
     };
     // Profile of the JIT's handler calls (docs/cpu/jit-a64.md): generated
     // code counts, per kind of instruction (jit_op_id), the instructions it
@@ -415,6 +416,9 @@ private:
     // run_blocks' budget as an instruction count: generated code goes on
     // to the next block only if it fits (as run_blocks itself decides).
     u64 jit_limit_ = 0;
+    // A block still without code this many instructions after it was asked
+    // for is asked again (with a worker; queues may drop requests).
+    static constexpr u32 kJitRetry = 1u << 20;
     // The block cache's lookup data, for generated code (fixed after set_jit).
     const u32* jit_table_ = nullptr;
     const u8* jit_pool_ = nullptr;

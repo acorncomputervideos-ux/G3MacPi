@@ -1181,3 +1181,42 @@ BOTH(chained_static_target_slot_collision)
     if (g_jit && !g_jit_bg)
         CHECK_EQ(c.cpu.state().pc, 0x5014u);
 }
+
+TEST_CASE("cpu/jitbg/dropped_requests_are_asked_again")
+{
+    // 400 new blocks at once overflow the worker's request queue (256):
+    // the requests that did not fit are dropped. Those blocks must still
+    // get code later (asked again after Ppc750::kJitRetry instructions),
+    // not run through their handlers for good.
+    g_jit = true;
+    Machine m(4u << 20);
+    g_jit = false;
+    JitWorker w(m.cpu);
+    m.cpu.set_jit_worker(&w);
+    constexpr u32 kBlocks = 400, kBase = 0x10000;
+    for (u32 k = 0; k < kBlocks; ++k) {
+        const u32 at = kBase + 8 * k;
+        const u32 next = k + 1 < kBlocks ? at + 8 : kBase;
+        store_be32(m.ram.data() + at, addi(3, 3, 1));
+        store_be32(m.ram.data() + at + 4, b(static_cast<int32_t>(next) - static_cast<int32_t>(at + 4)));
+    }
+    m.cpu.state().pc = kBase;
+    m.cpu.state().msr = msr::ME;
+    m.cpu.run(2 * kBlocks);                        // every block built and asked for once
+    CHECK(m.cpu.jit_stats().queue_full > 0);      // the queue overflowed
+    // Now the worker keeps up; run long enough for the retries.
+    for (int round = 0; round < 40; ++round) {
+        while (w.poll(64)) {
+        }
+        m.cpu.run(100000);
+    }
+    while (w.poll(64)) {
+    }
+    m.cpu.run(2 * kBlocks);                        // collect the last results
+    CHECK(m.cpu.jit_stats().retried > 0);
+    // Every block has code now: one more lap runs nothing interpreted.
+    const u64 before = m.cpu.jit_stats().interpreted;
+    m.cpu.run(2 * kBlocks * 3);
+    CHECK_EQ(m.cpu.jit_stats().interpreted, before);
+    CHECK_EQ(m.cpu.state().gpr[3], static_cast<u32>(m.cpu.instructions_executed() / 2));
+}

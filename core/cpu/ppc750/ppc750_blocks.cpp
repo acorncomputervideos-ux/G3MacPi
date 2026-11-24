@@ -335,6 +335,12 @@ void Ppc750::run_blocks(u64 count)
         // that step() would react to before the next instruction (exit_).
         exit_ = 0;
         const u64 left = count - done;
+        if (!b->code && jit_worker_ && static_cast<u32>(instr_count_) - b->asked > kJitRetry) {
+            // Still no code: the request (or its result) was dropped while
+            // a queue was full (a burst of new code). Ask again.
+            jit_request(b);
+            ++jit_stats_.retried;
+        }
         if (b->code && b->count <= left) {
             // Generated code: the same operations; it keeps the
             // instruction count, so what ran is the difference.

@@ -1128,6 +1128,7 @@ void Ppc750::set_jit_worker(JitWorker* w)
 
 void Ppc750::jit_request(BlockCache::Block* b)
 {
+    b->asked = static_cast<u32>(instr_count_);
     JitRequest& r = jit_worker_->req_out_;
     r.block = b;
     r.epoch = cache_->stats().flushes;
