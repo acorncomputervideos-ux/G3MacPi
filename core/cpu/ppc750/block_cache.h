@@ -101,6 +101,16 @@ public:
     void set_signal(u8* flag) { signal_ = flag; }
 
     const Stats& stats() const { return stats_; }
+    // Where the lookup's data lives, for generated code that finds the
+    // next block itself (ppc750_jit.cpp): fixed after init().
+    struct Layout {
+        const u32* table;
+        const u8* pool;
+        const u32* gen;
+        u32 pages;
+    };
+    Layout layout() const { return {table_, pool_, gen_, pages_}; }
+    static constexpr u32 kAlign = 16;  // a block's pool offset is a multiple of this
     // Blocks of kMaxOps operations that fit (more, shorter ones do).
     u32 capacity() const { return pool_bytes_ / block_bytes(kMaxOps); }
     u32 pages() const { return pages_; }
@@ -111,7 +121,6 @@ public:
 private:
     u32* gen_ = nullptr;    // per RAM page
     u8* code_ = nullptr;    // per RAM page: holds blocks
-    static constexpr u32 kAlign = 16;
     u32* table_ = nullptr;  // kTableSize entries: pool offset / kAlign + 1, 0 = empty
     u8* pool_ = nullptr;
     u32 pages_ = 0, pool_bytes_ = 0, used_ = 0;  // used_: bytes

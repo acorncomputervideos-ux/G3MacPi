@@ -772,7 +772,9 @@ BOTH(generated_loads_and_stores_take_the_fast_path)
         if (g_jit) {
             // 600 accesses; only the first of each kind may miss the TLB.
             CHECK(c.cpu.jit_stats().memory_slow <= 8);
-            CHECK(c.cpu.jit_stats().runs >= (g_jit_bg ? 98u : 99u));
+            // Each pass runs the loop block in generated code: entered from
+            // run_blocks or straight from the previous pass (chained).
+            CHECK(c.cpu.jit_stats().runs + c.cpu.jit_stats().chained >= (g_jit_bg ? 98u : 99u));
             if (g_jit_bg)
                 CHECK(c.cpu.jit_stats().installed >= 1);
         }
@@ -934,4 +936,73 @@ TEST_CASE("cpu/jitbg/stale_code_is_never_installed")
     CHECK(m.cpu.jit_stats().runs > 0);
     CHECK_EQ(m.cpu.state().gpr[3], 100u);
     CHECK_EQ(m.cpu.state().gpr[4], 101u);
+}
+
+BOTH(chained_blocks_stop_where_run_blocks_would)
+{
+    // Two blocks calling each other in a loop: with generated code, each
+    // goes on into the other without returning to run_blocks, but stops at
+    // the same instruction as the interpreter for every budget, at an
+    // mtspr DEC (break_run_ alone), at an interrupt EE lets in, and when
+    // the code it would jump to is rewritten.
+    for (u32 budget : {1u, 2u, 3u, 7u, 40u, 41u, 1000u}) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            place(*m, {
+                {0x5000, li(7, 60)},
+                {0x5004, mtspr(9, 7)},           // CTR = 60
+                {0x5008, addi(3, 3, 1)},         // block A
+                {0x500C, b(0x100)},              //   -> block B at 0x510C
+                {0x510C, addi(4, 4, 2)},         // block B
+                {0x5110, bdnz(-0x108)},          //   -> A while CTR
+                {0x5114, mtspr(22, 7)},          // DEC = 60: ends run()
+                {0x5118, addi(5, 5, 1)},
+                {0x511C, b(0)},
+            });
+            m->cpu.state().pc = 0x5000;
+            m->cpu.state().msr = msr::ME;
+        }
+        // Several runs of `budget`, comparing after each.
+        for (u32 k = 0; k < 400 / budget + 3; ++k) {
+            a.cpu.run(budget);
+            c.cpu.run(budget);
+            if (!same(a, c, "chained", static_cast<int>(budget), static_cast<int>(k)))
+                break;
+        }
+        CHECK(same(a, c, "chained", static_cast<int>(budget), 999));
+        CHECK_EQ(c.cpu.state().gpr[3], 60u);
+        CHECK_EQ(c.cpu.state().gpr[4], 120u);
+        if (g_jit && !g_jit_bg && budget >= 40)
+            CHECK(c.cpu.jit_stats().chained >= 50);  // the loop ran chained
+    }
+}
+
+BOTH(chaining_follows_an_msr_change)
+{
+    // mtmsr turns instruction translation on; the next instruction has the
+    // same effective address but, through IBAT0, another physical one. Its
+    // real-mode block exists (with code), so a chained jump that kept the
+    // old fetch page would run it.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, mtmsr(9)},               // IR on
+            {0x5004, addi(3, 3, 1)},          // real mode (PA 0x5004)
+            {0x5008, b(-8)},                  //   -> 0x5000
+            {0x25004, addi(3, 3, 100)},       // translated: EA 0x5004 -> PA 0x25004
+            {0x25008, b(0)},                  // stays here
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;      // BEPI 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;  // BRPN 0x20000, read/write
+        s.gpr[9] = msr::ME | msr::IR;
+        s.pc = 0x5004;
+        s.msr = msr::ME;
+        m->cpu.flush_tlb();
+        for (int k = 0; k < 10; ++k)
+            m->cpu.run(7);
+    }
+    CHECK(same(a, c, "msr change", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 101u);
+    CHECK_EQ(c.cpu.state().pc, 0x5008u);
 }

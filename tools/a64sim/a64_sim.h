@@ -28,6 +28,7 @@ public:
     u32 error_pc_offset() const { return error_off_; }  // words from code_lo
     u64 executed() const { return executed_; }
     u64 host_calls() const { return host_calls_; }
+    u64 jumps() const { return jumps_; }  // BRs taken (block to block)
 
 private:
     bool fail(const char* why, const u32* pc, const void* lo);
@@ -36,7 +37,7 @@ private:
     alignas(16) u8 stack_[64 * 1024];
     const char* error_ = nullptr;
     u32 error_off_ = 0;
-    u64 executed_ = 0, host_calls_ = 0;
+    u64 executed_ = 0, host_calls_ = 0, jumps_ = 0;
 };
 
 // Adapter for Ppc750::set_jit_runner: runs `code` with x0 = cpu.

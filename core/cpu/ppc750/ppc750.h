@@ -143,6 +143,7 @@ public:
         u64 compiled = 0, native_ops = 0, helper_ops = 0, resets = 0, runs = 0;
         u64 memory_slow = 0;  // generated loads/stores that took the handler
         u64 queued = 0, queue_full = 0, installed = 0, stale = 0;  // with a worker
+        u64 chained = 0;      // blocks entered straight from the previous block's code
     };
     // Background compilation (jit_worker.h): blocks are compiled by `w`,
     // polled on another core, instead of here. After set_jit(); nullptr
@@ -388,6 +389,9 @@ private:
     JitRunner jit_runner_ = nullptr;
     void* jit_ctx_ = nullptr;
     JitStats jit_stats_;
+    // run_blocks' budget as an instruction count: generated code goes on
+    // to the next block only if it fits (as run_blocks itself decides).
+    u64 jit_limit_ = 0;
     friend struct JitCompiler;
     // Direct RAM window, refreshed at the start of run().
     u8* ram_ = nullptr;

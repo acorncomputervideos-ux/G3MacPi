@@ -18,6 +18,13 @@
 // effective address that maps to it). In blocks with loads or stores:
 // x22 = guest RAM, x23 = the block cache's per-page code flags, x24 = the
 // data TLB. w8-w15 are scratch; x16 holds call targets, x17 far addresses.
+//
+// Chaining: at its end a block looks up the next one itself, with the
+// checks run_blocks makes between blocks (exit_, a pending interrupt with
+// MSR[EE], the fetch page and MSR[IR|PR] unchanged, a valid block with
+// code, the run budget), and jumps into it past its prologue (word
+// kChainEntry), keeping the first block's frame. Any check failing returns
+// to run_blocks, which does the same thing the slow way.
 
 #include "core/cpu/ppc750/ppc750.h"
 #include "core/cpu/ppc750/jit_worker.h"
@@ -66,6 +73,13 @@ struct JitCompiler {
     static_assert(Ppc750::kTlbSize == 256, "the generated TLB lookup assumes 256 entries");
     u32 ram_off, ram_size_off, dtlb_off, tlb_on_off, slow_off;
     Ppc750::JitStats* st;  // compile-time counts (the worker keeps its own)
+    // For chaining (set by jit_generate).
+    u32 break_off = 0, checkstop_off = 0, ext_off = 0, dec_off = 0, fetch_host_off = 0, fetch_page_off = 0,
+        fetch_msr_off = 0, fetch_pa_off = 0, limit_off = 0, chained_off = 0;
+    BlockCache::Layout layout{};
+    const u32* code_base = nullptr;
+    // The prologue is padded to this many words; chained jumps enter here.
+    static constexpr u32 kChainEntry = 11;
 
     // Base + offset into x17 when the offset does not fit the instruction.
     Reg far(Reg base, u32& off, u32 size)
@@ -468,6 +482,106 @@ struct JitCompiler {
         a.bind(done);
     }
 
+    // --- chaining: the checks run_blocks makes before a block, then a jump
+    // into the next block's code. Anything not as run_blocks would find it
+    // goes to `out` (return to run_blocks).
+    void load_field(bool x, Reg r, u32 off, u32 size)
+    {
+        const Reg base = far(X19, off, size);
+        if (size == 1)
+            a.ldrb(r, base, off);
+        else
+            a.ldr(x, r, base, off);
+    }
+    void chain(Assembler::Label& out)
+    {
+        Assembler::Label no_irq;
+        // exit_ (an exception, break_run(), blocks dropped ...); and, as
+        // run_blocks' loop condition, break_run_ (mtspr DEC sets it alone)
+        // and checkstop_.
+        load_field(false, X8, exit_off, 1);
+        a.cbnz(false, X8, out);
+        load_field(false, X8, break_off, 1);
+        a.cbnz(false, X8, out);
+        load_field(false, X8, checkstop_off, 1);
+        a.cbnz(false, X8, out);
+        // A pending interrupt that MSR[EE] lets in: run_blocks takes it.
+        a.ldr(false, X9, X20, msr_off());
+        a.tbz(X9, bit_of(msr::EE), no_irq);
+        load_field(false, X10, ext_off, 1);
+        load_field(false, X11, dec_off, 1);
+        a.orr(false, X10, X10, X11);
+        a.cbnz(false, X10, out);
+        a.bind(no_irq);
+        // The fetch page: still valid, same effective page, same MSR[IR|PR].
+        a.ldr(false, X8, X20, pc_off());              // w8 = the next PC
+        load_field(true, X10, fetch_host_off, 8);
+        a.cbz(true, X10, out);
+        load_field(false, X10, fetch_page_off, 4);
+        a.lsr_imm(X10, X10, 12);
+        a.lsr_imm(X11, X8, 12);
+        a.cmp(false, X10, X11);
+        a.b_cond(Assembler::NE, out);
+        a.mov_imm32(X12, msr::IR | msr::PR);
+        a.and_(false, X11, X9, X12);
+        load_field(false, X10, fetch_msr_off, 4);
+        a.cmp(false, X10, X11);
+        a.b_cond(Assembler::NE, out);
+        // w10 = the physical address; its page must be one the cache covers.
+        load_field(false, X10, fetch_pa_off, 4);
+        a.ubfx(X11, X8, 0, 12);
+        a.orr(false, X10, X10, X11);
+        a.lsr_imm(X15, X10, 12);                      // w15 = page
+        a.mov_imm32(X12, layout.pages);
+        a.cmp(false, X15, X12);
+        a.b_cond(Assembler::HS, out);
+        // The table slot: pool offset / kAlign + 1, 0 = empty.
+        a.ubfx(X11, X10, 2, 15);
+        static_assert(BlockCache::kTableSize == 1u << 15, "the generated lookup assumes 2^15 slots");
+        a.mov_imm64(X12, reinterpret_cast<u64>(layout.table));
+        a.add(true, X12, X12, X11, 2);
+        a.ldr(false, X13, X12, 0);
+        a.cbz(false, X13, out);
+        a.sub_imm(false, X13, X13, 1);
+        a.mov_imm64(X14, reinterpret_cast<u64>(layout.pool));
+        a.add(true, X14, X14, X13, 4);                // x14 = the block
+        static_assert(BlockCache::kAlign == 16, "the generated lookup assumes 16-byte block alignment");
+        a.ldr(false, X13, X14, blk_pa);
+        a.cmp(false, X13, X10);
+        a.b_cond(Assembler::NE, out);
+        a.mov_imm64(X12, reinterpret_cast<u64>(layout.gen));
+        a.add(true, X12, X12, X15, 2);
+        a.ldr(false, X12, X12, 0);
+        a.ldr(false, X13, X14, blk_gen);
+        a.cmp(false, X12, X13);
+        a.b_cond(Assembler::NE, out);                 // built under an older generation: dropped
+        a.ldr(false, X15, X14, blk_code);
+        a.cbz(false, X15, out);                       // no code (yet)
+        // The budget: instr_count_ + count <= jit_limit_.
+        a.ldr(false, X13, X14, blk_count);
+        load_field(true, X11, cnt_off, 8);
+        a.add(true, X11, X11, X13);
+        load_field(true, X12, limit_off, 8);
+        a.cmp(true, X11, X12);
+        a.b_cond(Assembler::HI, out);
+        {
+            u32 off = chained_off;
+            const Reg base = far(X19, off, 8);
+            a.ldr(true, X13, base, off);
+            a.add_imm(true, X13, X13, 1);
+            a.str(true, X13, base, off);
+        }
+        // Into its code, past the prologue: code_base + 4 * (code - 1 + kChainEntry).
+        a.add_imm(false, X15, X15, kChainEntry - 1);
+        a.mov_imm64(X12, reinterpret_cast<u64>(code_base));
+        a.add(true, X12, X12, X15, 2);
+        a.br(X12);
+    }
+    static constexpr u32 blk_pa = __builtin_offsetof(BlockCache::Block, pa);
+    static constexpr u32 blk_gen = __builtin_offsetof(BlockCache::Block, gen);
+    static constexpr u32 blk_count = __builtin_offsetof(BlockCache::Block, count);
+    static constexpr u32 blk_code = __builtin_offsetof(BlockCache::Block, code);
+
     bool compile(BlockCache::Block& b)
     {
         Assembler::Label out;
@@ -484,6 +598,11 @@ struct JitCompiler {
             a.mov_imm64(X20, s_off);
             a.add(true, X20, X19, X20);
         }
+        if (a.size() > kChainEntry)
+            return false;  // cannot happen: the prologue is at most 11 words
+        while (a.ok() && a.size() < kChainEntry)  // (a full buffer stops growing)
+            a.nop();
+        // --- chained blocks enter here (x19, x20 set; frame pushed)
         a.ldr(false, X21, X20, pc_off());
         if (has_memory_ops(b)) {
             // x22 = RAM, x23 = the cache's per-page code flags, x24 = DTLB.
@@ -519,6 +638,7 @@ struct JitCompiler {
             ++st->helper_ops;
         }
         sync(b.count, pending);
+        chain(out);
         a.bind(out);
         a.ldp(X23, X24, SP, 48);
         a.ldp(X21, X22, SP, 32);
@@ -561,6 +681,18 @@ bool Ppc750::jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, Ji
     };
     JitCompiler jc{*this, a, off(&instr_count_), off(&exit_), off(&ram_), off(&ram_size_), off(&dtlb_[0]),
                    off(&tlb_enabled_), off(&jit_stats_.memory_slow), &st};
+    jc.break_off = off(&break_run_);
+    jc.checkstop_off = off(&checkstop_);
+    jc.ext_off = off(&external_pending_);
+    jc.dec_off = off(&dec_pending_);
+    jc.fetch_host_off = off(&fetch_host_);
+    jc.fetch_page_off = off(&fetch_page_);
+    jc.fetch_msr_off = off(&fetch_msr_);
+    jc.fetch_pa_off = off(&fetch_pa_page_);
+    jc.limit_off = off(&jit_limit_);
+    jc.chained_off = off(&jit_stats_.chained);
+    jc.layout = cache_->layout();
+    jc.code_base = jit_code_;
     if (!jc.compile(b))
         return false;  // out of room
     sync_icache(at, at + a.size());

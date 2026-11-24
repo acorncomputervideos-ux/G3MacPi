@@ -336,6 +336,7 @@ void Ppc750::run_blocks(u64 count)
             // Generated code: the same operations; it keeps the
             // instruction count, so what ran is the difference.
             const u64 before = instr_count_;
+            jit_limit_ = before + left;
             jit_run(b);
             done += instr_count_ - before;
             continue;

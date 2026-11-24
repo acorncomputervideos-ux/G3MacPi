@@ -97,6 +97,7 @@ public:
 
     // --- branches
     void blr(Reg rn);
+    void br(Reg rn);                                   // jump, no link
     void ret();
     void cbnz(bool x, Reg rt, Label& target);
     void cbz(bool x, Reg rt, Label& target);

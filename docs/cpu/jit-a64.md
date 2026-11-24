@@ -68,6 +68,42 @@ Configuration: `YosemiteConfig::jit_code` / `jit_code_words`, and
 runner, the code is called directly; that is only possible on an
 AArch64 host.
 
+## Chaining (block to block without returning)
+
+At its end, a block's code finds the next block itself and jumps into it,
+instead of returning to `run_blocks`. The sequence (`JitCompiler::chain`)
+makes the checks `run_blocks` makes before running a block, and returns
+to it if any fails:
+
+1. `exit_`, `break_run_` (an `mtspr DEC` sets it without `exit_`) and
+   `checkstop_` are clear;
+2. no interrupt is pending that MSR[EE] lets in;
+3. the fetch page is still valid: same effective page, same MSR[IR|PR];
+4. the next PC's physical address has a block in the cache's table, with
+   the current page generation (not dropped) and code;
+5. it fits the run's budget (`instr_count_ + count <= jit_limit_`, which
+   `run_blocks` sets from what is left before calling the code).
+
+Then it jumps (`br`) to that block's code past its prologue (word
+`kChainEntry` = 11: every prologue is padded to that length), keeping the
+first block's stack frame; the last block's epilogue returns to
+`run_blocks`. Computed branches (`bclr`, `bcctr`) go through the same
+lookup, so they chain too. `JitStats::chained` counts the jumps.
+
+Checks: the differential tests (random programs, instruction counts and
+memory identical to the interpreter at every slice end) plus
+`chained_blocks_stop_where_run_blocks_would` (every budget from 1 up; an
+`mtspr DEC` in the loop) and `chaining_follows_an_msr_change` (IR turned
+on: the same effective address is another physical page). Sabotage runs,
+each check removed in turn: `break_run_`, the interrupt test, the fetch
+page, the generation, the budget (the simulator then runs past the end),
+MSR[IR|PR] and a wrong entry offset (the stack moves) are all caught. A
+missing `exit_` test is not: every way `exit_` is set is also seen by
+another check, so it is kept as a cheap safeguard. The Mac OS ROM boot
+(1.05 × 10⁹ instructions on the simulator) ends with the same registers
+and RAM hash as the interpreter; run_blocks entered generated code 10 562
+times (it was about 3.9 × 10⁸ times without chaining).
+
 ## On the Pi (Circle)
 
 - **Executable memory:** Circle maps everything after `_etext` as not
@@ -183,7 +219,8 @@ native cases.
 
 Next:
 
-1. Linking blocks directly, without returning to the C++ loop.
+1. ~~Linking blocks directly, without returning to the C++ loop.~~ Done
+   (chaining, above).
 2. Keeping the instruction count in a register between handler calls.
 3. More instructions natively (`mtspr` LR/CTR, `lha`, indexed loads and
    stores, `mullw`, shifts).

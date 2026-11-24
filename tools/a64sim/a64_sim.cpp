@@ -13,7 +13,7 @@ namespace g3::a64 {
 namespace {
 constexpr u64 kReturnSentinel = 0;         // x30 at entry: RET to it ends the call
 constexpr u64 kPoison = 0xDEAD0000BAD0F00Dull;
-constexpr u64 kMaxSteps = 1000000;          // per call: generated blocks are short
+constexpr u64 kMaxSteps = 1000000000;       // per call: chained blocks run up to a whole run() budget
 s64 sext(u64 v, u32 bits) { return static_cast<s64>(v << (64 - bits)) >> (64 - bits); }
 } // namespace
 
@@ -232,6 +232,15 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
             for (u32 r = 0; r <= 18; ++r)
                 x_[r] = kPoison + r;
             x_[30] = reinterpret_cast<u64>(next);
+        } else if ((i & 0xFFFFFC1Fu) == 0xD61F0000u) {         // BR
+            // Only within the code buffer: the JIT's jumps from block to block.
+            const u32* t = reinterpret_cast<const u32*>(rz(rn));
+            if (t < lo || t >= hi)
+                return fail("BR outside the code buffer", pc, lo);
+            if (reinterpret_cast<u64>(t) & 3)
+                return fail("BR to a misaligned address", pc, lo);
+            ++jumps_;
+            next = t;
         } else if (i == 0xD65F03C0u) {                         // RET
             if (x_[30] == kReturnSentinel) {
                 if (x_[31] != reinterpret_cast<u64>(stack_ + sizeof stack_))

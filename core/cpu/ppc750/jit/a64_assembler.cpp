@@ -178,6 +178,7 @@ void Assembler::ldp_post(Reg rt, Reg rt2, Reg rn, s32 off) { emit(pair(1, true, 
 // CBNZ: sf 011010 1 imm19 Rt. B: 000101 imm26. NOP: 0xD503201F.
 
 void Assembler::blr(Reg rn) { emit(0xD63F0000u | (rn << 5)); }
+void Assembler::br(Reg rn) { emit(0xD61F0000u | (rn << 5)); }
 void Assembler::ret() { emit(0xD65F03C0u); }
 void Assembler::nop() { emit(0xD503201Fu); }
 
