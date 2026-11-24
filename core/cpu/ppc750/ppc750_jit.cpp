@@ -31,6 +31,10 @@
 #include "core/cpu/ppc750/jit/a64_assembler.h"
 #include "core/common/bitops.h"
 
+namespace {
+constexpr g3::u32 kXerMask = 0xE000007Fu;  // as ppc750_system.cpp: the bits mtspr XER keeps
+}
+
 
 namespace g3::ppc {
 
@@ -177,6 +181,81 @@ struct JitCompiler {
         set_cr_field_from_flags(field::crfd(insn), is_signed);
     }
 
+    // The XO-form add/subtract family, as op_add_family: result =
+    // x + y + carry-in in 64 bits (rD = the low word); CA from bit 32
+    // (except add, subf, neg); with OE, OV = ((x ^ r) & (y ^ r)) bit 31
+    // and SO |= OV; with Rc, CR0 from the result and the new SO. Matched
+    // on the 9-bit extended opcode, like execute_op31. None can raise an
+    // exception.
+    bool add_family(u32 insn)
+    {
+        enum In : u8 { RA, NOT_RA, RB, ZERO, ONES, CA, ONE };
+        In x, y, cin;
+        bool writes_ca = true;
+        switch (field::xo9(insn)) {
+        case 266: x = RA; y = RB; cin = ZERO; writes_ca = false; break;      // add
+        case 10:  x = RA; y = RB; cin = ZERO; break;                         // addc
+        case 138: x = RA; y = RB; cin = CA; break;                           // adde
+        case 234: x = RA; y = ONES; cin = CA; break;                         // addme
+        case 202: x = RA; y = ZERO; cin = CA; break;                         // addze
+        case 40:  x = NOT_RA; y = RB; cin = ONE; writes_ca = false; break;   // subf
+        case 8:   x = NOT_RA; y = RB; cin = ONE; break;                      // subfc
+        case 136: x = NOT_RA; y = RB; cin = CA; break;                       // subfe
+        case 232: x = NOT_RA; y = ONES; cin = CA; break;                     // subfme
+        case 200: x = NOT_RA; y = ZERO; cin = CA; break;                     // subfze
+        case 104: x = NOT_RA; y = ZERO; cin = ONE; writes_ca = false; break; // neg
+        default: return false;
+        }
+        const bool oe = field::oe(insn);
+        const u32 ra = field::ra(insn), rb = field::rb(insn), rd = field::rd(insn);
+        const bool need_xer = cin == CA || writes_ca || oe;
+        if (need_xer)
+            a.ldr(false, X13, X20, spr_off(spr::XER));   // w13 = XER
+        auto operand = [&](Reg w, In what) {
+            switch (what) {
+            case RA: load_gpr(w, ra); break;
+            case NOT_RA:
+                load_gpr(w, ra);
+                a.mov_imm32(X12, 0xFFFFFFFFu);
+                a.eor(false, w, w, X12);
+                break;
+            case RB: load_gpr(w, rb); break;
+            case ZERO: a.movz(false, w, 0, 0); break;
+            case ONES: a.mov_imm32(w, 0xFFFFFFFFu); break;
+            default: break;
+            }
+        };
+        operand(X8, x);                                   // w8 = x (zero-extended in x8)
+        operand(X9, y);                                   // w9 = y
+        a.add(true, X11, X8, X9);                         // x11 = x + y (64-bit)
+        if (cin == ONE) {
+            a.add_imm(true, X11, X11, 1);
+        } else if (cin == CA) {
+            a.ubfx(X10, X13, 29, 1);                      // XER[CA]
+            a.add(true, X11, X11, X10);
+        }
+        store_gpr(X11, rd);                               // the low word
+        if (writes_ca) {
+            a.ubfx64(X12, X11, 32, 1);                    // carry out
+            a.bfi(X13, X12, 29, 1);                       // XER[CA]
+        }
+        if (oe) {
+            a.eor(false, X14, X8, X11);
+            a.eor(false, X15, X9, X11);
+            a.and_(false, X14, X14, X15);
+            a.lsr_imm(X14, X14, 31);                      // overflow
+            a.bfi(X13, X14, 30, 1);                       // XER[OV] = it
+            a.orr(false, X13, X13, X14, 31);              // XER[SO] |= it
+        }
+        if (writes_ca || oe)
+            a.str(false, X13, X20, spr_off(spr::XER));
+        if (field::rc(insn)) {
+            a.mov(false, X8, X11);
+            cr0_from_w8();                                // reads the new XER[SO]
+        }
+        return true;
+    }
+
     // Generated code for `insn` if it is one of the simple instructions
     // (no exception possible; CR updates only as compares and Rc do them,
     // no XER changes); false otherwise.
@@ -221,6 +300,22 @@ struct JitCompiler {
             store_gpr(X8, ra);
             return true;
         }
+        case 20: {  // rlwimi(.): rA = (rotl(rS, SH) & m) | (rA & ~m)
+            const u32 mask = ppc_mask(field::mb(insn), field::me(insn));
+            load_gpr(X8, rd);
+            if (rb & 31)
+                a.ror_imm(X8, X8, (32 - rb) & 31);
+            a.mov_imm32(X9, mask);
+            a.and_(false, X8, X8, X9);
+            load_gpr(X10, ra);
+            a.mov_imm32(X9, ~mask);
+            a.and_(false, X10, X10, X9);
+            a.orr(false, X8, X8, X10);
+            store_gpr(X8, ra);
+            if (field::rc(insn))
+                cr0_from_w8();
+            return true;
+        }
         case 21: {  // rlwinm(.)
             const u32 mask = ppc_mask(field::mb(insn), field::me(insn));
             load_gpr(X8, rd);
@@ -236,7 +331,21 @@ struct JitCompiler {
             return true;
         }
         case 31: {
+            if (add_family(insn))
+                return true;
             switch (field::xo10(insn)) {
+            case 467: {  // mtspr LR / CTR / XER (user-writable: no exception)
+                const u32 n = ((insn >> 16) & 31) | ((insn >> 6) & 0x3E0);
+                if (field::rc(insn) || (n != spr::LR && n != spr::CTR && n != spr::XER))
+                    return false;
+                load_gpr(X8, rd);
+                if (n == spr::XER) {
+                    a.mov_imm32(X9, kXerMask);
+                    a.and_(false, X8, X8, X9);
+                }
+                a.str(false, X8, X20, spr_off(n));
+                return true;
+            }
             case 0:   // cmp
             case 32:  // cmpl
                 load_gpr(X9, rb);
@@ -245,21 +354,7 @@ struct JitCompiler {
             default:
                 break;
             }
-            // (The OE forms do not match below: OE is bit 9 of the 10-bit
-            // extended opcode, so addo, subfo ... have xo10 >= 512.)
             switch (field::xo10(insn)) {
-            case 266:  // add rD = rA + rB
-            case 40:   // subf rD = rB - rA
-                load_gpr(X8, ra);
-                load_gpr(X9, rb);
-                if (field::xo10(insn) == 266)
-                    a.add(false, X8, X8, X9);
-                else
-                    a.sub(false, X8, X9, X8);
-                store_gpr(X8, rd);
-                if (field::rc(insn))
-                    cr0_from_w8();
-                return true;
             case 28: case 444: case 316:  // and or xor: rA = rS op rB
                 load_gpr(X8, rd);
                 load_gpr(X9, rb);
@@ -396,6 +491,7 @@ struct JitCompiler {
     struct MemOp {
         u32 size;
         bool store, update;
+        bool sign = false;  // lha, lhau: sign-extend the halfword
     };
     static bool memory_op(u32 insn, MemOp& m)
     {
@@ -410,6 +506,8 @@ struct JitCompiler {
         case 39: m = {1, true, true}; return true;    // stbu
         case 40: m = {2, false, false}; return true;  // lhz
         case 41: m = {2, false, true}; return true;   // lhzu
+        case 42: m = {2, false, false, true}; return true;  // lha
+        case 43: m = {2, false, true, true}; return true;   // lhau
         case 44: m = {2, true, false}; return true;   // sth
         case 45: m = {2, true, true}; return true;    // sthu
         default: return false;
@@ -489,6 +587,8 @@ struct JitCompiler {
             a.ldr_reg(m.size, X10, X22, X9);
             if (m.size == 4) a.rev(X10, X10);
             else if (m.size == 2) a.rev16(X10, X10);
+            if (m.sign)
+                a.sxth(X10, X10);
             store_gpr(X10, rd);
         }
         if (m.update)

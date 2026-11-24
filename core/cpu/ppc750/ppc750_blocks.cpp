@@ -42,7 +42,10 @@ bool Ppc750::ends_block(u32 insn)
         case 242:  // mtsrin
         case 306:  // tlbie
         case 370:  // tlbia
-        case 467:  // mtspr (SDR1, BATs, HID0, DEC ...)
+        case 467: {  // mtspr (SDR1, BATs, HID0, DEC ...); not LR, CTR, XER
+            const u32 n = ((insn >> 16) & 31) | ((insn >> 6) & 0x3E0);
+            return n != spr::LR && n != spr::CTR && n != spr::XER;
+        }
         case 566:  // tlbsync
         case 598:  // sync
         case 982:  // icbi

@@ -12,8 +12,14 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
   generated code, reading and writing the `CpuState` in memory:
   - `addi`, `addis`;
   - `ori`, `oris`, `xori`, `xoris`;
-  - `rlwinm`;
-  - `add`, `subf`, `and`, `or`, `xor` (with Rc too, not OE);
+  - `rlwinm`, `rlwimi` (with Rc too);
+  - the whole add/subtract family (`add`, `addc`, `adde`, `addme`,
+    `addze`, `subf`, `subfc`, `subfe`, `subfme`, `subfze`, `neg`, with
+    OE and Rc): as `op_add_family`, x + y + carry-in in 64 bits, CA from
+    bit 32, OV from the operand and result signs, SO sticky, CR0 last;
+  - `and`, `or`, `xor` (with Rc too);
+  - `mtspr` to LR, CTR and XER (XER masked as the interpreter does);
+    these no longer end a block;
   - `cmp`, `cmpl`, `cmpi`, `cmpli`, `andi.`, `andis.`, `rlwinm.`: the CR
     field is set with `cset` and `bfi` from the AArch64 flags, plus
     XER[SO];
@@ -22,8 +28,8 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
     LK and AA. The CTR decrement and test, the CR bit test, and the
     target read before LK updates LR are as in the interpreter. Then the
     PC and the whole count are written;
-  - the D-form integer loads and stores (`lwz`, `lbz`, `lhz`, `stw`,
-    `stb`, `sth` and their update forms; see below).
+  - the D-form integer loads and stores (`lwz`, `lbz`, `lhz`, `lha`,
+    `stw`, `stb`, `sth` and their update forms; see below).
 - **Everything else** calls its stage-1 block handler, the same function
   the block cache runs. Results therefore come from the interpreter's own
   code.
@@ -120,6 +126,22 @@ page shows it under Status ("CPU emulation"); `g3_host` prints it every 10
 guest seconds (with `G3_JITSIM=1`: generated code on the simulator) and
 `g3_rom_probe` at the end. It costs four instructions per handler call.
 The kinds handled most are the ones to compile natively next.
+
+### Profile of the Mac OS 9.2.1 CD boot (30 guest seconds, dozing on)
+
+| | native | handlers | most handled |
+|---|---|---|---|
+| chaining only | 67.0% | 33.0% | mtspr 7.5%, rlwimi 6.1%, lhau 5.9%, lha 1.7%, addco. 1.7% |
+| + mtspr LR/CTR/XER, rlwimi, lha/lhau, add family | 90.8% | 9.2% | mfspr 1.5%, lbzx 1.5%, lwzx 0.9%, mtcrf 0.7%, lhaux 0.5% |
+
+(`mtspr` in that boot: LR 113 M, CTR 36 M, XER 2.9 M; all other SPRs
+together under 6 M.) Checks: the differential tests' random programs
+contain all of these (rlwimi with Rc, the add family with random OE and
+Rc, lha/lhau, mtspr XER/LR/CTR); sabotage runs (mask, CA position, SO,
+carry-in, ~rA, sign extension, XER mask, OV operands) are all caught.
+The ROM boot on the simulator still ends with the interpreter's
+registers and RAM hash; the CD boot's screen after 30 s differs only in
+the menu-bar clock.
 
 ## On the Pi (Circle)
 
@@ -239,7 +261,8 @@ Next:
 1. ~~Linking blocks directly, without returning to the C++ loop.~~ Done
    (chaining, above).
 2. Keeping the instruction count in a register between handler calls.
-3. More instructions natively (`mtspr` LR/CTR, `lha`, indexed loads and
-   stores, `mullw`, shifts).
+3. More instructions natively: done for `mtspr` LR/CTR/XER, `rlwimi`,
+   `lha`/`lhau` and the add family (profile above); next `mfspr` (other
+   SPRs), indexed loads and stores (`lbzx`, `lwzx`, `lhaux`), `mtcrf`.
 
 Speed can only be measured on the Pi.

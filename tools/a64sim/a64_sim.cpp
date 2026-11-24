@@ -135,6 +135,16 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
             else                // UBFIZ / LSL: bits imms..0 up to size - immr
                 r = (src & low_bits(imms + 1)) << (size - immr);
             wz(rd, r, x);
+        } else if ((i & 0x7F800000u) == 0x13000000u) {         // SBFM (SXTH, ASR ...)
+            const bool n = (i >> 22) & 1;
+            const u32 immr = (i >> 16) & 63, imms = (i >> 10) & 63, size = x ? 64 : 32;
+            if (n != x || immr >= size || imms >= size || imms < immr)
+                return fail("SBFM form not used by the JIT", pc, lo);
+            // SBFX: bits imms..immr to the bottom, sign-extended from bit imms.
+            const u32 width = imms - immr + 1;
+            const u64 field = (mask(rz(rn), x) >> immr) & low_bits(width);
+            const u64 sign = (field >> (width - 1)) & 1;
+            wz(rd, sign ? (field | ~low_bits(width)) : field, x);
         } else if ((i & 0x7F800000u) == 0x33000000u) {         // BFM
             const bool nbit = (i >> 22) & 1;
             const u32 immr = (i >> 16) & 63, imms = (i >> 10) & 63, size = x ? 64 : 32;

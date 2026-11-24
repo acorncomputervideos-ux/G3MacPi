@@ -759,11 +759,13 @@ BOTH(generated_loads_and_stores_take_the_fast_path)
             if (translated)
                 map_test_bats(*m);
             if (g_jit_bg && m->worker) {
-                // The first pass queues the blocks; give the worker time to
-                // compile them, as a real second core would have had.
-                m->cpu.run(2 + 7);
+                // The first passes queue the blocks (the set-up with the
+                // first pass, then the loop body from its top: mtctr does
+                // not end a block); give the worker time to compile them,
+                // as a real second core would have had.
+                m->cpu.run(2 + 7 + 7);
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                m->cpu.run(99 * 7);
+                m->cpu.run(98 * 7);
             } else {
                 m->cpu.run(2 + 100 * 7);
             }
@@ -775,7 +777,7 @@ BOTH(generated_loads_and_stores_take_the_fast_path)
             CHECK(c.cpu.jit_stats().memory_slow <= 8);
             // Each pass runs the loop block in generated code: entered from
             // run_blocks or straight from the previous pass (chained).
-            CHECK(c.cpu.jit_stats().runs + c.cpu.jit_stats().chained >= (g_jit_bg ? 98u : 99u));
+            CHECK(c.cpu.jit_stats().runs + c.cpu.jit_stats().chained >= (g_jit_bg ? 97u : 99u));
             if (g_jit_bg)
                 CHECK(c.cpu.jit_stats().installed >= 1);
         }

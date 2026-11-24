@@ -114,6 +114,12 @@ void Assembler::ubfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms)
     emit(sf(x) | (x ? 1u << 22 : 0) | 0x53000000u | ((immr & 63) << 16) | ((imms & 63) << 10) | (rn << 5) | rd);
 }
 
+// SBFM: sf 00 100110 N immr imms Rn Rd (N = sf).
+void Assembler::sbfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms)
+{
+    emit(sf(x) | (x ? 1u << 22 : 0) | 0x13000000u | ((immr & 63) << 16) | ((imms & 63) << 10) | (rn << 5) | rd);
+}
+
 // BFM: sf 01 100110 N immr imms Rn Rd (N = sf).
 void Assembler::bfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms)
 {

@@ -69,6 +69,10 @@ public:
     void ubfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms);
     void lsr_imm(Reg wd, Reg wn, u32 shift) { ubfm(false, wd, wn, shift & 31, 31); }
     void ubfx(Reg wd, Reg wn, u32 lsb, u32 width) { ubfm(false, wd, wn, lsb, lsb + width - 1); }
+    void ubfx64(Reg xd, Reg xn, u32 lsb, u32 width) { ubfm(true, xd, xn, lsb, lsb + width - 1); }
+    // Signed bitfield move and its alias SXTH (32-bit).
+    void sbfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms);
+    void sxth(Reg wd, Reg wn) { sbfm(false, wd, wn, 0, 15); }
     // Bitfield move (keeps the other bits of rd) and its alias BFI.
     void bfm(bool x, Reg rd, Reg rn, u32 immr, u32 imms);
     void bfi(Reg wd, Reg wn, u32 lsb, u32 width) { bfm(false, wd, wn, (32 - lsb) & 31, width - 1); }
