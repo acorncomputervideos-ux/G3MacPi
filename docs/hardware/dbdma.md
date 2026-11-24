@@ -40,10 +40,13 @@ no code was copied.
   accepts or delivers fewer bytes than asked leaves the channel on the
   descriptor; it calls `DbdmaChannel::kick()` when ready, and the transfer
   resumes where it stopped.
-- The residual count written back is always 0, because a descriptor finishes
-  only after the whole transfer. Short transfers that end early (an IDE
-  command delivering less data) will need a device-side way to finish a
-  descriptor; this will be added together with the IDE controller.
+- A descriptor normally finishes only after the whole transfer (residual
+  0). Packet devices end an INPUT_LAST descriptor early: when the device
+  delivers less than asked, the channel asks
+  `DbdmaStream::dma_input_packet_end()`; true finishes the descriptor with
+  the unfilled bytes as the residual count (BMAC+ Ethernet: Linux takes a
+  received frame's length from it). Stream devices keep the default
+  (false) and the channel waits for more data.
 - FLUSH is acknowledged at once, since nothing is buffered.
 - At most 4096 descriptors run per call, so a NOP that branches to itself
   can't hang the emulator.

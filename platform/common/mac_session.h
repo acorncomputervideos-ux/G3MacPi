@@ -17,6 +17,8 @@
 
 #include "core/common/types.h"
 #include "core/devices/ata/atapi_cdrom.h"
+#include "core/devices/macio/bmac.h"
+#include "core/devices/macio/davbus.h"
 #include "core/machine/machine_config.h"
 #include "core/storage/block_device.h"
 
@@ -43,6 +45,13 @@ public:
     virtual void console(const char* text, u32 len) { (void)text; (void)len; }
     // Mac OS ejected the disc in CD-ROM drive `drive` (its image is closed).
     virtual void disc_ejected(u32 drive) { (void)drive; }
+    // Where the Mac's sound goes, and its network (nullptr: none). Called
+    // once by start(); the objects must outlive the session.
+    virtual AudioSink* audio_sink() { return nullptr; }
+    virtual NetLink* net_link() { return nullptr; }
+    // The Ethernet address to give the Mac (the device tree's); false keeps
+    // the built-in default.
+    virtual bool mac_address(u8 out[6]) { (void)out; return false; }
 
 protected:
     ~MacHost() = default;

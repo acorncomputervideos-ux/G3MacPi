@@ -14,8 +14,9 @@
 //      0x16000 VIA (Cuda)
 //      0x20000 IDE0, 0x21000 IDE1 (DBDMA channels 0x16 and 0x1A)
 //      0x60000 NVRAM (8 KB, one byte every 16 bytes)
-//    Other cells (SCC 0x13000, ...)
-//    are not modelled yet and read as unmapped.
+//      0x10000 MESH, 0x11000 BMAC+ Ethernet, 0x12000/0x13000 ESCC,
+//      0x14000 sound (DAV bus, Burgundy codec)
+//    Others (SWIM3 floppy 0x15000) are not modelled and read as unmapped.
 // The cells are mapped on the physical bus whenever BAR 0 is non-zero and
 // memory decoding is enabled in the command register, and moved/removed
 // when software changes either.
@@ -23,6 +24,7 @@
 #ifndef G3_CORE_DEVICES_MACIO_PADDINGTON_H
 #define G3_CORE_DEVICES_MACIO_PADDINGTON_H
 
+#include "core/devices/macio/bmac.h"
 #include "core/devices/macio/cuda.h"
 #include "core/devices/macio/dbdma.h"
 #include "core/devices/macio/heathrow_pic.h"
@@ -30,6 +32,7 @@
 #include "core/devices/macio/escc.h"
 #include "core/devices/macio/mesh.h"
 #include "core/devices/macio/nvram.h"
+#include "core/devices/macio/davbus.h"
 #include "core/devices/macio/via6522.h"
 #include "core/devices/pci/pci.h"
 #include "core/mem/physical_bus.h"
@@ -61,6 +64,21 @@ public:
     static constexpr u32 kIdeIrq[2] = {13, 14};
     static constexpr u32 kIdeDmaIrq[2] = {2, 3};
 
+    // Sound (the DAV bus; its codec answers as a Screamer, which is what
+    // Mac OS 9.2.1 drives here, see davbus.h) and Ethernet (BMAC+): offsets in the
+    // BAR (DingusPPC MacIoTwo), interrupts as a real B&W's Linux log and
+    // DingusPPC give them; DBDMA channels at mac-io + 0x8800/0x8900 and
+    // + 0x8200/0x8300 (channel index = offset / 0x80 in our controller).
+    // docs/hardware/davbus.md, docs/hardware/bmac.md.
+    static constexpr u32 kBmacOffset = 0x11000;
+    static constexpr u32 kBmacIrq = 42;
+    static constexpr u32 kBmacDmaChannel[2] = {0x200 / 0x80, 0x300 / 0x80};  // tx, rx
+    static constexpr u32 kBmacDmaIrq[2] = {32, 33};
+    static constexpr u32 kSoundOffset = 0x14000;
+    static constexpr u32 kSoundIrq = 17;
+    static constexpr u32 kSoundDmaChannel[2] = {0x800 / 0x80, 0x900 / 0x80};  // out, in
+    static constexpr u32 kSoundDmaIrq[2] = {8, 9};
+
     Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision = 0);
 
     HeathrowPic& pic() { return pic_; }
@@ -71,6 +89,8 @@ public:
     MacioIde& ide(u32 n) { return ide_[n & 1]; }
     MacioMesh& mesh() { return mesh_; }
     MacioEscc& escc() { return escc_; }
+    MacioDavbus& sound() { return sound_; }
+    MacioBmac& ethernet() { return bmac_; }
     u32 mapped_base() const { return mapped_base_; }
 
     // PciFunction
@@ -91,9 +111,12 @@ private:
     MacioIde ide_[2];
     MacioMesh mesh_;
     MacioEscc escc_;
+    MacioDavbus sound_;
+    MacioBmac bmac_;
     struct IrqRoute { HeathrowPic* pic; u32 irq; };
     IrqRoute ide_irq_[2] = {};
     IrqRoute ide_dma_irq_[2] = {};
+    IrqRoute sound_dma_irq_[2] = {}, bmac_dma_irq_[2] = {};
     u32 mapped_base_ = 0;  // 0 = not mapped
 };
 

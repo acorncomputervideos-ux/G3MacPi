@@ -129,6 +129,8 @@ bool ConfigMenu::restart_differs(u32 item) const
     if (item == kBoot) return a.boot != b.boot;
     if (item == kMode) return a.width != b.width || a.height != b.height;
     if (item == kDepth) return a.depth != b.depth;
+    if (item == kSound) return a.sound != b.sound;
+    if (item == kNetwork) return a.network != b.network;
     if (item >= kDrive0 && item < kFloppy) {
         const auto& x = a.drive[item - kDrive0];
         const auto& y = b.drive[item - kDrive0];
@@ -262,6 +264,10 @@ void ConfigMenu::change_main(u32 item, int dir)
             ++i;
         i = (i >= n) ? 0 : cycle(i, n, dir);
         cfg_.depth = MachineConfig::kDepths[i];
+    } else if (item == kSound) {
+        cfg_.sound = !cfg_.sound;
+    } else if (item == kNetwork) {
+        cfg_.network = !cfg_.network;
     } else {
         return;
     }
@@ -597,6 +603,12 @@ void ConfigMenu::render(Screen& s) const
             } else if (i == kDepth) {
                 scat(label, sizeof label, "Colours");
                 scopy(buf, sizeof buf, depth_name(cfg_.depth));
+            } else if (i == kSound) {
+                scat(label, sizeof label, "Sound");
+                scopy(buf, sizeof buf, cfg_.sound ? "On (HDMI)" : "Off");
+            } else if (i == kNetwork) {
+                scat(label, sizeof label, "Ethernet");
+                scopy(buf, sizeof buf, cfg_.network ? "On (the Pi's Ethernet port)" : "Off");
             } else if (i == kSave) {
                 ++row;
                 line(s, row, item_attr(sel, false), dirty_ ? "Save settings (unsaved changes)" : "Save settings");

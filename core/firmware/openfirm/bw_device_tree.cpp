@@ -387,6 +387,41 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         for (const Phandle ch : channels)
             t.set_int(ch, "slot-names", 0);
     }
+    // Sound: a "davbus" node with a "sound" child, which is how Linux's
+    // snd-powermac finds the codec on G3 models ("powermac G3 models have a
+    // node called 'davbus' with a child called 'sound'"); compatible
+    // "screamer" on the child selects Screamer. A real B&W very likely has a
+    // Burgundy codec (FreeBSD davbus.c, "B&W G3 wirings", in its Burgundy
+    // code), but Mac OS 9.2.1 drives the codec with the Screamer protocol
+    // whichever of the two is named here (seen in a trace), so the
+    // emulated codec is a Screamer and is named as one. reg: the codec registers,
+    // then the output and input DMA channels; interrupts in the same order
+    // (17, 8, 9, as Linux reports them on a B&W). The Mac OS ROM file also
+    // names "davbus". No "layout-id" (Linux then hands the device to another
+    // driver). Their device_type values are not known (none is given).
+    // docs/hardware/davbus.md.
+    n.davbus = n.sound = n.ethernet = kNone;
+    if (m.sound) {
+        const u32 reg[6] = {Paddington::kSoundOffset, 0x1000, 0x8800, 0x100, 0x8900, 0x100};
+        const u32 irq[3] = {Paddington::kSoundIrq, Paddington::kSoundDmaIrq[0], Paddington::kSoundDmaIrq[1]};
+        n.davbus = cell(t, n.macio, n.pic, "davbus", nullptr, reg, 6, irq, 3);
+        n.sound = t.add_node(n.davbus, "sound", nullptr);
+        t.set_string(n.sound, "compatible", "screamer");
+    }
+    // Ethernet: BMAC+. Linux's bmac driver matches type "network" with
+    // compatible "bmac+" and needs three reg entries and three interrupts:
+    // the cell, the transmit DMA channel, the receive DMA channel (42, 32,
+    // 33 on a B&W). The address is read from "mac-address", else
+    // "local-mac-address"; both are given. The Mac OS ROM file holds a
+    // "bmac+" driver. docs/hardware/bmac.md.
+    if (m.ethernet) {
+        const u32 reg[6] = {Paddington::kBmacOffset, 0x1000, 0x8200, 0x100, 0x8300, 0x100};
+        const u32 irq[3] = {Paddington::kBmacIrq, Paddington::kBmacDmaIrq[0], Paddington::kBmacDmaIrq[1]};
+        n.ethernet = cell(t, n.macio, n.pic, "ethernet", "network", reg, 6, irq, 3);
+        t.set_string(n.ethernet, "compatible", "bmac+");
+        t.set_property(n.ethernet, "local-mac-address", m.mac_address, 6);
+        t.set_property(n.ethernet, "mac-address", m.mac_address, 6);
+    }
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);
 

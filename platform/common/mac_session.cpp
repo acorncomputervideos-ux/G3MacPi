@@ -159,6 +159,12 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     fc.width = config.width;
     fc.height = config.height;
     fc.depth = config.depth == 16 ? 15 : config.depth;  // "thousands": the device's 15-bit mode
+    // Sound and Ethernet: in the device tree when on, connected to the host.
+    fc.sound = config.sound;
+    fc.ethernet = config.network;
+    host.mac_address(fc.mac_address);
+    m_->macio().sound().set_sink(config.sound ? host.audio_sink() : nullptr);
+    m_->macio().ethernet().set_link(config.network ? host.net_link() : nullptr);
     fw_ = new BwFirmware(*m_, fc);
     if (!fw_ || !fw_->ok())
         return fail(Error::Firmware);

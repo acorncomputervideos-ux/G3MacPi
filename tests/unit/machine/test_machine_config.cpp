@@ -184,6 +184,33 @@ TEST_CASE("machine/config/jit_option")
     CHECK(back.jit);  // unchanged
 }
 
+TEST_CASE("machine/config/sound_and_network_options")
+{
+    MachineConfig c;
+    CHECK(c.sound);
+    CHECK(c.network);
+    ConfigParseReport r;
+    const char text[] = "[machine]\nsound = no\nnetwork = no\n";
+    parse_machine_config(text, sizeof text - 1, c, r);
+    CHECK(!c.sound);
+    CHECK(!c.network);
+    CHECK_EQ(r.ignored, 0u);
+    char out[4096];
+    const u32 n = write_machine_config(c, out, sizeof out);
+    REQUIRE(n > 0);
+    CHECK(std::strstr(out, "\nsound = no\nnetwork = no\n") != nullptr);
+    MachineConfig back;
+    ConfigParseReport r2;
+    parse_machine_config(out, n, back, r2);
+    CHECK(!back.sound);
+    CHECK(!back.network);
+    CHECK_EQ(r2.ignored, 0u);
+    const char bad[] = "[machine]\nsound = loud\n";
+    ConfigParseReport r3;
+    parse_machine_config(bad, sizeof bad - 1, back, r3);
+    CHECK_EQ(r3.ignored, 1u);
+}
+
 TEST_CASE("machine/config/choose_boot_drive")
 {
     MachineConfig c;

@@ -104,10 +104,10 @@ void HeathrowPic::mmio_write(u32 offset, u32 size, u32 value)
             break;
         }
         events_ &= ~((static_cast<u64>(v & 0x7FFFFFFFu) << shift) & ~level_triggered_);
-        if (bank == 0) {
-            // DMA sources (IRQs 0-10): their lines stay up until cleared here.
-            // In 68K mode the 1 -> 0 change latches an event, as any edge does.
-            const u64 dma = static_cast<u64>(v) & kDmaSources & levels_;
+        {
+            // DMA sources: their lines stay up until cleared here. In 68K
+            // mode the 1 -> 0 change latches an event, as any edge does.
+            const u64 dma = (static_cast<u64>(v) << shift) & kDmaSources & levels_;
             if (mode_68k())
                 events_ |= dma & ~level_triggered_;
             levels_ &= ~dma;

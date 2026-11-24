@@ -8,6 +8,7 @@
 #define G3_APP_CIRCLE_KERNEL_H
 
 #include <circle/actled.h>
+#include <circle/bcm54213.h>
 #include <circle/cputhrottle.h>
 #include <circle/devicenameservice.h>
 #include <circle/exceptionhandler.h>
@@ -18,6 +19,7 @@
 #include <circle/logger.h>
 #include <circle/screen.h>
 #include <circle/serial.h>
+#include <circle/sound/hdmisoundbasedevice.h>
 #include <circle/timer.h>
 #include <circle/types.h>
 #include <circle/usb/usbhcidevice.h>
@@ -43,8 +45,11 @@ enum TShutdownMode
 	ShutdownReboot
 };
 
+static const unsigned SoundSampleRate = 48000;	// HDMI sound
+
 // The other cores: core 1 draws the Mac's screen (ScreenPresenter), core 2
-// compiles the JIT's code (JitWorker), core 3 does disk-image I/O (DiskCache).
+// compiles the JIT's code (JitWorker), core 3 does disk-image I/O (DiskCache)
+// and moves the Mac's sound to HDMI and its Ethernet frames to the adapter.
 class CDrawCore : public CMultiCoreSupport, public CDiskIoCore
 {
 public:
@@ -69,9 +74,20 @@ public:
 	void AttachDisk (g3::DiskCache *pCache) override;
 	void DetachDisk (g3::DiskCache *pCache) override;
 
+	// Core 0, once: the sound and network devices core 3 serves.
+	void AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice);
+	void AttachNet (g3::NetBridge *pBridge, CNetDevice *pDevice);
+
 private:
 	void RunWorker (void);
 	void RunDiskIo (void);
+	u32 ServiceSound (void);
+	u32 ServiceNet (void);
+	g3::AudioBridge *m_pAudio = 0;		// atomic accesses only
+	CSoundBaseDevice *m_pSound = 0;
+	g3::NetBridge *m_pNetBridge = 0;	// atomic accesses only
+	CNetDevice *m_pNetDevice = 0;
+	unsigned m_nLastPHYTicks = 0;
 	static const unsigned MaxDisks = 8;
 	g3::DiskCache *m_pDisk[MaxDisks] = {};	// atomic accesses only
 	unsigned m_nIoBusy = 0;			// core 3 is serving the disks
@@ -104,6 +120,9 @@ private:
 	void SetUpSettings (void);
 	void ShowMenu (boolean bShow);
 	void StartDrawCore (void);
+	void StartSoundAndNet (void);	// on core 3, once it runs
+	CHDMISoundBaseDevice	*m_pHDMISound = 0;
+	CBcm54213Device		*m_pEthernet = 0;
 	static void SelfTestAttach (void *pContext, void *pWorker);	// CpuSelfTest::Setup::worker_attach
 #ifdef G3_QEMU_DRAWTEST
 	void DrawTest (void);

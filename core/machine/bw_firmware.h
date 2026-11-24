@@ -49,6 +49,10 @@ public:
         u64 rtc_seconds = 978307200ull;  // 2001-01-01 00:00:00
         // Power-on display mode (if the machine has a display).
         u32 width = 640, height = 480, depth = 8;
+        // Built-in sound and Ethernet in the device tree, and the address.
+        bool sound = true;
+        bool ethernet = true;
+        u8 mac_address[6] = {0x02, 0x47, 0x33, 0x4D, 0x50, 0x01};
     };
     // Firmware memory at the top of RAM.
     struct Layout {

@@ -225,6 +225,16 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     r.press(kRight);
     CHECK_EQ(r.menu.config().depth, 16u);
     CHECK(r.has("Thousands of colours"));
+    r.press(kDown);                                    // Sound: on by default, Enter turns it off
+    CHECK(r.has("On (HDMI)"));
+    CHECK(r.press(kEnter) == ConfigMenu::Action::None);
+    CHECK(!r.menu.config().sound);
+    CHECK(r.menu.config().network);
+    r.press(kDown);                                    // Ethernet
+    r.press(kRight);
+    CHECK(!r.menu.config().network);
+    r.press(kLeft);
+    CHECK(r.menu.config().network);
     r.press(kDown);
     CHECK(r.press(kEnter) == ConfigMenu::Action::Save);
     r.menu.mark_saved();

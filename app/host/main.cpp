@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <cstring>
+#include "core/machine/yosemite.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/machine_state.h"
 
@@ -74,6 +75,50 @@ struct HostFiles final : MacHost {
     void close_image(BlockDevice*) override {}
     void console(const char* text, u32 len) override { std::fwrite(text, 1, len, stdout); }
     void disc_ejected(u32 drive) override { std::printf("[g3_host] disc ejected from drive %u\n", drive); }
+    AudioSink* audio_sink() override { return &wav; }
+    NetLink* net_link() override { return &net; }
+
+    // G3_WAV=file.wav: the Mac's sound, as it plays (16-bit stereo).
+    struct Wav final : AudioSink {
+        std::vector<s16> samples;
+        u32 rate = 0;
+        u64 frames = 0;
+        void audio_out(const s16* f, u32 n, u32 r) override
+        {
+            frames += n;
+            rate = r;
+            if (std::getenv("G3_WAV"))
+                samples.insert(samples.end(), f, f + 2 * n);
+        }
+        bool write(const char* path) const
+        {
+            FILE* o = std::fopen(path, "wb");
+            if (!o)
+                return false;
+            const u32 bytes = static_cast<u32>(samples.size() * 2);
+            auto le32 = [&](u32 v) { for (int i = 0; i < 4; ++i) std::fputc((v >> (8 * i)) & 0xFF, o); };
+            auto le16 = [&](u32 v) { std::fputc(v & 0xFF, o); std::fputc((v >> 8) & 0xFF, o); };
+            std::fwrite("RIFF", 1, 4, o); le32(36 + bytes); std::fwrite("WAVEfmt ", 1, 8, o);
+            le32(16); le16(1); le16(2); le32(rate ? rate : 44100); le32((rate ? rate : 44100) * 4); le16(4); le16(16);
+            std::fwrite("data", 1, 4, o); le32(bytes);
+            for (s16 v : samples)
+                le16(static_cast<u16>(v));
+            return std::fclose(o) == 0;
+        }
+    } wav;
+    // The network: frames the Mac sends are logged (G3_NETLOG=1); nothing
+    // comes back.
+    struct Net final : NetLink {
+        u64 sent = 0;
+        void net_send(const u8* f, u32 n) override
+        {
+            ++sent;
+            if (std::getenv("G3_NETLOG") && n >= 14)
+                std::printf("[g3_host] frame out: %u bytes to %02x:%02x:%02x:%02x:%02x:%02x type %02x%02x\n", n, f[0],
+                            f[1], f[2], f[3], f[4], f[5], f[12], f[13]);
+        }
+        u32 net_receive(u8*) override { return 0; }
+    } net;
 };
 
 bool write_ppm(const char* path, MacSession& s)
@@ -206,6 +251,72 @@ int main(int argc, char** argv)
         return 1;
     }
     std::printf("[g3_host] started: %u MB, %ux%u\n", config.ram_mb, config.width, config.height);
+    // G3_XPRAM=offset:value[,...]: poke Mac OS's PRAM (the NVRAM partition
+    // "APL,MacOS75") before it boots (experiments).
+    if (const char* xp = std::getenv("G3_XPRAM")) {
+        MacioNvram& nvr = session.machine()->macio().nvram();
+        std::vector<u8> nv(nvr.data(), nvr.data() + MacioNvram::kSize);
+        for (u32 off = 0; off + 16 <= MacioNvram::kSize;) {
+            const u32 len = ((nv[off + 2] << 8) | nv[off + 3]) * 16;
+            if (len < 16)
+                break;
+            if (std::memcmp(&nv[off + 4], "APL,MacOS75", 11) == 0) {
+                const char* p = xp;
+                while (*p) {
+                    char* end = nullptr;
+                    const u32 o = static_cast<u32>(std::strtoul(p, &end, 0));
+                    const u32 v = static_cast<u32>(std::strtoul(end + 1, &end, 0));
+                    nv[off + 16 + o] = static_cast<u8>(v);
+                    std::printf("[g3_host] PRAM %02x = %02x\n", o, v);
+                    p = *end == ',' ? end + 1 : end;
+                }
+            }
+            off += len;
+        }
+        nvr.load(nv.data(), MacioNvram::kSize);
+    }
+    // G3_MMIO_RANGE=lo,hi[,max]: device-register accesses in [lo, hi).
+    if (const char* r = std::getenv("G3_MMIO_RANGE")) {
+        struct Range { u32 lo, hi, max, shown, last_addr, last_value; bool last_read; u64 repeats; PhysicalBus* bus; };
+        static Range range{};
+        range.bus = &session.machine()->bus();
+        char* end = nullptr;
+        range.lo = static_cast<u32>(std::strtoul(r, &end, 0));
+        range.hi = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, &end, 0)) : ~0u;
+        range.max = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 0)) : 2000;
+        session.machine()->bus().set_mmio_trace([](void* c, u32 addr, u32 size, bool write, u32 value) {
+            auto* g = static_cast<Range*>(c);
+            if (addr < g->lo || addr >= g->hi || g->shown >= g->max)
+                return;
+            if (!write && g->last_read && addr == g->last_addr && value == g->last_value) {
+                ++g->repeats;  // a polling loop: counted, not printed
+                return;
+            }
+            if (g->repeats)
+                std::printf("[mmio]   (read %llu more times)\n", static_cast<unsigned long long>(g->repeats));
+            g->repeats = 0;
+            g->last_addr = addr;
+            g->last_value = value;
+            g->last_read = !write;
+            ++g->shown;
+            std::printf("[mmio] %s%u %08x = %08x\n", write ? "W" : "R", size, addr, value);
+            // A DBDMA command pointer written: show the descriptors there.
+            if (write && size == 4 && (addr & 0xFFFF8000u) == 0x80808000u && (addr & 0x7F) == 0x0C) {
+                const u32 cp = __builtin_bswap32(value);
+                for (u32 d = 0; d < 64; ++d) {
+                    u32 w[4];
+                    for (u32 k = 0; k < 4; ++k) {
+                        g->bus->read32(cp + d * 16 + k * 4, w[k]);
+                        w[k] = __builtin_bswap32(w[k]);
+                    }
+                    std::printf("[mmio]     desc %08x: req %u cmd %04x addr %08x dep %08x res %u st %04x\n",
+                                cp + d * 16, w[0] & 0xFFFF, w[0] >> 16, w[1], w[2], w[3] & 0xFFFF, w[3] >> 16);
+                    if ((w[0] >> 28) == 7 || ((w[0] >> 16) & 0x000C) == 0x000C)
+                        break;  // STOP, or a branch always
+                }
+            }
+        }, &range);
+    }
 
     struct InputStep { u32 at; s32 dx, dy; u32 button; };
     std::vector<InputStep> steps;
@@ -224,6 +335,28 @@ int main(int argc, char** argv)
             p = *end == ',' ? end + 1 : end;
         }
     }
+    // G3_KEYS=sec:usage[+usage...],...: at guest second sec, press the HID
+    // usages together (e.g. 0xE3 = left Command) and release them.
+    struct KeyStep { u32 at; std::vector<u8> keys; };
+    std::vector<KeyStep> key_steps;
+    if (const char* ks = std::getenv("G3_KEYS")) {
+        const char* p = ks;
+        while (*p) {
+            KeyStep st{};
+            char* end = nullptr;
+            st.at = static_cast<u32>(std::strtoul(p, &end, 10));
+            p = end;
+            while (*p == ':' || *p == '+') {
+                st.keys.push_back(static_cast<u8>(std::strtoul(p + 1, &end, 0)));
+                p = end;
+            }
+            key_steps.push_back(st);
+            if (*p != ',')
+                break;
+            ++p;
+        }
+    }
+    size_t next_key = 0;
     size_t next_step = 0;
     s32 move_x = 0, move_y = 0;
     u32 button = 0;
@@ -257,6 +390,15 @@ int main(int argc, char** argv)
                 move_y -= dy;
                 session.mouse(dx, dy, button);
             }
+            if (slice == 0 && next_key < key_steps.size() && key_steps[next_key].at <= s) {
+                const KeyStep& k = key_steps[next_key++];
+                for (u8 u : k.keys)
+                    session.key(u, true);
+                session.run(50000000000ull);  // held for 50 ms
+                for (size_t i = k.keys.size(); i-- > 0;)
+                    session.key(k.keys[i], false);
+                std::printf("[g3_host] keys pressed at %u s\n", s);
+            }
             session.run(10000000000ull);  // 10 ms of guest time
             if (video && slice % 4 == 3) {     // every 40 ms
                 video_frame(session, frame);
@@ -274,6 +416,45 @@ int main(int argc, char** argv)
     }
     if (session.halted())
         std::printf("[g3_host] the CPU halted (checkstop)\n");
+    {
+        MacioDavbus& snd = session.machine()->macio().sound();
+        MacioBmac& eth = session.machine()->macio().ethernet();
+        std::printf("[g3_host] sound: %llu frames at %u Hz; codec regs 0-7:", static_cast<unsigned long long>(host.wav.frames),
+                    host.wav.rate);
+        for (u32 i = 0; i < 8; ++i)
+            std::printf(" %03x", snd.codec_reg(i));
+        std::printf("; control %08x, codec control %08x", snd.mmio_read(0, 4), snd.mmio_read(0x10, 4));
+        const u8* pram = session.machine()->macio().cuda().pram();
+        {
+            // NVRAM partitions (16-byte headers: signature, checksum, length
+            // in 16-byte units, name) and each one's first bytes.
+            const u8* nv = session.machine()->macio().nvram().data();
+            for (u32 off = 0; off + 16 <= 8192;) {
+                const u32 len = ((nv[off + 2] << 8) | nv[off + 3]) * 16;
+                if (len < 16)
+                    break;
+                char name[13] = {};
+                std::memcpy(name, nv + off + 4, 12);
+                std::printf("\n[g3_host] NVRAM %04x: sig %02x len %u '%s':", off, nv[off], len, name);
+                u32 nonzero = 0;
+                for (u32 i = 16; i < len; ++i)
+                    if (nv[off + i] && nonzero++ < 24)
+                        std::printf(" [%x]=%02x", i - 16, nv[off + i]);
+                std::printf(" (%u non-zero)", nonzero);
+                off += len;
+            }
+        }
+        std::printf("\n[g3_host] PRAM 0x00-0x1F:");
+        for (u32 i = 0; i < 0x20; ++i)
+            std::printf(" %02x", pram[i]);
+        u8 mac[6];
+        eth.station_address(mac);
+        std::printf("\n[g3_host] ethernet: %llu frames sent, %llu received, %llu dropped; station %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    static_cast<unsigned long long>(eth.frames_sent()), static_cast<unsigned long long>(eth.frames_received()),
+                    static_cast<unsigned long long>(eth.frames_dropped()), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        if (const char* wp = std::getenv("G3_WAV"))
+            std::printf("[g3_host] sound %s %s\n", host.wav.write(wp) ? "written to" : "NOT written to", wp);
+    }
     if (state_path) {
         static MachineState now;
         std::vector<u8> bytes(MachineState::kFileSize);

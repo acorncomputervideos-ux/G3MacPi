@@ -84,6 +84,10 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     desc.bus_hz = static_cast<u32>(m.bus_hz());
     desc.pvr = m.cpu().state().spr[ppc::spr::PVR];
     desc.macio_base = c.macio_base;
+    desc.sound = c.sound;
+    desc.ethernet = c.ethernet;
+    for (u32 i = 0; i < 6; ++i)
+        desc.mac_address[i] = c.mac_address[i];
     for (u32 i = 0; i < 5; ++i)
         desc.cmd646_io[i] = kCmd646Io[i];
     if (m.has_display()) {

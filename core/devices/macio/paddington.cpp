@@ -7,7 +7,7 @@
 namespace g3 {
 
 Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
-    : bus_(bus), via_(scheduler), cuda_(via_, scheduler), dbdma_(bus)
+    : bus_(bus), via_(scheduler), cuda_(via_, scheduler), dbdma_(bus), sound_(scheduler, MacioDavbus::Codec::Screamer), bmac_(scheduler)
 {
     cfg_.init_header(0x106B, 0x0017, revision, 0xFF0000);
     cfg_.define_bar(0, kBarSize, false);
@@ -17,6 +17,19 @@ Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
     escc_.set_irq([](void* c, u32 ch, bool a) { static_cast<HeathrowPic*>(c)->set_input(kEsccIrq[ch & 1], a); },
                   &pic_);
     mesh_.set_irq([](void* c, bool a) { static_cast<HeathrowPic*>(c)->set_input(kMeshIrq, a); }, &pic_);
+    bmac_.set_irq([](void* c, bool a) { static_cast<HeathrowPic*>(c)->set_input(kBmacIrq, a); }, &pic_);
+    sound_.attach_dma(&dbdma_.channel(kSoundDmaChannel[0]), &dbdma_.channel(kSoundDmaChannel[1]));
+    bmac_.attach_dma(&dbdma_.channel(kBmacDmaChannel[0]), &dbdma_.channel(kBmacDmaChannel[1]));
+    for (u32 i = 0; i < 2; ++i) {
+        sound_dma_irq_[i] = {&pic_, kSoundDmaIrq[i]};
+        bmac_dma_irq_[i] = {&pic_, kBmacDmaIrq[i]};
+        const auto raise = [](void* c) {  // DMA lines stay up until the PIC's ack clears them
+            auto* r = static_cast<IrqRoute*>(c);
+            r->pic->set_input(r->irq, true);
+        };
+        dbdma_.channel(kSoundDmaChannel[i]).set_irq(raise, &sound_dma_irq_[i]);
+        dbdma_.channel(kBmacDmaChannel[i]).set_irq(raise, &bmac_dma_irq_[i]);
+    }
     for (u32 i = 0; i < 2; ++i) {
         ide_irq_[i] = {&pic_, kIdeIrq[i]};
         ide_dma_irq_[i] = {&pic_, kIdeDmaIrq[i]};
@@ -52,6 +65,8 @@ void Paddington::unmap_cells()
     bus_.unmap(mapped_base_ + kIdeOffset[1]);
     bus_.unmap(mapped_base_ + kMeshOffset);
     bus_.unmap(mapped_base_ + kEsccOffset);
+    bus_.unmap(mapped_base_ + kSoundOffset);
+    bus_.unmap(mapped_base_ + kBmacOffset);
     mapped_base_ = 0;
 }
 
@@ -78,6 +93,8 @@ void Paddington::update_mapping()
         {kIdeOffset[1], MacioIde::kWindowSize, &ide_[1]},
         {kMeshOffset, MacioMesh::kWindowSize, &mesh_},
         {kEsccOffset, MacioEscc::kWindowSize, &escc_},
+        {kSoundOffset, MacioDavbus::kWindowSize, &sound_},
+        {kBmacOffset, MacioBmac::kWindowSize, &bmac_},
     };
     constexpr u32 kCells = sizeof cells / sizeof cells[0];
     u32 mapped = 0;

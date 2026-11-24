@@ -19,6 +19,8 @@ rom = /g3macpi/rom/Mac OS ROM  ; the Mac OS ROM file (user-supplied)
 boot = auto                    ; auto | cdrom | disk
 display = 1024x768x8           ; 640x480 800x600 1024x768 1152x870 1280x1024 1600x1200; depth 8 16 32
 jit = no                       ; yes: block cache + generated code (experimental, docs/cpu/jit-a64.md)
+sound = yes                    ; built-in sound, played on HDMI (docs/hardware/davbus.md)
+network = yes                  ; built-in Ethernet, on the Pi's Ethernet port (docs/hardware/bmac.md)
 
 [ata0.master]                  ; also ata0.slave, ata1.master, ata1.slave
 type = cdrom                   ; none | disk | cdrom
@@ -26,7 +28,8 @@ image = /g3macpi/disks/Mac OS 9.iso
 readonly = yes                 ; disks; CD-ROMs are always read-only
 ```
 
-`jit` is not in the menu yet; set it in the file. It is off by default
+`sound` and `network` are also in the menu ("Sound", "Ethernet"); a
+change applies when the Mac restarts. `jit` is not in the menu yet; set it in the file. It is off by default
 until it has been measured on a Pi.
 
 Invalid lines are ignored and reported (count, first line and reason);

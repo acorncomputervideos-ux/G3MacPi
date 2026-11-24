@@ -15,6 +15,8 @@
 //   boot = auto          ; auto | cdrom | disk
 //   display = 1024x768x8 ; width x height x depth (8, 16, 32)
 //   jit = no             ; yes: the CPU's block cache and generated code
+//   sound = yes          ; the built-in sound (DAV bus, Burgundy), played by the host
+//   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
 //   [ata0.master]
 //   type = cdrom         ; none | disk | cdrom
 //   image = /g3macpi/disks/Mac OS 9.iso
@@ -53,6 +55,9 @@ struct MachineConfig {
     // The CPU's decoded-block cache and AArch64 code generation
     // (docs/cpu/jit-a64.md). Off by default until measured on the Pi.
     bool jit = false;
+    // Built-in sound and Ethernet (docs/hardware/davbus.md, bmac.md).
+    bool sound = true;
+    bool network = true;
     Drive drive[kDrives];
 
     MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master

@@ -288,6 +288,11 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                 if (word_is(val, vn, "yes")) c.jit = true;
                 else if (word_is(val, vn, "no")) c.jit = false;
                 else reject(r, line_no, "jit: yes or no");
+            } else if (word_is(key, kn, "sound") || word_is(key, kn, "network")) {
+                bool& flag = word_is(key, kn, "sound") ? c.sound : c.network;
+                if (word_is(val, vn, "yes")) flag = true;
+                else if (word_is(val, vn, "no")) flag = false;
+                else reject(r, line_no, "sound/network: yes or no");
             } else {
                 reject(r, line_no, "unknown key in [machine]");
             }
@@ -342,6 +347,10 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     o.num(c.depth);
     o.str("\njit = ");
     o.str(c.jit ? "yes" : "no");
+    o.str("\nsound = ");
+    o.str(c.sound ? "yes" : "no");
+    o.str("\nnetwork = ");
+    o.str(c.network ? "yes" : "no");
     o.str("\n");
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         const MachineConfig::Drive& d = c.drive[i];

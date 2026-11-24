@@ -2,6 +2,7 @@
 // The B&W device tree, checked the way Linux would use it, against the
 // emulator's own hardware constants.
 
+#include "core/common/endian.h"
 #include "core/devices/macio/dbdma.h"
 #include "core/devices/macio/heathrow_pic.h"
 #include "core/devices/macio/nvram.h"
@@ -419,4 +420,57 @@ TEST_CASE("firmware/bw-tree/serial_channels_have_slot_names")
     // "slot-name detected"; without it Mac OS 9.2.1 started LocalTalk).
     CHECK_EQ(cell_or(t, b.n.escc_a, "slot-names", 0xFFFFFFFFu), 0u);
     CHECK_EQ(cell_or(t, b.n.escc_b, "slot-names", 0xFFFFFFFFu), 0u);
+}
+
+TEST_CASE("firmware/bw-tree/sound_and_ethernet")
+{
+    Built b;
+    REQUIRE(b.ok);
+    const DeviceTree& t = *b.t;
+    const u8* p = nullptr;
+    u32 len = 0;
+    // davbus with a "sound" child of compatible "screamer" (Linux pmac.c).
+    REQUIRE(b.n.davbus != kNone);
+    REQUIRE(b.n.sound != kNone);
+    CHECK_EQ(t.parent(b.n.davbus), b.n.macio);
+    CHECK_EQ(t.parent(b.n.sound), b.n.davbus);
+    CHECK(std::strcmp(t.name(b.n.davbus), "davbus") == 0);
+    CHECK(std::strcmp(t.name(b.n.sound), "sound") == 0);
+    REQUIRE(t.get_property(b.n.sound, "compatible", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "screamer") == 0);
+    CHECK(!t.get_property(b.n.sound, "layout-id", p, len));  // snd-powermac refuses nodes with one
+    // reg: codec, out DMA, in DMA; interrupts 17, 8, 9.
+    REQUIRE(t.get_property(b.n.davbus, "reg", p, len));
+    REQUIRE(len == 24u);
+    CHECK_EQ(load_be32(p), 0x14000u);
+    CHECK_EQ(load_be32(p + 8), 0x8800u);
+    CHECK_EQ(load_be32(p + 16), 0x8900u);
+    REQUIRE(t.get_property(b.n.davbus, "interrupts", p, len));
+    REQUIRE(len == 12u);
+    CHECK_EQ(load_be32(p), 17u);
+    CHECK_EQ(load_be32(p + 4), 8u);
+    CHECK_EQ(load_be32(p + 8), 9u);
+    // ethernet: type network, compatible bmac+, three regs and interrupts, the address.
+    REQUIRE(b.n.ethernet != kNone);
+    CHECK_EQ(t.parent(b.n.ethernet), b.n.macio);
+    REQUIRE(t.get_property(b.n.ethernet, "device_type", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "network") == 0);
+    REQUIRE(t.get_property(b.n.ethernet, "compatible", p, len));
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p), "bmac+") == 0);
+    REQUIRE(t.get_property(b.n.ethernet, "reg", p, len));
+    REQUIRE(len == 24u);
+    CHECK_EQ(load_be32(p), 0x11000u);
+    CHECK_EQ(load_be32(p + 8), 0x8200u);
+    CHECK_EQ(load_be32(p + 16), 0x8300u);
+    REQUIRE(t.get_property(b.n.ethernet, "interrupts", p, len));
+    REQUIRE(len == 12u);
+    CHECK_EQ(load_be32(p), 42u);
+    CHECK_EQ(load_be32(p + 4), 32u);
+    CHECK_EQ(load_be32(p + 8), 33u);
+    const BwMachine m;
+    for (const char* prop : {"local-mac-address", "mac-address"}) {
+        REQUIRE(t.get_property(b.n.ethernet, prop, p, len));
+        REQUIRE(len == 6u);
+        CHECK(std::memcmp(p, m.mac_address, 6) == 0);
+    }
 }

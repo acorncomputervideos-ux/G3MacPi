@@ -43,6 +43,12 @@ insert or eject a CD there, then "Resume". Changes marked `*` apply
 through "Restart the Mac". The UART log reports the emulation speed every
 10 seconds.
 
+Sound and Ethernet (both on by default, "Sound" and "Ethernet" in the
+menu): the Mac's sound goes to the HDMI port Circle drives (HDMI 0) and
+its network to the Pi's Ethernet port, with the Pi's own Ethernet address.
+Both are new and not yet working end to end in Mac OS: see
+docs/hardware/davbus.md and docs/hardware/bmac.md.
+
 Not yet tested on a Raspberry Pi; please report what you see. Known: the
 Pi 400 has no battery clock, so the Mac's clock starts at 2001-01-01; the
 emulation is several times slower than a real G3.

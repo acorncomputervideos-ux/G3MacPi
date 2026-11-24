@@ -59,7 +59,9 @@ public:
     // to verify). Mac OS's nanokernel acks with bit 31 and then dispatches
     // from the level register, so a DMA interrupt that dropped by itself
     // was never seen. docs/hardware/heathrow-pic.md.
-    static constexpr u64 kDmaSources = 0x7FFull;
+    // Also IRQs 32 and 33, the Ethernet DMA channels (DingusPPC registers
+    // them as DMA interrupts, DMA_ETHERNET_Tx/Rx); acked in the IRQ 32-63 bank.
+    static constexpr u64 kDmaSources = 0x7FFull | (3ull << 32);
 
     // MmioDevice
     u32 mmio_read(u32 offset, u32 size) override;

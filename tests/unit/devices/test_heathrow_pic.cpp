@@ -205,3 +205,26 @@ TEST_CASE("devices/heathrow_pic/mode_68k_clear_all_and_both_edges")
     CHECK_EQ(in_le32(f.bus, kEvent0), 0u);
     CHECK(!f.cpu_irq);
 }
+
+TEST_CASE("devices/heathrow_pic/ethernet_dma_lines_in_the_second_bank")
+{
+    // IRQs 32 and 33 (Ethernet DMA) stay up until acked in the IRQ 32-63
+    // bank; IRQ 42 (the Ethernet cell) is an ordinary input.
+    Fixture f;
+    const u32 kLevel1 = kBase + 0x1C;
+    out_le32(f.bus, kEnable1, (1u << 0) | (1u << 1) | (1u << 10));
+    f.pic.set_input(32, true);
+    f.pic.set_input(33, true);
+    CHECK(f.cpu_irq);
+    CHECK_EQ(in_le32(f.bus, kLevel1) & 3u, 3u);
+    out_le32(f.bus, kAck1, 1u << 0);
+    CHECK_EQ(in_le32(f.bus, kLevel1) & 3u, 2u);   // 32 cleared, 33 still up
+    out_le32(f.bus, kAck0, 1u << 1);               // the other bank's bit 1 is IRQ 1
+    CHECK_EQ(in_le32(f.bus, kLevel1) & 3u, 2u);
+    out_le32(f.bus, kAck1, 1u << 1);
+    CHECK_EQ(in_le32(f.bus, kLevel1) & 3u, 0u);
+    CHECK(!f.cpu_irq);
+    f.pic.set_input(42, true);
+    out_le32(f.bus, kAck1, 1u << 10);
+    CHECK_EQ(in_le32(f.bus, kLevel1) & (1u << 10), 1u << 10);
+}

@@ -12,6 +12,8 @@
 #include <fatfs/ff.h>
 
 #include "core/storage/block_device.h"
+#include "platform/common/audio_bridge.h"
+#include "platform/common/net_bridge.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/disk_cache.h"
 
@@ -71,12 +73,30 @@ public:
 	void close_image (g3::BlockDevice *pImage) override;
 	void console (const char *pText, u32 nLength) override;
 	void disc_ejected (u32 nDrive) override;
+	g3::AudioSink *audio_sink (void) override	{ return m_bSound ? &m_Audio : 0; }
+	g3::NetLink *net_link (void) override		{ return m_bNet ? &m_Net : 0; }
+	bool mac_address (u8 Out[6]) override;
+
+	// Sound and Ethernet: the emulation core's ends of the queues the I/O
+	// core moves to the HDMI sound and the Ethernet device. Enabled once
+	// that device works; the Mac then gets the Pi's own Ethernet address
+	// (the adapter takes frames for it; Circle's own network stack is not
+	// running, so the address is free for the Mac).
+	g3::AudioBridge *GetAudioBridge (void)		{ return &m_Audio; }
+	g3::NetBridge *GetNetBridge (void)		{ return &m_Net; }
+	void EnableSound (void)				{ m_bSound = TRUE; }
+	void EnableNet (const u8 *pAddress);
 
 private:
 	u8		*m_pFile;		// the last file loaded (the ROM file)
 	EjectHandler	m_pEjectHandler;
 	void		*m_pEjectContext;
 	CDiskIoCore	*m_pIoCore = 0;
+	g3::AudioBridge	m_Audio;
+	g3::NetBridge	m_Net;
+	boolean		m_bSound = FALSE;
+	boolean		m_bNet = FALSE;
+	u8		m_MAC[6] = {};
 	struct TCached
 	{
 		g3::DiskCache	*pCache;

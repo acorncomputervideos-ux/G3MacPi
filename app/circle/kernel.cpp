@@ -216,6 +216,52 @@ void CKernel::StartDrawCore (void)
 	m_MacHost.SetDiskIoCore (&m_DrawCore);
 	m_Logger.Write (FromKernel, LogNotice, "Disk image I/O: %s",
 			m_DrawCore.m_bIoStarted ? "core 3" : "core 0 (core 3 did not start)");
+	if (m_DrawCore.m_bIoStarted)
+	{
+		StartSoundAndNet ();
+	}
+}
+
+// Sound on HDMI (Circle drives HDMI 0 only) and the Pi's Ethernet adapter,
+// both served by core 3. Either may be missing; the Mac then has no sound
+// or no network, and runs anyway.
+void CKernel::StartSoundAndNet (void)
+{
+#ifndef G3_QEMU_DRAWTEST
+	m_pHDMISound = new CHDMISoundBaseDevice (&m_Interrupt, SoundSampleRate, 384 * 10);
+	if (m_pHDMISound != 0
+	    && m_pHDMISound->AllocateQueueFrames (SoundSampleRate / 10)	// 100 ms
+	    && m_pHDMISound->Start ())
+	{
+		m_pHDMISound->SetWriteFormat (SoundFormatSigned16, 2);
+		m_MacHost.EnableSound ();
+		m_DrawCore.AttachSound (m_MacHost.GetAudioBridge (), m_pHDMISound);
+		m_Logger.Write (FromKernel, LogNotice, "Sound: HDMI, %u Hz, mixed on core 3", SoundSampleRate);
+	}
+	else
+	{
+		m_Logger.Write (FromKernel, LogWarning, "Sound: HDMI sound did not start; the Mac has no sound");
+	}
+
+	m_pEthernet = new CBcm54213Device;
+	if (m_pEthernet != 0 && m_pEthernet->Initialize ())
+	{
+		// Besides the Mac's own address and broadcasts, the adapter takes
+		// AppleTalk's broadcast address (09:00:07:FF:FF:FF).
+		static const u8 Groups[][MAC_ADDRESS_SIZE] = {{0x09, 0x00, 0x07, 0xFF, 0xFF, 0xFF}, {0}};
+		m_pEthernet->SetMulticastFilter (Groups);
+		const u8 *pMAC = m_pEthernet->GetMACAddress ()->Get ();
+		m_MacHost.EnableNet (pMAC);
+		m_DrawCore.AttachNet (m_MacHost.GetNetBridge (), m_pEthernet);
+		m_Logger.Write (FromKernel, LogNotice,
+				"Ethernet: the Pi's adapter, served by core 3 (Mac address %02X:%02X:%02X:%02X:%02X:%02X)",
+				pMAC[0], pMAC[1], pMAC[2], pMAC[3], pMAC[4], pMAC[5]);
+	}
+	else
+	{
+		m_Logger.Write (FromKernel, LogWarning, "Ethernet: the adapter did not start; the Mac has no network");
+	}
+#endif
 }
 
 void CDrawCore::AttachWorker (g3::ppc::JitWorker *pWorker)
@@ -279,10 +325,93 @@ void CDrawCore::DetachDisk (g3::DiskCache *pCache)
 	}
 }
 
-// Core 3: serve the attached disk caches; sleep in WFE when idle (the
-// caches execute SEV after each request).
+void CDrawCore::AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice)
+{
+	m_pSound = pDevice;
+	__atomic_store_n (&m_pAudio, pBridge, __ATOMIC_SEQ_CST);
+	asm volatile ("sev");
+}
+
+void CDrawCore::AttachNet (g3::NetBridge *pBridge, CNetDevice *pDevice)
+{
+	m_pNetDevice = pDevice;
+	__atomic_store_n (&m_pNetBridge, pBridge, __ATOMIC_SEQ_CST);
+	asm volatile ("sev");
+}
+
+// The HDMI sound queue: kept filled with the Mac's sound, resampled to the
+// device's 48 kHz (silence when the Mac plays nothing). Returns the chunks
+// written.
+u32 CDrawCore::ServiceSound (void)
+{
+	g3::AudioBridge *pBridge = __atomic_load_n (&m_pAudio, __ATOMIC_SEQ_CST);
+	if (pBridge == 0)
+	{
+		return 0;
+	}
+	static const unsigned Chunk = 256;
+	static s16 Buffer[2 * Chunk];
+	u32 nDone = 0;
+	while (nDone < 8
+	       && m_pSound->GetQueueSizeFrames () - m_pSound->GetQueueFramesAvail () >= Chunk)
+	{
+		pBridge->render (Buffer, Chunk, SoundSampleRate);
+		m_pSound->Write (Buffer, sizeof Buffer);
+		nDone++;
+	}
+	return nDone;
+}
+
+// Ethernet: frames in from the adapter (polled; Circle's driver uses no
+// receive interrupt), frames out to it; the PHY checked every 2 seconds
+// (as Circle's own network task does), so the link follows the cable.
+u32 CDrawCore::ServiceNet (void)
+{
+	g3::NetBridge *pBridge = __atomic_load_n (&m_pNetBridge, __ATOMIC_SEQ_CST);
+	if (pBridge == 0)
+	{
+		return 0;
+	}
+	static u8 Frame[FRAME_BUFFER_SIZE];
+	u32 nDone = 0;
+	unsigned nLength;
+	for (unsigned i = 0; i < 8 && m_pNetDevice->ReceiveFrame (Frame, &nLength); i++)
+	{
+		pBridge->put_incoming (Frame, nLength);
+		nDone++;
+	}
+	for (unsigned i = 0; i < 8 && m_pNetDevice->IsSendFrameAdvisable (); i++)
+	{
+		const u32 n = pBridge->take_outgoing (Frame);
+		if (n == 0)
+		{
+			break;
+		}
+		m_pNetDevice->SendFrame (Frame, n);
+		nDone++;
+	}
+	const unsigned nNow = CTimer::GetClockTicks ();
+	if (nNow - m_nLastPHYTicks >= 2 * CLOCKHZ)
+	{
+		m_nLastPHYTicks = nNow;
+		m_pNetDevice->UpdatePHY ();
+	}
+	return nDone;
+}
+
+// Core 3: serve the attached disk caches, the sound and the network; sleep
+// in WFE when idle. The caches execute SEV after each request; for sound and
+// the network, which nobody signals, the generic timer's event stream wakes
+// WFE regularly: an event each time bit 12 of the counter changes from 0 to
+// 1 (CNTKCTL_EL1 EVNTEN, bit 2, and EVNTI, bits 7:4; Arm ARM, "Event
+// streams"), every 2^13 counts: 152 us at the Pi 4's 54 MHz counter.
 void CDrawCore::RunDiskIo (void)
 {
+	u64 nCtl;
+	asm volatile ("mrs %0, cntkctl_el1" : "=r" (nCtl));
+	nCtl = (nCtl & ~0xF8ull) | (12u << 4) | (1u << 2);
+	asm volatile ("msr cntkctl_el1, %0" :: "r" (nCtl));
+	asm volatile ("isb");
 	m_bIoStarted = TRUE;
 	for (;;)
 	{
@@ -297,6 +426,8 @@ void CDrawCore::RunDiskIo (void)
 			}
 		}
 		__atomic_store_n (&m_nIoBusy, 0u, __ATOMIC_SEQ_CST);
+		nDone += ServiceSound ();
+		nDone += ServiceNet ();
 		if (nDone == 0)
 		{
 			asm volatile ("wfe");

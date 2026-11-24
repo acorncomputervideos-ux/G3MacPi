@@ -214,9 +214,16 @@ bool DbdmaChannel::step()
                 }
             }
             progress_ += done;
-            if (done < chunk)
+            if (done < chunk) {
+                if (!output && last && stream_->dma_input_packet_end()) {
+                    finish(desc, cmdword, cmd_dep, static_cast<u16>(req_count - progress_), true);
+                    return true;
+                }
                 return false;  // device not ready: resume on kick()
+            }
         }
+        if (!output && last)
+            stream_->dma_input_packet_end();  // full: a longer packet's rest is dropped
         finish(desc, cmdword, cmd_dep, 0, true);
         return true;
     }

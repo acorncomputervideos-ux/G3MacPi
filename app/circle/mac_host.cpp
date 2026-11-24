@@ -245,6 +245,28 @@ void CCircleMacHost::console (const char *pText, u32 nLength)
 	}
 }
 
+void CCircleMacHost::EnableNet (const u8 *pAddress)
+{
+	for (unsigned i = 0; i < 6; i++)
+	{
+		m_MAC[i] = pAddress[i];
+	}
+	m_bNet = TRUE;
+}
+
+bool CCircleMacHost::mac_address (u8 Out[6])
+{
+	if (!m_bNet)
+	{
+		return false;
+	}
+	for (unsigned i = 0; i < 6; i++)
+	{
+		Out[i] = m_MAC[i];
+	}
+	return true;
+}
+
 void CCircleMacHost::disc_ejected (u32 nDrive)
 {
 	if (m_pEjectHandler != 0)

@@ -58,6 +58,10 @@ struct BwMachine {
     u32 display_device = 0x10;
     u32 vram_bar = 0;
     u32 width = 0, height = 0, depth = 0, linebytes = 0;
+    // Built-in sound and Ethernet (davbus/sound and ethernet nodes).
+    bool sound = true;
+    bool ethernet = true;
+    u8 mac_address[6] = {0x02, 0x47, 0x33, 0x4D, 0x50, 0x01};  // locally administered
 };
 
 struct BwNodes {
@@ -65,6 +69,7 @@ struct BwNodes {
     Phandle pci, bridge, macio, pic, cuda, adb, rtc, scsi, escc, escc_a, escc_b, nvram;
     Phandle ata[2], disk[2];
     Phandle cmd646, cmd646_channel, cmd646_disk;  // kNone without a CMD646
+    Phandle davbus, sound, ethernet;  // kNone when not built in
     Phandle display;  // kNone without a display
     Phandle usb;      // a placeholder: no USB controller is emulated yet
 };
