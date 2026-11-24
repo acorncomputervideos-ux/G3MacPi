@@ -554,6 +554,17 @@ void CKernel::WebReboot (void *pContext)
 void CKernel::WebConfigChanged (void *pContext)
 {
 	CKernel *pThis = (CKernel *) pContext;
+	{	// The Pi CPU speed goes to config.txt at once (it applies at the next power-on).
+		g3::MachineConfig Saved;
+		g3::ConfigParseReport Report;
+		if (LoadSettings (Saved, Report))
+		{
+			if (const char *pSpeed = ApplyPiSpeed (Saved))
+			{
+				pThis->m_Logger.Write (FromKernel, LogNotice, "%s", pSpeed);
+			}
+		}
+	}
 	if (pThis->m_bMacRunning)
 	{
 		pThis->m_pMenu->set_status ("Settings changed on the web: they apply when the Mac next starts.");
@@ -1293,6 +1304,11 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 			m_pMenu->mark_saved ();
 			m_pMenu->set_status ("Settings saved to " G3_CONFIG_FILE);
 			m_Logger.Write (FromKernel, LogNotice, "Settings saved");
+			if (const char *pSpeed = ApplyPiSpeed (m_pMenu->config ()))
+			{
+				m_pMenu->set_status (pSpeed);
+				m_Logger.Write (FromKernel, LogNotice, "%s", pSpeed);
+			}
 		}
 		else
 		{

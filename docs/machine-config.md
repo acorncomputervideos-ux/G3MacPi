@@ -29,6 +29,7 @@ wifi_name = My Network         ; the WiFi network (SSID), up to 32 bytes
 wifi_password = secret123      ; WPA2 passphrase, 8-63 characters; leave out for an open network
 wifi_country = GB              ; optional: two-letter country code (allowed channels)
 keyboard = us                  ; us | uk: the Pi keyboard's layout, for typing in the menu
+pi_overclock = no              ; yes: the Pi's ARM cores at 2.0 GHz from the next power-on (config.txt)
 
 [ata0.master]                  ; also ata0.slave, ata1.master, ata1.slave
 type = cdrom                   ; none | disk | cdrom
@@ -36,8 +37,9 @@ image = /g3macpi/disks/Mac OS 9.iso
 readonly = yes                 ; disks; CD-ROMs are always read-only
 ```
 
-`sound`, `network`, `wifi`, `autostart` and `jit` are also in the menu
-("Sound", "Ethernet", "Network port", "At power-on", "CPU emulation"); a
+`sound`, `network`, `wifi`, `autostart`, `jit` and `pi_overclock` are also
+in the menu ("Sound", "Ethernet", "Network port", "At power-on", "CPU
+emulation", "Pi CPU speed"); a
 change applies when the Mac restarts (the network port: when the Pi
 restarts). `jit` is off by default until it has been measured on a Pi.
 The WiFi name, password and country can be typed in the menu (Enter on
@@ -83,3 +85,30 @@ disks makes a new blank disk image ("New blank disk": 256 MB to 4 GB,
 created as `/g3macpi/hdd/hdN.img`; sdcard/README.md). While the Mac runs,
 inserting or ejecting a CD takes effect at once; memory, ROM, screen,
 drive types and hard-disk images are marked `*` and apply at the next start.
+
+## Pi CPU speed (`pi_overclock`)
+
+Saving the settings with `pi_overclock = yes` (menu or web page) adds a
+marked block at the end of the SD card's `config.txt`:
+
+```
+# >>> G3MacPi CPU speed (the settings menu writes this block; remove it to undo)
+[pi4]
+arm_freq=2000
+over_voltage=6
+[all]
+# <<< G3MacPi CPU speed
+```
+
+and `no` removes it again; nothing else in the file is changed, and the
+previous file is kept as `config.bak`. The firmware reads it at the next
+power-on (the emulator then asks for the firmware's maximum clock).
+
+From Raspberry Pi's config.txt documentation (overclocking): the Pi 400's
+default `arm_freq` is 1800 MHz; `over_voltage` above 6 needs `force_turbo`,
+which sets a permanent "warranty bit" in the SoC, so this block uses
+neither; the firmware slows the cores back down if the SoC overheats.
+2000 MHz at `over_voltage=6` is a common choice, not a value from that
+documentation: not every Pi runs stable at it. If the Pi becomes unstable
+or does not start, take the card to a computer and delete the block from
+`config.txt` (or copy `config.bak` over it).

@@ -269,6 +269,12 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     r.press(kRight);
     CHECK(r.menu.config().jit);
     CHECK(r.has("JIT: faster (new)"));
+    r.press(kDown);                                    // Pi CPU speed
+    CHECK(r.has("1.8 GHz (standard)"));
+    r.press(kRight);
+    CHECK(r.menu.config().pi_overclock);
+    CHECK(r.has("2.0 GHz (overclock"));
+    CHECK(r.has("2.0 GHz: written to config.txt by Save settings"));
     r.press(kDown);
     CHECK(r.press(kEnter) == ConfigMenu::Action::Save);
     r.menu.mark_saved();

@@ -314,12 +314,14 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                 else
                     reject(r, line_no, "wifi_country: two capital letters, e.g. GB");
             } else if (word_is(key, kn, "sound") || word_is(key, kn, "network") || word_is(key, kn, "web") ||
-                       word_is(key, kn, "autostart") || word_is(key, kn, "wifi")) {
+                       word_is(key, kn, "autostart") || word_is(key, kn, "wifi") ||
+                       word_is(key, kn, "pi_overclock")) {
                 bool& flag = word_is(key, kn, "sound") ? c.sound : word_is(key, kn, "network") ? c.network
-                             : word_is(key, kn, "web") ? c.web : word_is(key, kn, "wifi") ? c.wifi : c.autostart;
+                             : word_is(key, kn, "web") ? c.web : word_is(key, kn, "wifi") ? c.wifi
+                             : word_is(key, kn, "pi_overclock") ? c.pi_overclock : c.autostart;
                 if (word_is(val, vn, "yes")) flag = true;
                 else if (word_is(val, vn, "no")) flag = false;
-                else reject(r, line_no, "sound/network/web/autostart/wifi: yes or no");
+                else reject(r, line_no, "sound/network/web/autostart/wifi/pi_overclock: yes or no");
             } else {
                 reject(r, line_no, "unknown key in [machine]");
             }
@@ -402,6 +404,8 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     }
     o.str("\nkeyboard = ");
     o.str(c.keyboard == MachineConfig::Keyboard::Uk ? "uk" : "us");
+    o.str("\npi_overclock = ");
+    o.str(c.pi_overclock ? "yes" : "no");
     o.str("\n");
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         const MachineConfig::Drive& d = c.drive[i];

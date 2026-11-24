@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "platform/common/frame_copy.h"
 #include "platform/common/menu_painter.h"
+#include "platform/common/pi_overclock.h"
 
 #include <circle/string.h>
 #include <circle/util.h>
@@ -209,6 +210,57 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
 		*ppMessage = "Writing the new disk failed (SD card full or read-only?).";
 	}
 	return bOK;
+}
+
+static boolean WriteWholeFile (const char *pPath, const char *pData, unsigned nLength)
+{
+	FIL File;
+	if (f_open (&File, pPath, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	{
+		return FALSE;
+	}
+	UINT nWritten = 0;
+	const FRESULT Result = f_write (&File, pData, nLength, &nWritten);
+	return f_close (&File) == FR_OK && Result == FR_OK && nWritten == nLength;
+}
+
+const char *ApplyPiSpeed (const g3::MachineConfig &Config)
+{
+	static char Old[8192], New[8192 + 256];
+	FIL File;
+	if (f_open (&File, G3_SD_DRIVE "/config.txt", FA_READ | FA_OPEN_EXISTING) != FR_OK)
+	{
+		return "Pi CPU speed: config.txt could not be read.";
+	}
+	UINT nRead = 0;
+	const FRESULT Result = f_read (&File, Old, sizeof Old, &nRead);
+	f_close (&File);
+	if (Result != FR_OK || nRead == sizeof Old)
+	{
+		return "Pi CPU speed: config.txt could not be read (or is too large).";
+	}
+	bool bChanged = false;
+	const u32 nNew = g3::pi_overclock::apply (Old, nRead, Config.pi_overclock, New, sizeof New, bChanged);
+	if (nNew == 0)
+	{
+		return "Pi CPU speed: config.txt is too large to change.";
+	}
+	if (!bChanged)
+	{
+		return 0;
+	}
+	// The old file first, so a failed write can be undone on a computer.
+	if (!WriteWholeFile (G3_SD_DRIVE "/config.bak", Old, nRead))
+	{
+		return "Pi CPU speed: could not save config.bak; config.txt left as it was.";
+	}
+	if (!WriteWholeFile (G3_SD_DRIVE "/config.txt", New, nNew))
+	{
+		WriteWholeFile (G3_SD_DRIVE "/config.txt", Old, nRead);	// put it back
+		return "Pi CPU speed: writing config.txt failed (the old one is in config.bak).";
+	}
+	return Config.pi_overclock ? "Settings saved. Pi CPU speed 2.0 GHz from the next restart (config.txt)."
+				   : "Settings saved. Pi CPU speed 1.8 GHz from the next restart (config.txt).";
 }
 
 // The frame buffer as a surface to draw on; the text cursor hidden.

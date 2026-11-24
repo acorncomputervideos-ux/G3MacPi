@@ -91,6 +91,14 @@ the Pi's WiFi address (an access point accepts only the address that
 joined it), so TCP/IP, DHCP and AppleTalk are translated: see docs/wifi.md.
 Untested on a real Pi so far.
 
+Pi CPU speed: the menu's "Pi CPU speed" row (or `pi_overclock = yes`)
+runs the Pi 400 at 2.0 GHz instead of 1.8 from the next restart: "Save
+settings" writes a marked block into `config.txt` (the old file is kept
+as `config.bak`). It stays within Raspberry Pi's limits that keep the
+warranty bit clear (over_voltage 6, no force_turbo), but not every Pi is
+stable at 2.0 GHz: if it misbehaves or will not start, remove the block
+from `config.txt` on a computer, or copy `config.bak` over it.
+
 Web interface: with an Ethernet cable in (or on WiFi), open the address the menu shows
 (`http://<the Pi's address>/`) to see the status, upload CD and disk
 images, edit the settings and update the emulator itself (upload a new

@@ -25,6 +25,7 @@
 //   wifi_password = text ; WPA2 passphrase, 8-63 characters; none: an open network
 //   wifi_country = GB    ; two-letter country code (sets the allowed channels)
 //   keyboard = us        ; us | uk: the Pi keyboard's layout, for typing in the menu
+//   pi_overclock = no    ; yes: the Pi's ARM cores at 2.0 GHz (config.txt, from the next power-on)
 //   [ata0.master]
 //   type = cdrom         ; none | disk | cdrom
 //   image = /g3macpi/disks/Mac OS 9.iso
@@ -84,6 +85,9 @@ struct MachineConfig {
     // Mac has its own keyboard layout setting).
     enum class Keyboard : u8 { Us, Uk };
     Keyboard keyboard = Keyboard::Us;
+    // The Pi's own CPU speed: 2.0 GHz instead of 1.8 (a block in the
+    // firmware's config.txt: platform/common/pi_overclock.h).
+    bool pi_overclock = false;
     Drive drive[kDrives];
 
     MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master

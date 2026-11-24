@@ -397,6 +397,12 @@ void ConfigMenu::change_main(u32 item, int dir)
         cfg_.autostart = !cfg_.autostart;
     } else if (item == kJit) {
         cfg_.jit = !cfg_.jit;
+    } else if (item == kPiSpeed) {
+        cfg_.pi_overclock = !cfg_.pi_overclock;
+        set_status(cfg_.pi_overclock
+                       ? "2.0 GHz: written to config.txt by Save settings; applies when the Pi restarts. "
+                         "If the Pi becomes unstable, set it back."
+                       : "1.8 GHz: written to config.txt by Save settings; applies when the Pi restarts.");
     } else {
         return;
     }
@@ -768,6 +774,10 @@ void ConfigMenu::render(Screen& s) const
             } else if (i == kJit) {
                 scat(label, sizeof label, "CPU emulation");
                 scopy(buf, sizeof buf, cfg_.jit ? "JIT: faster (new)" : "Interpreter: safe, slower");
+            } else if (i == kPiSpeed) {
+                scat(label, sizeof label, "Pi CPU speed");
+                scopy(buf, sizeof buf, cfg_.pi_overclock ? "2.0 GHz (overclock, from the next Pi restart)"
+                                                         : "1.8 GHz (standard)");
             } else if (i == kSave) {
                 ++row;
                 line(s, row, item_attr(sel, false), dirty_ ? "Save settings (unsaved changes)" : "Save settings");

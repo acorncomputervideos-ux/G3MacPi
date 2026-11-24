@@ -55,6 +55,13 @@ void CreateSettingsFolders (void);
 // a partly made file is removed.
 boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage);
 
+// The "Pi CPU speed" setting into the firmware's config.txt (a marked
+// block: platform/common/pi_overclock.h), from the next power-on. The file
+// is rewritten only if the block must change; the old one is kept as
+// config.bak first. Returns a line for the menu's status, or 0 when
+// nothing changed.
+const char *ApplyPiSpeed (const g3::MachineConfig &Config);
+
 // Draws the menu's screen: a classic Mac desktop and window (menu_painter.h).
 void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen);
 // The start-up screen (no log on HDMI): see MenuPainter::paint_splash.

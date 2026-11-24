@@ -236,7 +236,7 @@ TEST_CASE("machine/config/wifi")
     CHECK(!d.wifi);  // the Ethernet port by default
     CHECK_EQ(d.wifi_name[0], 0);
     const char text[] = "[machine]\nwifi = yes\nwifi_name = Home Net 5G\nwifi_password = pa$$w0rd!#x\n"
-                        "wifi_country = GB\nkeyboard = uk\n";
+                        "wifi_country = GB\nkeyboard = uk\npi_overclock = yes\n";
     MachineConfig c;
     ConfigParseReport r;
     parse_machine_config(text, sizeof text - 1, c, r);
@@ -257,6 +257,8 @@ TEST_CASE("machine/config/wifi")
     CHECK(std::strcmp(c2.wifi_country, "GB") == 0);
     CHECK(c2.keyboard == MachineConfig::Keyboard::Uk);
     CHECK(d.keyboard == MachineConfig::Keyboard::Us);
+    CHECK(c2.pi_overclock);
+    CHECK(!d.pi_overclock);
     // Refused: a password too short, or with a quote; a long name; a bad country.
     const char bad[] = "[machine]\nwifi_password = short\nwifi_password = has\"quote1\n"
                        "wifi_name = 123456789012345678901234567890123\nwifi_country = gb\nwifi = maybe\nkeyboard = de\n";
