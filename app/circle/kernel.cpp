@@ -60,7 +60,7 @@ static u64 SelfTestClock (void *)
 }
 static const unsigned BlockCacheSize = 8 << 20;
 
-#define SD_DRIVE	"SD:"
+#define SD_DRIVE	G3_SD_DRIVE	// settings.h
 #define LOG_DIR		SD_DRIVE "/g3macpi/logs"
 #define LOG_FILE	LOG_DIR "/boot.log"
 #define LOG_FILE_PREV	LOG_DIR "/boot-prev.log"
@@ -78,7 +78,11 @@ CKernel::CKernel (void)
 	m_LogTee (&m_Screen, &m_Serial),
 	m_Logger (m_Options.GetLogLevel (), &m_Timer),
 	m_USBHCI (&m_Interrupt, &m_Timer, TRUE),	// TRUE: USB plug-and-play
+#ifdef G3_QEMU_BOOT	// QEMU's raspi4b puts the -drive if=sd card on the other SD controller
+	m_EMMC (&m_Interrupt, &m_Timer, &m_ActLED, CEMMCDevice::SDCardExternal),
+#else
 	m_EMMC (&m_Interrupt, &m_Timer, &m_ActLED),
+#endif
 	m_bSDMounted (FALSE),
 	m_pKeyboard (0),
 	m_pMouse (0),

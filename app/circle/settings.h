@@ -18,7 +18,11 @@
 #include "platform/common/config_menu.h"
 #include "platform/common/machine_state.h"
 
+#ifdef G3_QEMU_BOOT
+#define G3_SD_DRIVE		"SD2:"	// QEMU's raspi4b: the card is on the other controller (kernel.cpp)
+#else
 #define G3_SD_DRIVE		"SD:"
+#endif
 #define G3_CONFIG_FILE		"/g3macpi/g3macpi.ini"
 #define G3_DISKS_DIR		"/g3macpi/disks"	// any images (kept for older setups)
 #define G3_ROM_DIR		"/g3macpi/rom"		// the Mac OS ROM file
