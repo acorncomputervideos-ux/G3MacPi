@@ -131,6 +131,7 @@ bool ConfigMenu::restart_differs(u32 item) const
     if (item == kDepth) return a.depth != b.depth;
     if (item == kSound) return a.sound != b.sound;
     if (item == kNetwork) return a.network != b.network;
+    if (item == kJit) return a.jit != b.jit;
     if (item >= kDrive0 && item < kFloppy) {
         const auto& x = a.drive[item - kDrive0];
         const auto& y = b.drive[item - kDrive0];
@@ -270,6 +271,8 @@ void ConfigMenu::change_main(u32 item, int dir)
         cfg_.network = !cfg_.network;
     } else if (item == kAutostart) {
         cfg_.autostart = !cfg_.autostart;
+    } else if (item == kJit) {
+        cfg_.jit = !cfg_.jit;
     } else {
         return;
     }
@@ -627,6 +630,9 @@ void ConfigMenu::render(Screen& s) const
             } else if (i == kAutostart) {
                 scat(label, sizeof label, "At power-on");
                 scopy(buf, sizeof buf, cfg_.autostart ? "Start the Mac (F12: this menu)" : "Show this menu");
+            } else if (i == kJit) {
+                scat(label, sizeof label, "CPU emulation");
+                scopy(buf, sizeof buf, cfg_.jit ? "JIT: faster (new)" : "Interpreter: safe, slower");
             } else if (i == kSave) {
                 ++row;
                 line(s, row, item_attr(sel, false), dirty_ ? "Save settings (unsaved changes)" : "Save settings");

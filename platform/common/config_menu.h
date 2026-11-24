@@ -114,7 +114,7 @@ public:
 private:
     enum class Page : u8 { Main, Drive, Files };
     enum MainItem : u8 { kRam, kRom, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kMode,
-                         kDepth, kSound, kNetwork, kAutostart, kSave, kStart, kSelfTest, kMainItems };
+                         kDepth, kSound, kNetwork, kAutostart, kJit, kSave, kStart, kSelfTest, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
 
     Action key_main(u8 usage);

@@ -1142,6 +1142,10 @@ void CKernel::ShowMenu (boolean bShow)
 		m_pPresenter->pause ();	// core 1 keeps off the screen while we write to it
 	}
 	m_bMenuShown = bShow;
+	if (!bShow)
+	{
+		m_bPacerStarted = FALSE;	// resuming: the Mac's time follows real time from now
+	}
 	// While the menu or the Mac shows, the log goes to the UART only.
 	m_LogTee.EnableFirst (!bShow && !m_bMacRunning);
 
@@ -1397,6 +1401,7 @@ void CKernel::StartMac (void)
 	}
 
 	m_bMacRunning = TRUE;
+	m_bPacerStarted = FALSE;	// the Mac's time starts following real time now
 	m_nGuestMs = 0;
 	m_nLastInstructions = 0;
 	m_nLastStatsTicks = m_Timer.GetTicks ();
@@ -1458,11 +1463,31 @@ void CKernel::DiscEjected (void *pContext, u32 nDrive)
 
 void CKernel::RunMac (void)
 {
-	// 2 ms of guest time per pass: on the Pi that takes several times longer
-	// in real time, and input, USB plug-and-play and the screen are served
-	// between passes.
-	m_Session.run (2ull * 1000000000ull);
-	m_nGuestMs += 2;
+	// The Mac's time follows real time (platform/common/guest_pacer.h): up
+	// to 4 ms of guest time per pass, as much as real time has moved on;
+	// none when the Mac is ahead (it was idle). When the Pi emulates fewer
+	// instructions per second than a 350 MHz G3, the Mac's effective clock
+	// is lowered to what it manages, so its timers, cursor and clock keep
+	// real time instead of running in slow motion. Input, USB plug-and-play
+	// and the screen are served between passes.
+	if (!m_bPacerStarted)
+	{
+		m_Pacer.start (HostPs (), m_Session.guest_time_ps (), m_Session.nominal_hz ());
+		m_bPacerStarted = TRUE;
+	}
+	const u64 nStart = HostPs ();
+	const u64 nRun = m_Pacer.plan (nStart, m_Session.guest_time_ps ());
+	if (nRun != 0)
+	{
+		const u64 nInstructions = m_Session.instructions ();
+		m_Session.run (nRun);
+		const u64 nHz = m_Pacer.ran (nRun, m_Session.instructions () - nInstructions, HostPs () - nStart);
+		if (nHz != 0)
+		{
+			m_Session.set_effective_hz (nHz);
+		}
+		m_nGuestMs += nRun / 1000000000u;
+	}
 
 	if (m_Session.powered_off () || m_Session.halted ())
 	{
@@ -1500,8 +1525,9 @@ void CKernel::RunMac (void)
 	{
 		const unsigned nClock = m_CPUThrottle.GetClockRate () / 1000000;
 		const unsigned nMaxClock = m_CPUThrottle.GetMaxClockRate () / 1000000;
-		m_Logger.Write (FromKernel, LogNotice, "Mac: %u ms guest time, %u ms real, %u M instructions; "
-				"ARM %u MHz, SoC %u C",
+		m_Logger.Write (FromKernel, LogNotice, "Mac: effective clock %u MHz; %u ms guest time, %u ms real, "
+				"%u M instructions; ARM %u MHz, SoC %u C",
+				(unsigned) (m_Session.effective_hz () / 1000000),
 				(unsigned) m_nGuestMs, (unsigned) ((nNow - m_nLastStatsTicks) * (1000 / HZ)),
 				(unsigned) (m_Session.instructions () / 1000000), nClock,
 				m_CPUThrottle.GetTemperature ());

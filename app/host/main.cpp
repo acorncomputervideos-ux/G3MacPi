@@ -25,6 +25,7 @@
 #include <cstring>
 #include "core/machine/bw_firmware.h"
 #include "core/machine/yosemite.h"
+#include "platform/common/guest_pacer.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/machine_state.h"
 
@@ -34,6 +35,7 @@
 #include <ctime>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace g3;
@@ -427,6 +429,44 @@ int main(int argc, char** argv)
     }
     u32 frames = 0;
     const u32 seconds = static_cast<u32>(std::strtoul(argv[2], nullptr, 10));
+    // G3_REALTIME=1: <seconds> of real time, guest time paced to it
+    // (platform/common/guest_pacer.h), as the Pi runs the Mac.
+    if (std::getenv("G3_REALTIME")) {
+        using clk = std::chrono::steady_clock;
+        const auto t0 = clk::now();
+        auto host_ps = [&] {
+            return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now() - t0).count()) * 1000u;
+        };
+        GuestPacer pacer;
+        pacer.start(host_ps(), session.guest_time_ps(), session.nominal_hz());
+        u64 next_report = 1000 * GuestPacer::kMs, last_instr = 0;
+        while (host_ps() < static_cast<u64>(seconds) * 1000 * GuestPacer::kMs && !session.halted()) {
+            const u64 now = host_ps();
+            const u64 run = pacer.plan(now, session.guest_time_ps());
+            if (run == 0) {
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+            } else {
+                const u64 i0 = session.instructions();
+                session.run(run);
+                const u64 hz = pacer.ran(run, session.instructions() - i0, host_ps() - now);
+                if (hz)
+                    session.set_effective_hz(hz);
+            }
+            if (host_ps() >= next_report) {
+                const u64 instr = session.instructions();
+                std::printf("[g3_host] real %.0f s, guest %.2f s, effective clock %llu MHz, %.1f MIPS, dropped %.2f s\n",
+                            next_report / 1e12, session.guest_time_ps() / 1e12,
+                            static_cast<unsigned long long>(session.effective_hz() / 1000000),
+                            (instr - last_instr) / 1e6, pacer.dropped_ps() / 1e12);
+                std::fflush(stdout);
+                last_instr = instr;
+                next_report += 1000 * GuestPacer::kMs;
+            }
+        }
+        if (argc > 3 && write_ppm(argv[3], session))
+            std::printf("[g3_host] screen saved to %s\n", argv[3]);
+        return 0;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     for (u32 s = 0; s < seconds && !session.halted() && !session.powered_off(); ++s) {
         for (u32 slice = 0; slice < 100; ++slice) {

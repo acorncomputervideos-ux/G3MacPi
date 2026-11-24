@@ -33,6 +33,7 @@
 #include "platform/common/config_menu.h"
 #include "platform/common/input_events.h"
 #include "mac_host.h"
+#include "platform/common/guest_pacer.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/screen_presenter.h"
 #include "core/cpu/ppc750/jit_worker.h"
@@ -153,6 +154,9 @@ private:
 	boolean			m_bUSBReady = FALSE;	// the USB host controller started
 	void			BootToMac (void);
 	unsigned		m_nMipsX10 = 0;	// the last measured emulation speed
+	g3::GuestPacer		m_Pacer;	// the Mac's time follows real time
+	boolean			m_bPacerStarted = FALSE;
+	static u64 HostPs (void)	{ return CTimer::GetClockTicks64 () * 1000000u; }	// 1 MHz ticks
 	u64			m_nLastInstructions = 0;
 	static void SelfTestAttach (void *pContext, void *pWorker);	// CpuSelfTest::Setup::worker_attach
 #ifdef G3_QEMU_DRAWTEST

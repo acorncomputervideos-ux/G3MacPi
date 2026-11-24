@@ -113,6 +113,12 @@ public:
     void run(u64 picoseconds);
     bool halted() const;              // the CPU checkstopped
     u64 instructions() const;         // executed so far (speed statistics)
+    u64 guest_time_ps() const;        // the Mac's time since it started
+    // The guest time an instruction takes, as a clock rate (see
+    // ExecutionLoop::set_effective_hz); the nominal CPU clock at start.
+    void set_effective_hz(u64 hz);
+    u64 effective_hz() const;
+    u64 nominal_hz() const;
     bool block_cache_on() const;      // the CPU uses its decoded-block cache
     bool jit_on() const;              // ... and generated code
     // The background compiler to poll on another core (Memory::jit_background),

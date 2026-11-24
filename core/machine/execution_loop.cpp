@@ -13,13 +13,20 @@ constexpr u64 kPsPerSecond = 1000000000000ull;
 ExecutionLoop::ExecutionLoop(ppc::Ppc750& cpu, Scheduler& scheduler, const CpuTiming& timing)
     : cpu_(cpu), sched_(scheduler), timing_(timing)
 {
-    // ps per instruction = cpi * 1e12 / cpu_hz, kept with 32 fraction bits.
-    ps_per_instruction_q32_ =
-        (static_cast<u128>(timing_.cycles_per_instruction) * kPsPerSecond << 32) / timing_.cpu_hz;
+    set_effective_hz(timing_.cpu_hz);
     time_q32_ = static_cast<u128>(sched_.now()) << 32;
     run_target_ps_ = sched_.now();
     sched_.set_clock([](void* c) { return static_cast<ExecutionLoop*>(c)->precise_ps(); }, this);
     cpu_.set_time_hook(time_hook, this);
+}
+
+void ExecutionLoop::set_effective_hz(u64 hz)
+{
+    if (hz == 0 || in_slice_)
+        return;
+    effective_hz_ = hz;
+    // ps per instruction = cpi * 1e12 / hz, kept with 32 fraction bits.
+    ps_per_instruction_q32_ = (static_cast<u128>(timing_.cycles_per_instruction) * kPsPerSecond << 32) / hz;
 }
 
 u64 ExecutionLoop::precise_ps() const

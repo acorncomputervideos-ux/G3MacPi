@@ -36,6 +36,13 @@ public:
     void run_for(u64 duration_ps);
 
     u64 now_ps() const { return static_cast<u64>(time_q32_ >> 32); }
+    // The guest time one instruction takes, as a clock rate (instructions
+    // per guest second, times cycles_per_instruction). Between run_for calls
+    // only. A host that runs the guest slower than its nominal clock lowers
+    // it so that guest time keeps pace with real time (platform/common/
+    // guest_pacer.h); the guest's time base and timers stay exact.
+    void set_effective_hz(u64 hz);
+    u64 effective_hz() const { return effective_hz_; }
     // Guest time as of the instruction executing now (inside a slice: the
     // slice start plus the instructions run so far).
     u64 precise_ps() const;
@@ -60,6 +67,7 @@ private:
     u64 tb_ticks_ = 0;              // time-base ticks delivered so far
     u64 run_target_ps_ = 0;         // accumulated requested end time
     u64 max_slice_ = 100000;
+    u64 effective_hz_ = 0;
     bool in_slice_ = false;
     u64 slice_first_insn_ = 0;      // cpu instructions_executed() at the slice start
 };

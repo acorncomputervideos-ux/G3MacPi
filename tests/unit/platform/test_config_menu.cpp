@@ -240,6 +240,11 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);
     CHECK(!r.menu.config().autostart);
     CHECK(r.has("Show this menu"));
+    r.press(kDown);                                    // CPU emulation
+    CHECK(r.has("Interpreter: safe, slower"));
+    r.press(kRight);
+    CHECK(r.menu.config().jit);
+    CHECK(r.has("JIT: faster (new)"));
     r.press(kDown);
     CHECK(r.press(kEnter) == ConfigMenu::Action::Save);
     r.menu.mark_saved();

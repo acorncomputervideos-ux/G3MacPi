@@ -260,6 +260,14 @@ bool MacSession::jit_on() const { return m_ && m_->jit_enabled(); }
 ppc::JitWorker* MacSession::jit_worker() { return m_ ? m_->jit_worker() : nullptr; }
 
 u64 MacSession::instructions() const { return m_ ? m_->cpu().instructions_executed() : 0; }
+u64 MacSession::guest_time_ps() const { return m_ ? m_->loop().now_ps() : 0; }
+void MacSession::set_effective_hz(u64 hz)
+{
+    if (m_)
+        m_->loop().set_effective_hz(hz);
+}
+u64 MacSession::effective_hz() const { return m_ ? m_->loop().effective_hz() : 0; }
+u64 MacSession::nominal_hz() const { return m_ ? m_->cpu_hz() : 0; }
 bool MacSession::powered_off() const { return fw_ && fw_->powered_off(); }
 bool MacSession::reboot_requested() const { return fw_ && fw_->reboot_requested(); }
 

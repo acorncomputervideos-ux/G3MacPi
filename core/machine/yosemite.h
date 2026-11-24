@@ -85,6 +85,7 @@ public:
     bool ok() const { return ok_; }
 
     void run_for(u64 picoseconds) { loop_.run_for(picoseconds); }
+    ExecutionLoop& loop() { return loop_; }
 
     ppc::Ppc750& cpu() { return cpu_; }
     bool jit_enabled() const { return jit_; }  // generated code in use

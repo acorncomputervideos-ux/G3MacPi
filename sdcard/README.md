@@ -43,6 +43,14 @@ work). If the ROM file in the settings is missing or is not that file,
 G3MacPi takes "Mac OS ROM" from the System Folder of the CD image in the
 CD drive, so a Mac OS 9 CD image alone is enough.
 
+**Speed.** The Mac's time follows real time: when the Pi emulates fewer
+instructions per second than a 350 MHz G3, the Mac runs as a slower G3
+(the log's "effective clock") instead of in slow motion, so the pointer,
+clock and animations keep their pace. For more speed try "CPU emulation:
+JIT" in the menu (`jit = yes`): it compiles PowerPC code to ARM code; it
+is new, so if the Mac misbehaves, switch it back. The web page's Status
+and the log show the speed (MIPS).
+
 **Start-up.** The Pi goes straight to the Mac: a start-up screen, then
 Mac OS (no text log on the screen; it goes to the serial port and to
 `/g3macpi/logs/boot.log`). Hold **F12** or **Esc** while the start-up

@@ -87,3 +87,18 @@ so the driver gave up. With FCR/MBCR/aux kept as registers it went on to
 `cell-id`, which our node lacked (nrNotFoundErr); its code compares the
 value with 0xA1/0xB1/0xC1/0xC2/0xC3/0xC7, and 0xC7 is Paddington's cell.
 With both, AppleTalk activates and the Mac sends its address probes.
+
+## The Mac's time follows real time
+
+Reported from a Pi 400: Mac OS boots but is sluggish (a video: the pointer
+and windows move in slow motion). Guest time was counted in instructions
+at the nominal 350 MHz, so with the Pi emulating far fewer instructions
+per second, the Mac's 60 Hz timer (pointer, animations) and clock slowed
+down with it, and when Mac OS napped its clock ran fast instead.
+`platform/common/guest_pacer` paces guest time to real time: it runs as
+much guest time as real time has moved on (none when ahead), and sets the
+effective clock (ExecutionLoop::set_effective_hz) to the speed measured
+over busy runs, between 10 MHz and the nominal clock. Checked with
+`G3_REALTIME=1 g3_host`: 59.7 guest seconds in 60 real seconds, effective
+clock 85-160 MHz here, the Finder within the minute. The menu gains
+"CPU emulation" (interpreter / JIT).
