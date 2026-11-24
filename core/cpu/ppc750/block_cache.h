@@ -36,7 +36,10 @@ struct BlockOp {
 class BlockCache {
 public:
     static constexpr u32 kMaxOps = 32;
-    static constexpr u32 kTableSize = 1u << 15;  // direct-mapped lookup table
+    // The direct-mapped lookup table: an eighth of the arena, between 2^15
+    // and 2^22 slots (blocks at addresses a multiple of 4 * slots apart
+    // share a slot and evict each other; Mac OS keeps ~10^5 blocks busy).
+    static constexpr u32 kMinTableBits = 15, kMaxTableBits = 22;
     static constexpr u32 kPageShift = 12;
 
     // Blocks are packed one after another in the pool, each with exactly
@@ -69,7 +72,7 @@ public:
         const u32 page = pa >> kPageShift;
         if (page >= pages_)
             return nullptr;
-        const u32 slot = table_[(pa >> 2) & (kTableSize - 1)];
+        const u32 slot = table_[(pa >> 2) & table_mask_];
         if (slot == 0)
             return nullptr;
         Block* b = reinterpret_cast<Block*>(pool_ + (slot - 1) * kAlign);
@@ -109,8 +112,10 @@ public:
         const u8* pool;
         const u32* gen;
         u32 pages;
+        u32 table_mask;  // slots - 1
     };
-    Layout layout() const { return {table_, pool_, gen_, pages_}; }
+    Layout layout() const { return {table_, pool_, gen_, pages_, table_mask_}; }
+    u32 table_slots() const { return table_mask_ + 1; }
     static constexpr u32 kAlign = 16;  // a block's pool offset is a multiple of this
     // Blocks of kMaxOps operations that fit (more, shorter ones do).
     u32 capacity() const { return pool_bytes_ / block_bytes(kMaxOps); }
@@ -122,7 +127,8 @@ public:
 private:
     u32* gen_ = nullptr;    // per RAM page
     u8* code_ = nullptr;    // per RAM page: holds blocks
-    u32* table_ = nullptr;  // kTableSize entries: pool offset / kAlign + 1, 0 = empty
+    u32* table_ = nullptr;  // table_mask_ + 1 entries: pool offset / kAlign + 1, 0 = empty
+    u32 table_mask_ = 0;
     u8* pool_ = nullptr;
     u32 pages_ = 0, pool_bytes_ = 0, used_ = 0;  // used_: bytes
     u8 own_signal_ = 0;

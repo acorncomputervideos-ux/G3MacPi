@@ -160,6 +160,36 @@ target's offset, address and generation checks, and `mtspr DEC` not
 setting `exit_`: all caught (the slot check by
 `chained_static_target_slot_collision`, added for it).
 
+## Code size and the block table (2026-11-24, measured in QEMU)
+
+Running the Pi kernel in QEMU (docs/qemu-pi.md) showed 26-28% of the Mac's
+instructions running without generated code. With compiling on another
+core, every block runs through its handlers until its code arrives; and
+blocks were compiled over and over (CD boot at a 10 MHz effective clock,
+5 × 10⁸ instructions, `g3_host` with `G3_JITSIM=1`):
+
+| | blocks compiled | code buffer resets | words per block |
+|---|---|---|---|
+| before | 3.2 M | 1262 | 205 |
+| shared stubs (dispatch, enter, epilogue) | 1.86 M | 397 | 112 |
+| + shared entry and known-target stubs | 1.49 M | 253 | 89 |
+| + table scaled to the arena (8 MB pool, 2 MB code) | 298 k | 63 | |
+| + 64 MB pool, 4 MB code (the Pi now) | 65 k | 7 | |
+
+- **Shared code.** The general lookup ("dispatch"), entering a found block
+  ("enter"), the known-target check ("static"), the entry from run_blocks
+  ("entry": pushes the frame, then jumps to `jit_entry_`) and the epilogue
+  are emitted once at the start of the code buffer
+  (`Ppc750::jit_emit_stubs`); blocks have no prologue and end in branches
+  to them. Buffer resets keep them.
+- **The block table** was direct-mapped with 2^15 slots: blocks 128 KB apart
+  evict each other, and Mac OS keeps about 10^5 blocks busy, so most
+  "compiles" were rebuilds of evicted blocks. It now takes an eighth of the
+  cache's memory (2^15 to 2^22 slots).
+- **Requests dropped** when the worker's queue was full are asked again
+  (a block still without code 2^20 instructions after its request).
+- The Pi's block cache is 64 MB (of a ~2 GB heap) and its code buffer 4 MB.
+
 ## Profile: what still goes to handlers
 
 Generated code counts each instruction it hands to a handler, per kind

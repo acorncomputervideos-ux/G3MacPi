@@ -36,11 +36,11 @@ static const char FromKernel[] = "g3macpi";
 // linker script places all .text* before _etext): it is both. Defined in
 // assembly so the section gets the right flags. It adds its size to the
 // kernel image.
-static const unsigned JitCodeWords = 512 * 1024;	// 2 MB
+static const unsigned JitCodeWords = 1024 * 1024;	// 4 MB
 asm (".section .text_g3jit, \"awx\", %progbits\n"
      ".balign 65536\n"
      "g3_jit_code:\n"
-     ".zero 2097152\n"
+     ".zero 4194304\n"
      ".previous\n");
 extern "C" u32 g3_jit_code[];
 #define s_JitCode g3_jit_code
@@ -58,7 +58,11 @@ static u64 SelfTestClock (void *)
 {
 	return CTimer::GetClockTicks64 ();	// 1 MHz (CLOCKHZ)
 }
-static const unsigned BlockCacheSize = 8 << 20;
+// The JIT's block cache: Mac OS keeps ~10^5 blocks busy; with less room the
+// cache is flushed (and everything recompiled) over and over. Measured on
+// the CD boot (docs/cpu/jit-a64.md): 64 MB and a 4 MB code buffer bring the
+// compiles from 1.5 M to 65 k per 5 * 10^8 instructions.
+static const unsigned BlockCacheSize = 64 << 20;
 
 #define SD_DRIVE	G3_SD_DRIVE	// settings.h
 #define LOG_DIR		SD_DRIVE "/g3macpi/logs"

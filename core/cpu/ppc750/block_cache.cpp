@@ -28,7 +28,11 @@ bool BlockCache::init(void* arena, u32 bytes, u32 ram_size)
     u8* end = p + bytes;
     gen_ = carve<u32>(p, end, pages_);
     code_ = carve<u8>(p, end, pages_);
-    table_ = carve<u32>(p, end, kTableSize);
+    u32 bits = kMinTableBits;
+    while (bits < kMaxTableBits && (4ull << (bits + 1)) <= bytes / 8)
+        ++bits;
+    table_mask_ = (1u << bits) - 1;
+    table_ = carve<u32>(p, end, table_mask_ + 1);
     if (!gen_ || !code_ || !table_)
         return false;
     const uintptr_t a = (reinterpret_cast<uintptr_t>(p) + kAlign - 1) & ~static_cast<uintptr_t>(kAlign - 1);
@@ -50,7 +54,7 @@ bool BlockCache::init(void* arena, u32 bytes, u32 ram_size)
 
 void BlockCache::flush()
 {
-    for (u32 i = 0; i < kTableSize; ++i)
+    for (u32 i = 0; i <= table_mask_; ++i)
         table_[i] = 0;
     for (u32 i = 0; i < pages_; ++i)
         code_[i] = 0;
@@ -78,7 +82,7 @@ void BlockCache::commit(Block* b)
     const u32 page = b->pa >> kPageShift;
     b->gen = gen_[page];
     code_[page] = 1;
-    table_[(b->pa >> 2) & (kTableSize - 1)] =
+    table_[(b->pa >> 2) & table_mask_] =
         static_cast<u32>((reinterpret_cast<u8*>(b) - pool_) / kAlign) + 1;
     ++stats_.built;
 }

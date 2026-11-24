@@ -83,6 +83,13 @@ bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
     jit_table_ = lay.table;
     jit_pool_ = lay.pool;
     jit_gen_ = lay.gen;
+    jit_code_pages_ = cache_->code_pages();
+    jit_dtlb_ = dtlb_;
+    if (!jit_emit_stubs()) {
+        jit_code_ = nullptr;
+        return false;
+    }
+    jit_used_ = jit_stub_words_;
     cache_->flush();  // existing blocks have no code; start clean
     return true;
 }
@@ -110,8 +117,13 @@ struct JitCompiler {
         fetch_msr_off = 0, fetch_pa_off = 0, limit_off = 0, chained_off = 0;
     BlockCache::Layout layout{};
     const u32* code_base = nullptr;
+    const u32* stub_dispatch = nullptr;  // the shared code (emit_stubs)
+    const u32* stub_enter = nullptr;
+    const u32* stub_epilogue = nullptr;
+    const u32* stub_static = nullptr;
+    u32 entry_off = 0, code_pages_off = 0, dtlb_ptr_off = 0;
     // The prologue is padded to this many words; chained jumps enter here.
-    static constexpr u32 kChainEntry = 13;
+    static constexpr u32 kChainEntry = 0;  // blocks have no prologue: the shared entry stub sets up the frame
 
     // Base + offset into x17 when the offset does not fit the instruction.
     Reg far(Reg base, u32& off, u32 size)
@@ -761,7 +773,7 @@ struct JitCompiler {
     };
     void chain(Assembler::Label& out, const Static* statics, u32 nstatics, u32 own_gen)
     {
-        Assembler::Label no_irq, enter;
+        Assembler::Label no_irq;
         // exit_: an exception, break_run_ (mtspr DEC), a checkstop, blocks
         // dropped ... (everything that sets those sets exit_ too).
         load_field(false, X8, exit_off, 1);
@@ -787,24 +799,63 @@ struct JitCompiler {
             add_const(X10, X21, static_cast<u32>(statics[k].delta));
             a.cmp(false, X8, X10);
             a.b_cond(Assembler::NE, other);
-            const u32 slot = (statics[k].pa >> 2) & (BlockCache::kTableSize - 1);
-            a.mov_imm64(X12, reinterpret_cast<u64>(layout.table + slot));
-            a.ldr(false, X13, X12, 0);
-            a.cbz(false, X13, out);
-            a.sub_imm(false, X13, X13, 1);
-            load_field(true, X14, pool_off, 8);
-            a.add(true, X14, X14, X13, 4);            // x14 = the block
-            a.ldr(false, X13, X14, blk_pa);
-            a.mov_imm32(X12, statics[k].pa);
-            a.cmp(false, X13, X12);
-            a.b_cond(Assembler::NE, out);
-            a.ldr(false, X13, X14, blk_gen);
-            a.mov_imm32(X12, own_gen);
-            a.cmp(false, X13, X12);
-            a.b_cond(Assembler::NE, out);             // built under another generation
-            a.b(enter);
+            a.mov_imm32(X12, (statics[k].pa >> 2) & layout.table_mask);  // its table slot
+            a.mov_imm32(X10, statics[k].pa);
+            a.mov_imm32(X11, own_gen);
+            a.b_abs(stub_static);
             a.bind(other);
         }
+        a.b_abs(stub_dispatch);                       // w8: the PC, w9: the MSR
+    }
+
+    // --- the shared code (once, at the start of the code buffer; see
+    // Ppc750::jit_emit_stubs): the general lookup ("dispatch", from w8 =
+    // the next PC and w9 = the MSR), entering a found block ("enter", x14
+    // = the block) and the common epilogue. They run in the frame the
+    // first block of the chain pushed.
+    void emit_stubs(u32& dispatch, u32& enter_at, u32& epilogue, u32& static_at, u32& entry)
+    {
+        Assembler::Label out, enter;
+        // "static": a target known at compile time: w12 = its table slot,
+        // w10 = its physical address, w11 = the generation it must have.
+        static_at = a.size();
+        load_field(true, X13, table_off, 8);
+        a.add(true, X13, X13, X12, 2);
+        a.ldr(false, X13, X13, 0);
+        a.cbz(false, X13, out);
+        a.sub_imm(false, X13, X13, 1);
+        load_field(true, X14, pool_off, 8);
+        a.add(true, X14, X14, X13, 4);                // x14 = the block
+        a.ldr(false, X13, X14, blk_pa);
+        a.cmp(false, X13, X10);
+        a.b_cond(Assembler::NE, out);
+        a.ldr(false, X13, X14, blk_gen);
+        a.cmp(false, X13, X11);
+        a.b_cond(Assembler::NE, out);                 // built under another generation
+        a.b(enter);
+        // "entry", from run_blocks (x0 = the CPU): push the frame, x19 and
+        // x20 as every block expects, then the block at jit_entry_.
+        entry = a.size();
+        a.stp_pre(X29, X30, SP, -96);
+        a.mov_from_sp(X29);
+        a.stp(X19, X20, SP, 16);
+        a.stp(X21, X22, SP, 32);
+        a.stp(X23, X24, SP, 48);
+        a.stp(X25, X26, SP, 64);
+        a.stp(X27, X28, SP, 80);
+        a.mov(true, X19, X0);
+        {
+            const u32 s_off = static_cast<u32>(reinterpret_cast<const u8*>(&c.s_) - reinterpret_cast<const u8*>(&c));
+            if (s_off < 4096) {
+                a.add_imm(true, X20, X19, s_off);
+            } else {
+                a.mov_imm64(X20, s_off);
+                a.add(true, X20, X19, X20);
+            }
+        }
+        load_field(true, X16, entry_off, 8);
+        a.br(X16);
+        dispatch = a.size();
         // The fetch page: still valid, same effective page, same MSR[IR|PR].
         Assembler::Label miss, have_fetch;
         a.mov_imm32(X12, msr::IR | msr::PR);
@@ -887,8 +938,9 @@ struct JitCompiler {
         // cache covers all of RAM, as run() requires: it has a generation.)
         a.lsr_imm(X15, X10, 12);                      // w15 = page
         // The table slot: pool offset / kAlign + 1, 0 = empty.
-        a.ubfx(X11, X10, 2, 15);
-        static_assert(BlockCache::kTableSize == 1u << 15, "the generated lookup assumes 2^15 slots");
+        a.lsr_imm(X11, X10, 2);
+        a.mov_imm32(X12, layout.table_mask);
+        a.and_(false, X11, X11, X12);
         load_field(true, X12, table_off, 8);
         a.add(true, X12, X12, X11, 2);
         a.ldr(false, X13, X12, 0);
@@ -908,6 +960,7 @@ struct JitCompiler {
         a.b_cond(Assembler::NE, out);                 // built under an older generation: dropped
         // --- x14: the next block, valid: code, budget, then into it.
         a.bind(enter);
+        enter_at = a.size();
         a.ldr(false, X15, X14, blk_code);
         a.cbz(false, X15, out);                       // no code (yet)
         // The budget: instr_count_ + count <= jit_limit_.
@@ -924,11 +977,22 @@ struct JitCompiler {
             a.add_imm(true, X13, X13, 1);
             a.str(true, X13, base, off);
         }
-        // Into its code, past the prologue: code_base + 4 * (code - 1 + kChainEntry).
-        a.add_imm(false, X15, X15, kChainEntry - 1);
+        // Into its code: code_base + 4 * (code - 1).
+        static_assert(kChainEntry == 0, "blocks are entered at their start");
+        a.sub_imm(false, X15, X15, 1);
         load_field(true, X12, code_off, 8);
         a.add(true, X12, X12, X15, 2);
         a.br(X12);
+        // --- the epilogue: back to run_blocks.
+        a.bind(out);
+        epilogue = a.size();
+        a.ldp(X27, X28, SP, 80);
+        a.ldp(X25, X26, SP, 64);
+        a.ldp(X23, X24, SP, 48);
+        a.ldp(X21, X22, SP, 32);
+        a.ldp(X19, X20, SP, 16);
+        a.ldp_post(X29, X30, SP, 96);
+        a.ret();
     }
     static constexpr u32 blk_pa = __builtin_offsetof(BlockCache::Block, pa);
     static constexpr u32 blk_gen = __builtin_offsetof(BlockCache::Block, gen);
@@ -962,29 +1026,47 @@ struct JitCompiler {
         return kept;
     }
 
+    static JitCompiler make(Ppc750& c, Assembler& a, Ppc750::JitStats& st)
+    {
+        auto off = [&c](const void* p) {
+            return static_cast<u32>(static_cast<const u8*>(p) - reinterpret_cast<const u8*>(&c));
+        };
+        JitCompiler jc{c, a, off(&c.instr_count_), off(&c.exit_), off(&c.ram_), off(&c.ram_size_), off(&c.dtlb_[0]),
+                       off(&c.tlb_enabled_), off(&c.jit_stats_.memory_slow), &st};
+        jc.table_off = off(&c.jit_table_);
+        jc.pool_off = off(&c.jit_pool_);
+        jc.gen_off = off(&c.jit_gen_);
+        jc.code_off = off(&c.jit_code_);
+        jc.watch_off = off(&c.watch_cb_);
+        jc.itlb_off = off(&c.itlb_[0]);
+        jc.profile_off = off(&c.jit_profile_[0]);
+        jc.break_off = off(&c.break_run_);
+        jc.checkstop_off = off(&c.checkstop_);
+        jc.ext_off = off(&c.external_pending_);
+        jc.dec_off = off(&c.dec_pending_);
+        jc.fetch_host_off = off(&c.fetch_host_);
+        jc.fetch_page_off = off(&c.fetch_page_);
+        jc.fetch_msr_off = off(&c.fetch_msr_);
+        jc.fetch_pa_off = off(&c.fetch_pa_page_);
+        jc.limit_off = off(&c.jit_limit_);
+        jc.chained_off = off(&c.jit_stats_.chained);
+        jc.layout = c.cache_->layout();
+        jc.code_base = c.jit_code_;
+        jc.stub_dispatch = c.jit_code_ + c.jit_stub_dispatch_;
+        jc.stub_enter = c.jit_code_ + c.jit_stub_enter_;
+        jc.stub_epilogue = c.jit_code_ + c.jit_stub_epilogue_;
+        jc.stub_static = c.jit_code_ + c.jit_stub_static_;
+        jc.entry_off = off(&c.jit_entry_);
+        jc.code_pages_off = off(&c.jit_code_pages_);
+        jc.dtlb_ptr_off = off(&c.jit_dtlb_);
+        return jc;
+    }
+
     bool compile(BlockCache::Block& b)
     {
         Assembler::Label out;
-        a.stp_pre(X29, X30, SP, -96);
-        a.mov_from_sp(X29);
-        a.stp(X19, X20, SP, 16);
-        a.stp(X21, X22, SP, 32);
-        a.stp(X23, X24, SP, 48);
-        a.stp(X25, X26, SP, 64);
-        a.stp(X27, X28, SP, 80);
-        a.mov(true, X19, X0);
-        const u32 s_off = static_cast<u32>(reinterpret_cast<const u8*>(&c.s_) - reinterpret_cast<const u8*>(&c));
-        if (s_off < 4096) {
-            a.add_imm(true, X20, X19, s_off);
-        } else {
-            a.mov_imm64(X20, s_off);
-            a.add(true, X20, X19, X20);
-        }
-        if (a.size() > kChainEntry)
-            return false;  // cannot happen: the prologue is at most 13 words
-        while (a.ok() && a.size() < kChainEntry)  // (a full buffer stops growing)
-            a.nop();
-        // --- chained blocks enter here (x19, x20 set; frame pushed)
+        // Entered with x19, x20 set and the frame pushed: by the shared
+        // entry stub (from run_blocks) or by a chained jump.
         plan_cache(b, has_memory_ops(b));
         a.ldr(false, X21, X20, pc_off());
         if (has_memory_ops(b)) {
@@ -992,9 +1074,8 @@ struct JitCompiler {
             u32 off = ram_off;
             const Reg base = far(X19, off, 8);
             a.ldr(true, X22, base, off);
-            a.mov_imm64(X23, reinterpret_cast<u64>(c.cache_->code_pages()));
-            a.mov_imm64(X24, dtlb_off);
-            a.add(true, X24, X19, X24);
+            load_field(true, X23, code_pages_off, 8);
+            load_field(true, X24, dtlb_ptr_off, 8);
         }
 
         u32 pending = 0;
@@ -1028,13 +1109,7 @@ struct JitCompiler {
         const u32 nstatics = static_targets(b, statics);
         chain(out, statics, nstatics, b.gen);
         a.bind(out);
-        a.ldp(X27, X28, SP, 80);
-        a.ldp(X25, X26, SP, 64);
-        a.ldp(X23, X24, SP, 48);
-        a.ldp(X21, X22, SP, 32);
-        a.ldp(X19, X20, SP, 16);
-        a.ldp_post(X29, X30, SP, 96);
-        a.ret();
+        a.b_abs(stub_epilogue);
         return a.ok();
     }
 };
@@ -1063,33 +1138,29 @@ void sync_icache(const void* begin, const void* end)
 }
 } // namespace
 
+// A compiler for `a`, with the offsets of everything generated code reads.
+static JitCompiler make_compiler(Ppc750& c, Assembler& a, Ppc750::JitStats& st)
+{
+    return JitCompiler::make(c, a, st);
+}
+
+bool Ppc750::jit_emit_stubs()
+{
+    Assembler a(jit_code_, jit_words_);
+    JitStats st;
+    JitCompiler jc = make_compiler(*this, a, st);
+    jc.emit_stubs(jit_stub_dispatch_, jit_stub_enter_, jit_stub_epilogue_, jit_stub_static_, jit_stub_entry_);
+    if (!a.ok())
+        return false;
+    sync_icache(jit_code_, jit_code_ + a.size());
+    jit_stub_words_ = (a.size() + 15) & ~15u;  // blocks start on a 64-byte boundary after it
+    return true;
+}
+
 bool Ppc750::jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st)
 {
     Assembler a(at, room);
-    auto off = [this](const void* p) {
-        return static_cast<u32>(static_cast<const u8*>(p) - reinterpret_cast<const u8*>(this));
-    };
-    JitCompiler jc{*this, a, off(&instr_count_), off(&exit_), off(&ram_), off(&ram_size_), off(&dtlb_[0]),
-                   off(&tlb_enabled_), off(&jit_stats_.memory_slow), &st};
-    jc.table_off = off(&jit_table_);
-    jc.pool_off = off(&jit_pool_);
-    jc.gen_off = off(&jit_gen_);
-    jc.code_off = off(&jit_code_);
-    jc.watch_off = off(&watch_cb_);
-    jc.itlb_off = off(&itlb_[0]);
-    jc.profile_off = off(&jit_profile_[0]);
-    jc.break_off = off(&break_run_);
-    jc.checkstop_off = off(&checkstop_);
-    jc.ext_off = off(&external_pending_);
-    jc.dec_off = off(&dec_pending_);
-    jc.fetch_host_off = off(&fetch_host_);
-    jc.fetch_page_off = off(&fetch_page_);
-    jc.fetch_msr_off = off(&fetch_msr_);
-    jc.fetch_pa_off = off(&fetch_pa_page_);
-    jc.limit_off = off(&jit_limit_);
-    jc.chained_off = off(&jit_stats_.chained);
-    jc.layout = cache_->layout();
-    jc.code_base = jit_code_;
+    JitCompiler jc = make_compiler(*this, a, st);
     if (!jc.compile(b))
         return false;  // out of room
     sync_icache(at, at + a.size());
@@ -1103,7 +1174,7 @@ bool Ppc750::jit_compile(BlockCache::Block* b)
         // The cache was flushed (possibly while allocating this very
         // block): no block refers to the code buffer any more.
         jit_epoch_ = cache_->stats().flushes;
-        jit_used_ = 0;
+        jit_used_ = jit_stub_words_;  // (the shared code stays)
         ++jit_stats_.resets;
     }
     u32 size = 0;
@@ -1123,7 +1194,7 @@ void Ppc750::set_jit_worker(JitWorker* w)
     jit_worker_ = jit_code_ ? w : nullptr;
     if (cache_)
         cache_->flush();  // a clean start: the worker owns the code buffer now
-    jit_used_ = 0;
+    jit_used_ = jit_stub_words_;
 }
 
 void Ppc750::jit_request(BlockCache::Block* b)
@@ -1187,7 +1258,7 @@ u32 JitWorker::poll(u32 max)
         if (!have_epoch_ || req_.epoch != epoch_) {
             epoch_ = req_.epoch;  // the CPU flushed its cache: no code is in use
             have_epoch_ = true;
-            used_ = 0;
+            used_ = cpu_.jit_stub_words_;  // after the shared code
             ++stats_.resets;
         }
         auto* b = reinterpret_cast<BlockCache::Block*>(block_);
@@ -1216,7 +1287,8 @@ u32 JitWorker::poll(u32 max)
 }
 void Ppc750::jit_run(BlockCache::Block* b)
 {
-    void* code = jit_code_ + (b->code - 1);
+    jit_entry_ = jit_code_ + (b->code - 1);  // the entry stub jumps there
+    void* code = jit_code_ + jit_stub_entry_;
     ++jit_stats_.runs;
     if (jit_runner_)
         jit_runner_(code, this, jit_ctx_);

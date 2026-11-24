@@ -244,11 +244,11 @@ int main(int argc, char** argv)
     static std::vector<u32> code;
     static const void* code_range[2] = {};
     if (config.jit) {
-        blocks.resize(8u << 20);
+        blocks.resize(std::getenv("G3_BLOCKMB") ? std::strtoul(std::getenv("G3_BLOCKMB"), nullptr, 0) << 20 : 64u << 20);  // as on the Pi
         mem.blocks = blocks.data();
         mem.blocks_size = static_cast<u32>(blocks.size());
         if (std::getenv("G3_JITSIM")) {
-            code.resize(512 * 1024);  // 2 MB, as on the Pi
+            code.resize(std::getenv("G3_JITWORDS") ? std::strtoul(std::getenv("G3_JITWORDS"), nullptr, 0) : 1024 * 1024);  // 4 MB, as on the Pi
             code_range[0] = code.data();
             code_range[1] = code.data() + code.size();
             mem.code = code.data();
@@ -278,6 +278,10 @@ int main(int argc, char** argv)
         return 1;
     }
     std::printf("[g3_host] started: %u MB, %ux%u\n", config.ram_mb, config.width, config.height);
+    // G3_MHZ=n: the effective CPU clock (guest time per instruction), as the
+    // Pi's pacer sets it when the host is slower than a real G3.
+    if (const char* mhz = std::getenv("G3_MHZ"))
+        session.set_effective_hz(std::strtoull(mhz, nullptr, 10) * 1000000ull);
     // G3_XPRAM=offset:value[,...]: poke Mac OS's PRAM (the NVRAM partition
     // "APL,MacOS75") before it boots (experiments).
     if (const char* xp = std::getenv("G3_XPRAM")) {
@@ -609,9 +613,10 @@ int main(int argc, char** argv)
                     static_cast<unsigned long long>(a64::simulated_instructions()),
                     static_cast<unsigned long long>(session.instructions()));
         if (const auto* js = session.jit_stats())
-            std::printf("[g3_host] blocks: %llu entered from run_blocks, %llu chained, %llu instructions run without code\n",
+            std::printf("[g3_host] blocks: %llu entered from run_blocks, %llu chained, %llu instructions run without code; %llu blocks compiled, %llu code buffer resets, %llu words\n",
                         static_cast<unsigned long long>(js->runs), static_cast<unsigned long long>(js->chained),
-                        static_cast<unsigned long long>(js->interpreted));
+                        static_cast<unsigned long long>(js->interpreted), static_cast<unsigned long long>(js->compiled),
+                        static_cast<unsigned long long>(js->resets), static_cast<unsigned long long>(js->code_words));
     }
 #endif
     if (video) {

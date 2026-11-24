@@ -114,6 +114,8 @@ public:
     void csinc(bool x, Reg rd, Reg rn, Reg rm, Cond c);
     void cset(Reg wd, Cond c) { csinc(false, wd, ZR, ZR, static_cast<Cond>(c ^ 1)); }
     void b(Label& target);
+    // B to an absolute address within +-128 MB (other code in the same buffer).
+    void b_abs(const u32* target);
     void nop();
 
     void emit(u32 insn);

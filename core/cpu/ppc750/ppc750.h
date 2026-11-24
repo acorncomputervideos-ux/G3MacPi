@@ -398,6 +398,14 @@ private:
     void* step_ctx_ = nullptr;
     // --- JIT (ppc750_jit.cpp)
     bool jit_compile(BlockCache::Block* b);
+    // The code shared by all blocks (between-blocks lookup, entry, epilogue)
+    // at the start of the code buffer; blocks follow from jit_stub_words_.
+    bool jit_emit_stubs();
+    u32 jit_stub_words_ = 0, jit_stub_dispatch_ = 0, jit_stub_enter_ = 0, jit_stub_epilogue_ = 0,
+        jit_stub_static_ = 0, jit_stub_entry_ = 0;
+    const u32* jit_entry_ = nullptr;     // the block the entry stub jumps to (jit_run)
+    const u8* jit_code_pages_ = nullptr; // the cache's per-page code flags (fixed after set_jit)
+    const void* jit_dtlb_ = nullptr;     // &dtlb_[0]
     // Generates b's code at `at` (room words); words used in `size`. Reads
     // nothing of the CPU that changes while it runs (callable from the worker).
     bool jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st);

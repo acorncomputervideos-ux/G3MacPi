@@ -349,7 +349,7 @@ BOTH(differential_tiny_cache)
     // over and over while running.
     Totals t;
     int failed = 0;
-    const u32 arena = 4 * (kRam >> 12) * 5 + 4 * BlockCache::kTableSize + 64 * BlockCache::block_bytes(BlockCache::kMaxOps) + 64;
+    const u32 arena = 4 * (kRam >> 12) * 5 + 4 * (1u << BlockCache::kMinTableBits) + 64 * BlockCache::block_bytes(BlockCache::kMaxOps) + 64;
     for (int seed = 2001; seed <= 2100 && failed < 3; ++seed)
         failed += !differential_run(seed, seed & 1, arena, t);
     CHECK_EQ(failed, 0);
@@ -1219,4 +1219,22 @@ TEST_CASE("cpu/jitbg/dropped_requests_are_asked_again")
     m.cpu.run(2 * kBlocks * 3);
     CHECK_EQ(m.cpu.jit_stats().interpreted, before);
     CHECK_EQ(m.cpu.state().gpr[3], static_cast<u32>(m.cpu.instructions_executed() / 2));
+}
+
+TEST_CASE("cpu/blocks/table_grows_with_the_arena")
+{
+    // An eighth of the arena for the table, within 2^15..2^22 slots.
+    for (u32 mb : {1u, 4u, 8u, 64u, 256u}) {
+        std::vector<u8> arena(static_cast<size_t>(mb) << 20);
+        BlockCache c;
+        REQUIRE(c.init(arena.data(), static_cast<u32>(arena.size()), kRam));
+        const u64 table_bytes = 4ull * c.table_slots();
+        CHECK(c.table_slots() >= (1u << BlockCache::kMinTableBits));
+        CHECK(c.table_slots() <= (1u << BlockCache::kMaxTableBits));
+        CHECK((c.table_slots() & (c.table_slots() - 1)) == 0);
+        if (c.table_slots() > (1u << BlockCache::kMinTableBits))
+            CHECK(table_bytes <= arena.size() / 8);
+        if (c.table_slots() < (1u << BlockCache::kMaxTableBits))
+            CHECK(table_bytes * 2 > arena.size() / 8);
+    }
 }

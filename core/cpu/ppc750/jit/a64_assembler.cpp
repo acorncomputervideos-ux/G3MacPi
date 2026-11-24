@@ -191,6 +191,15 @@ void Assembler::nop() { emit(0xD503201Fu); }
 void Assembler::cbnz(bool x, Reg rt, Label& l) { branch_to(l, sf(x) | 0x35000000u | rt, kBranchCb); }
 void Assembler::cbz(bool x, Reg rt, Label& l) { branch_to(l, sf(x) | 0x34000000u | rt, kBranchCb); }
 void Assembler::b(Label& l) { branch_to(l, 0x14000000u, kBranchB); }
+void Assembler::b_abs(const u32* target)
+{
+    const s64 words = target - (buf_ + pos_);
+    if (words < -(1 << 25) || words >= (1 << 25)) {
+        ok_ = false;
+        return;
+    }
+    emit(0x14000000u | (static_cast<u32>(words) & 0x03FFFFFFu));
+}
 // B.cond: 0101010 0 imm19 0 cond. TBZ/TBNZ: b5 011011 op b40(5) imm14 Rt.
 void Assembler::b_cond(Cond c, Label& l) { branch_to(l, 0x54000000u | c, kBranchCb); }
 void Assembler::tbz(Reg rt, u32 bit, Label& l)
