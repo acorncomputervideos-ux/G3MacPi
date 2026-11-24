@@ -17,6 +17,7 @@
 #include <circle/koptions.h>
 #include <circle/multicore.h>
 #include <circle/logger.h>
+#include <circle/sched/scheduler.h>
 #include <circle/screen.h>
 #include <circle/serial.h>
 #include <circle/sound/hdmisoundbasedevice.h>
@@ -37,6 +38,7 @@
 #include "core/cpu/ppc750/jit_worker.h"
 #include "settings.h"
 #include "teedevice.h"
+#include "web.h"
 
 enum TShutdownMode
 {
@@ -74,9 +76,12 @@ public:
 	void AttachDisk (g3::DiskCache *pCache) override;
 	void DetachDisk (g3::DiskCache *pCache) override;
 
-	// Core 0, once: the sound and network devices core 3 serves.
+	// Core 0, once: the sound and network devices core 3 serves. The
+	// network: the adapter, and the two stations sharing it (either
+	// bridge may be 0): the Mac and the Pi's own stack (the web interface).
 	void AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice);
-	void AttachNet (g3::NetBridge *pBridge, CNetDevice *pDevice);
+	void AttachNet (CNetDevice *pAdapter, g3::NetBridge *pMac, const u8 *pMacAddress,
+			g3::NetBridge *pPi, const u8 *pPiAddress);
 
 private:
 	void RunWorker (void);
@@ -85,8 +90,11 @@ private:
 	u32 ServiceNet (void);
 	g3::AudioBridge *m_pAudio = 0;		// atomic accesses only
 	CSoundBaseDevice *m_pSound = 0;
-	g3::NetBridge *m_pNetBridge = 0;	// atomic accesses only
-	CNetDevice *m_pNetDevice = 0;
+	CNetDevice *m_pNetDevice = 0;		// atomic accesses only
+	g3::NetBridge *m_pMacNet = 0;
+	g3::NetBridge *m_pPiNet = 0;
+	u8 m_MacAddress[6] = {};
+	u8 m_PiAddress[6] = {};
 	unsigned m_nLastPHYTicks = 0;
 	static const unsigned MaxDisks = 8;
 	g3::DiskCache *m_pDisk[MaxDisks] = {};	// atomic accesses only
@@ -122,7 +130,22 @@ private:
 	void StartDrawCore (void);
 	void StartSoundAndNet (void);	// on core 3, once it runs
 	CHDMISoundBaseDevice	*m_pHDMISound = 0;
-	CBcm54213Device		*m_pEthernet = 0;
+
+	// The network (after the settings are read): Circle's TCP/IP stack on
+	// our stand-in port, the switch on core 3, the web interface.
+	void StartNetwork (void);
+	void CheckWebAddress (void);
+	static void WebStatus (void *pContext, g3::WebStatus &Out);
+	static boolean WebInUse (void *pContext, const char *pPath);
+	static const char *WebPassword (void *pContext);
+	static void WebReboot (void *pContext);
+	static void WebConfigChanged (void *pContext);
+	CNetSubSystem		*m_pNet = 0;
+	CPiNetPort		m_PiPort;
+	CCircleWebHost		*m_pWebHost = 0;
+	boolean			m_bWebAddressShown = FALSE;
+	unsigned		m_nMipsX10 = 0;	// the last measured emulation speed
+	u64			m_nLastInstructions = 0;
 	static void SelfTestAttach (void *pContext, void *pWorker);	// CpuSelfTest::Setup::worker_attach
 #ifdef G3_QEMU_DRAWTEST
 	void DrawTest (void);
@@ -161,6 +184,7 @@ private:
 	CExceptionHandler	m_ExceptionHandler;
 	CInterruptSystem	m_Interrupt;
 	CTimer			m_Timer;
+	CScheduler		m_Scheduler;	// core 0 tasks: the network, the web server
 	CCPUThrottle		m_CPUThrottle;
 	CTeeDevice		m_LogTee;
 	CLogger			m_Logger;

@@ -49,6 +49,12 @@ its network to the Pi's Ethernet port, with the Pi's own Ethernet address.
 Both are new and not yet working end to end in Mac OS: see
 docs/hardware/davbus.md and docs/hardware/bmac.md.
 
+Web interface: with an Ethernet cable in, open the address the menu shows
+(`http://<the Pi's address>/`) to see the status, upload CD and disk
+images, edit the settings and update the emulator itself (upload a new
+kernel8-rpi4.img, then "Restart the Pi"). Set `web_password` on a shared
+network. See docs/web-interface.md.
+
 Not yet tested on a Raspberry Pi; please report what you see. Known: the
 Pi 400 has no battery clock, so the Mac's clock starts at 2001-01-01; the
 emulation is several times slower than a real G3.

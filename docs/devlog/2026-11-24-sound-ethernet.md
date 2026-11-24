@@ -48,3 +48,13 @@
 - QEMU raspi4b test build: cores 1-3 start (core 3 with the event
   stream), CPU self-test 20/20 both ways. HDMI sound and Ethernet need real
   hardware (QEMU has neither): untested.
+
+## Later the same day: the web interface
+
+docs/web-interface.md. A page and `/api` served from the Pi: status,
+uploads into the image folders, the settings file (checked before saving),
+updating the emulator image (with a marker check and a backup) and a
+restart. Circle's TCP/IP stack now runs on core 0's scheduler on a stand-in
+device; core 3 switches the Ethernet adapter between it and the Mac, who
+gets an address derived from the Pi's. Tested on Linux (unit tests,
+sabotage, curl, Chromium); not yet run on a Pi.

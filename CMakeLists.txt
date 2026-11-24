@@ -43,6 +43,11 @@ add_library(g3pef STATIC tools/pef/pef_writer.cpp tools/pef/elf2pef.cpp)
 # Simulator for the JIT's AArch64 code on other hosts (docs/cpu/jit-a64.md).
 add_library(g3a64sim STATIC tools/a64sim/a64_sim.cpp)
 target_include_directories(g3a64sim PUBLIC ${CMAKE_SOURCE_DIR})
+# The web interface on Linux (tools/webui_host): try it with a browser.
+add_executable(g3_webui_host tools/webui_host/webui_host.cpp)
+target_link_libraries(g3_webui_host PRIVATE g3platform_common g3core)
+target_compile_options(g3_webui_host PRIVATE ${G3_COMMON_FLAGS})
+
 add_executable(g3_menu_preview tools/menu_preview/menu_preview.cpp)
 target_link_libraries(g3_menu_preview PRIVATE g3platform_common g3core)
 target_compile_options(g3_menu_preview PRIVATE ${G3_COMMON_FLAGS})

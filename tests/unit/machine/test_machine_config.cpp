@@ -205,6 +205,23 @@ TEST_CASE("machine/config/sound_and_network_options")
     CHECK(!back.sound);
     CHECK(!back.network);
     CHECK_EQ(r2.ignored, 0u);
+    // The web interface and its password.
+    CHECK(back.web);
+    CHECK_EQ(back.web_password[0], 0);
+    const char web[] = "[machine]\nweb = no\nweb_password = open sesame\n";
+    ConfigParseReport rw;
+    MachineConfig w;
+    parse_machine_config(web, sizeof web - 1, w, rw);
+    CHECK_EQ(rw.ignored, 0u);
+    CHECK(!w.web);
+    CHECK(std::strcmp(w.web_password, "open sesame") == 0);
+    char out2[4096];
+    const u32 n2 = write_machine_config(w, out2, sizeof out2);
+    MachineConfig w2;
+    ConfigParseReport rw2;
+    parse_machine_config(out2, n2, w2, rw2);
+    CHECK(!w2.web);
+    CHECK(std::strcmp(w2.web_password, "open sesame") == 0);
     const char bad[] = "[machine]\nsound = loud\n";
     ConfigParseReport r3;
     parse_machine_config(bad, sizeof bad - 1, back, r3);

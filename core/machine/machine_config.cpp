@@ -288,11 +288,14 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                 if (word_is(val, vn, "yes")) c.jit = true;
                 else if (word_is(val, vn, "no")) c.jit = false;
                 else reject(r, line_no, "jit: yes or no");
-            } else if (word_is(key, kn, "sound") || word_is(key, kn, "network")) {
-                bool& flag = word_is(key, kn, "sound") ? c.sound : c.network;
+            } else if (word_is(key, kn, "web_password")) {
+                if (!copy(c.web_password, MachineConfig::kPasswordMax, val, vn))
+                    reject(r, line_no, "web_password: up to 63 characters");
+            } else if (word_is(key, kn, "sound") || word_is(key, kn, "network") || word_is(key, kn, "web")) {
+                bool& flag = word_is(key, kn, "sound") ? c.sound : word_is(key, kn, "network") ? c.network : c.web;
                 if (word_is(val, vn, "yes")) flag = true;
                 else if (word_is(val, vn, "no")) flag = false;
-                else reject(r, line_no, "sound/network: yes or no");
+                else reject(r, line_no, "sound/network/web: yes or no");
             } else {
                 reject(r, line_no, "unknown key in [machine]");
             }
@@ -351,6 +354,12 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     o.str(c.sound ? "yes" : "no");
     o.str("\nnetwork = ");
     o.str(c.network ? "yes" : "no");
+    o.str("\nweb = ");
+    o.str(c.web ? "yes" : "no");
+    if (c.web_password[0]) {
+        o.str("\nweb_password = ");
+        o.str(c.web_password);
+    }
     o.str("\n");
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         const MachineConfig::Drive& d = c.drive[i];

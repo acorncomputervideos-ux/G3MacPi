@@ -21,6 +21,8 @@ display = 1024x768x8           ; 640x480 800x600 1024x768 1152x870 1280x1024 160
 jit = no                       ; yes: block cache + generated code (experimental, docs/cpu/jit-a64.md)
 sound = yes                    ; built-in sound, played on HDMI (docs/hardware/davbus.md)
 network = yes                  ; built-in Ethernet, on the Pi's Ethernet port (docs/hardware/bmac.md)
+web = yes                      ; the web interface (docs/web-interface.md)
+web_password = something       ; optional: the web interface asks for it
 
 [ata0.master]                  ; also ata0.slave, ata1.master, ata1.slave
 type = cdrom                   ; none | disk | cdrom

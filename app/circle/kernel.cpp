@@ -23,6 +23,7 @@
 #include "core/common/version.h"
 #include "ndrv_data.h"
 #include "platform/common/cpu_selftest.h"
+#include "platform/common/net_switch.h"
 
 #include <circle/new.h>
 
@@ -243,25 +244,171 @@ void CKernel::StartSoundAndNet (void)
 		m_Logger.Write (FromKernel, LogWarning, "Sound: HDMI sound did not start; the Mac has no sound");
 	}
 
-	m_pEthernet = new CBcm54213Device;
-	if (m_pEthernet != 0 && m_pEthernet->Initialize ())
+#endif
+}
+
+// The network, once the settings are known: Circle's TCP/IP stack (DHCP)
+// on CPiNetPort, the adapter served by core 3 as a switch between the Pi's
+// stack and the Mac, and the web interface (app/circle/web.h). Without
+// core 3 there is no network.
+void CKernel::StartNetwork (void)
+{
+#ifndef G3_QEMU_DRAWTEST	// QEMU's raspi4b has no Pi 4 Ethernet adapter
+	const g3::MachineConfig &Config = m_pMenu->config ();
+	if (!m_DrawCore.m_bIoStarted || (!Config.network && !Config.web))
 	{
-		// Besides the Mac's own address and broadcasts, the adapter takes
-		// AppleTalk's broadcast address (09:00:07:FF:FF:FF).
-		static const u8 Groups[][MAC_ADDRESS_SIZE] = {{0x09, 0x00, 0x07, 0xFF, 0xFF, 0xFF}, {0}};
-		m_pEthernet->SetMulticastFilter (Groups);
-		const u8 *pMAC = m_pEthernet->GetMACAddress ()->Get ();
-		m_MacHost.EnableNet (pMAC);
-		m_DrawCore.AttachNet (m_MacHost.GetNetBridge (), m_pEthernet);
-		m_Logger.Write (FromKernel, LogNotice,
-				"Ethernet: the Pi's adapter, served by core 3 (Mac address %02X:%02X:%02X:%02X:%02X:%02X)",
-				pMAC[0], pMAC[1], pMAC[2], pMAC[3], pMAC[4], pMAC[5]);
+		m_Logger.Write (FromKernel, LogNotice, "Network: off");
+		return;
 	}
-	else
+	m_PiPort.Register ();	// first: the stack takes it
+	m_pNet = new CNetSubSystem (0, 0, 0, 0, "g3macpi");
+	if (m_pNet == 0 || !m_pNet->Initialize (FALSE))	// FALSE: don't wait for a link or DHCP
 	{
-		m_Logger.Write (FromKernel, LogWarning, "Ethernet: the adapter did not start; the Mac has no network");
+		m_Logger.Write (FromKernel, LogWarning, "Network: the Ethernet adapter did not start");
+		return;
+	}
+	CNetDevice *pAdapter = 0;
+	for (unsigned i = 0; CNetDevice::GetNetDevice (i) != 0; i++)
+	{
+		CNetDevice *pDevice = CNetDevice::GetNetDevice (i);
+		if (pDevice != &m_PiPort && pDevice->GetType () == NetDeviceTypeEthernet)
+		{
+			pAdapter = pDevice;
+			break;
+		}
+	}
+	if (pAdapter == 0)
+	{
+		m_Logger.Write (FromKernel, LogWarning, "Network: no Ethernet adapter");
+		return;
+	}
+	m_PiPort.SetAdapter (pAdapter);
+	const u8 *pPiAddress = pAdapter->GetMACAddress ()->Get ();
+	u8 MacAddress[6];
+	g3::net_switch::mac_address_for (pPiAddress, MacAddress);
+	// The adapter's filter: the Pi's address and broadcasts (Circle), and
+	// as extra entries the Mac's address and AppleTalk's broadcast.
+	static u8 Groups[3][MAC_ADDRESS_SIZE] = {{0}, {0x09, 0x00, 0x07, 0xFF, 0xFF, 0xFF}, {0}};
+	memcpy (Groups[0], MacAddress, 6);
+	pAdapter->SetMulticastFilter (Groups);
+	if (Config.network)
+	{
+		m_MacHost.EnableNet (MacAddress);
+	}
+	m_DrawCore.AttachNet (pAdapter, Config.network ? m_MacHost.GetNetBridge () : 0, MacAddress,
+			      Config.web ? m_PiPort.Bridge () : 0, pPiAddress);
+	m_Logger.Write (FromKernel, LogNotice,
+			"Network: core 3 switches the adapter between the Pi (%02X:%02X:%02X:%02X:%02X:%02X) "
+			"and the Mac (%02X:%02X:%02X:%02X:%02X:%02X)",
+			pPiAddress[0], pPiAddress[1], pPiAddress[2], pPiAddress[3], pPiAddress[4], pPiAddress[5],
+			MacAddress[0], MacAddress[1], MacAddress[2], MacAddress[3], MacAddress[4], MacAddress[5]);
+	if (Config.web)
+	{
+		CCircleWebHost::TKernelHooks Hooks = {this, WebStatus, WebInUse, WebPassword, WebReboot,
+						      WebConfigChanged};
+		m_pWebHost = new CCircleWebHost (Hooks);
+		new CWebServer (m_pNet, m_pWebHost);
 	}
 #endif
+}
+
+// Once DHCP has given the Pi an address: show the web interface's address
+// in the menu and the log.
+void CKernel::CheckWebAddress (void)
+{
+	if (m_bWebAddressShown || m_pNet == 0 || m_pWebHost == 0 || !m_pNet->IsRunning ())
+	{
+		return;
+	}
+	m_bWebAddressShown = TRUE;
+	CString Address;
+	m_pNet->GetConfig ()->GetIPAddress ()->Format (&Address);
+	CString Status;
+	Status.Format ("Web interface: http://%s/", (const char *) Address);
+	m_Logger.Write (FromKernel, LogNotice, "%s", (const char *) Status);
+	m_pMenu->set_status (Status);
+	if (m_bMenuShown)
+	{
+		ShowMenu (TRUE);
+	}
+}
+
+void CKernel::WebStatus (void *pContext, g3::WebStatus &Out)
+{
+	CKernel *pThis = (CKernel *) pContext;
+	Out.version = G3_VERSION_STRING " (" G3_GIT_REV ")";
+	Out.uptime_s = pThis->m_Timer.GetUptime ();
+	Out.mac_state = !pThis->m_bMacRunning ? "stopped (settings menu)"
+			: pThis->m_bMenuShown ? "paused (settings menu)" : "running";
+	Out.guest_mips_x10 = pThis->m_bMacRunning ? pThis->m_nMipsX10 : 0;
+	if (pThis->m_pNet != 0 && pThis->m_pNet->IsRunning ())
+	{
+		CString Address;
+		pThis->m_pNet->GetConfig ()->GetIPAddress ()->Format (&Address);
+		strncpy (Out.ip, Address, sizeof Out.ip - 1);
+	}
+	memcpy (Out.host_mac, pThis->m_PiPort.GetMACAddress ()->Get (), 6);
+	pThis->m_MacHost.mac_address (Out.mac_mac);
+	Out.sound = pThis->m_pMenu->config ().sound;
+	Out.network = pThis->m_pMenu->config ().network;
+}
+
+// An image the running Mac has open (as set in the menu) can't be replaced.
+boolean CKernel::WebInUse (void *pContext, const char *pPath)
+{
+	CKernel *pThis = (CKernel *) pContext;
+	if (!pThis->m_bMacRunning)
+	{
+		return FALSE;
+	}
+	const g3::MachineConfig &Config = pThis->m_pMenu->config ();
+	for (unsigned i = 0; i < g3::MachineConfig::kDrives; i++)
+	{
+		if (Config.drive[i].image[0] != '\0' && strcmp (Config.drive[i].image, pPath) == 0)
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+const char *CKernel::WebPassword (void *pContext)
+{
+	return ((CKernel *) pContext)->m_pMenu->config ().web_password;
+}
+
+// As Ctrl+Alt+Delete: the main loop stops the Mac (saving its state and
+// flushing its disks) and the Pi restarts.
+void CKernel::WebReboot (void *pContext)
+{
+	((CKernel *) pContext)->m_ShutdownMode = ShutdownReboot;
+}
+
+// The settings file was replaced: with the Mac stopped the menu takes the
+// new settings; while it runs they apply at its next start (from the file).
+void CKernel::WebConfigChanged (void *pContext)
+{
+	CKernel *pThis = (CKernel *) pContext;
+	if (pThis->m_bMacRunning)
+	{
+		pThis->m_pMenu->set_status ("Settings changed on the web: they apply when the Mac next starts.");
+		return;
+	}
+	g3::MachineConfig Config;
+	g3::ConfigParseReport Report;
+	if (!LoadSettings (Config, Report))
+	{
+		return;
+	}
+	g3::ConfigMenu *pOld = pThis->m_pMenu;
+	pThis->m_pMenu = new g3::ConfigMenu (Config, pThis->m_Lister, G3_DISKS_DIR, G3_ROM_DIR);
+	pThis->m_pMenu->set_media_folders (G3_CD_DIR, G3_HDD_DIR);
+	pThis->m_pMenu->set_status ("Settings changed on the web.");
+	delete pOld;
+	if (pThis->m_bMenuShown)
+	{
+		pThis->ShowMenu (TRUE);
+	}
 }
 
 void CDrawCore::AttachWorker (g3::ppc::JitWorker *pWorker)
@@ -332,10 +479,14 @@ void CDrawCore::AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice
 	asm volatile ("sev");
 }
 
-void CDrawCore::AttachNet (g3::NetBridge *pBridge, CNetDevice *pDevice)
+void CDrawCore::AttachNet (CNetDevice *pAdapter, g3::NetBridge *pMac, const u8 *pMacAddress,
+			   g3::NetBridge *pPi, const u8 *pPiAddress)
 {
-	m_pNetDevice = pDevice;
-	__atomic_store_n (&m_pNetBridge, pBridge, __ATOMIC_SEQ_CST);
+	m_pMacNet = pMac;
+	m_pPiNet = pPi;
+	memcpy (m_MacAddress, pMacAddress, 6);
+	memcpy (m_PiAddress, pPiAddress, 6);
+	__atomic_store_n (&m_pNetDevice, pAdapter, __ATOMIC_SEQ_CST);
 	asm volatile ("sev");
 }
 
@@ -362,39 +513,53 @@ u32 CDrawCore::ServiceSound (void)
 	return nDone;
 }
 
-// Ethernet: frames in from the adapter (polled; Circle's driver uses no
-// receive interrupt), frames out to it; the PHY checked every 2 seconds
-// (as Circle's own network task does), so the link follows the cable.
+// Ethernet, a switch with two stations (platform/common/net_switch.h):
+// frames in from the adapter (polled; Circle's driver uses no receive
+// interrupt) go to the Mac, to the Pi's stack or to both, by destination;
+// frames from either go out. The PHY is checked every 2 seconds (as
+// Circle's own network task does), so the link follows the cable.
 u32 CDrawCore::ServiceNet (void)
 {
-	g3::NetBridge *pBridge = __atomic_load_n (&m_pNetBridge, __ATOMIC_SEQ_CST);
-	if (pBridge == 0)
+	CNetDevice *pAdapter = __atomic_load_n (&m_pNetDevice, __ATOMIC_SEQ_CST);
+	if (pAdapter == 0)
 	{
 		return 0;
 	}
 	static u8 Frame[FRAME_BUFFER_SIZE];
 	u32 nDone = 0;
 	unsigned nLength;
-	for (unsigned i = 0; i < 8 && m_pNetDevice->ReceiveFrame (Frame, &nLength); i++)
+	for (unsigned i = 0; i < 8 && pAdapter->ReceiveFrame (Frame, &nLength); i++)
 	{
-		pBridge->put_incoming (Frame, nLength);
+		const u32 nTo = g3::net_switch::route (Frame, nLength, m_MacAddress, m_PiAddress);
+		if ((nTo & g3::net_switch::kToMac) && m_pMacNet != 0)
+		{
+			m_pMacNet->put_incoming (Frame, nLength);
+		}
+		if ((nTo & g3::net_switch::kToHost) && m_pPiNet != 0)
+		{
+			m_pPiNet->put_incoming (Frame, nLength);
+		}
 		nDone++;
 	}
-	for (unsigned i = 0; i < 8 && m_pNetDevice->IsSendFrameAdvisable (); i++)
+	g3::NetBridge *const Stations[2] = {m_pMacNet, m_pPiNet};
+	for (g3::NetBridge *pStation : Stations)
 	{
-		const u32 n = pBridge->take_outgoing (Frame);
-		if (n == 0)
+		for (unsigned i = 0; pStation != 0 && i < 8 && pAdapter->IsSendFrameAdvisable (); i++)
 		{
-			break;
+			const u32 n = pStation->take_outgoing (Frame);
+			if (n == 0)
+			{
+				break;
+			}
+			pAdapter->SendFrame (Frame, n);
+			nDone++;
 		}
-		m_pNetDevice->SendFrame (Frame, n);
-		nDone++;
 	}
 	const unsigned nNow = CTimer::GetClockTicks ();
 	if (nNow - m_nLastPHYTicks >= 2 * CLOCKHZ)
 	{
 		m_nLastPHYTicks = nNow;
-		m_pNetDevice->UpdatePHY ();
+		pAdapter->UpdatePHY ();
 	}
 	return nDone;
 }
@@ -1125,6 +1290,7 @@ void CKernel::StartMac (void)
 
 	m_bMacRunning = TRUE;
 	m_nGuestMs = 0;
+	m_nLastInstructions = 0;
 	m_nLastStatsTicks = m_Timer.GetTicks ();
 	m_nLastStateTicks = m_nLastStatsTicks;
 	m_pMenu->set_running (TRUE);
@@ -1236,6 +1402,13 @@ void CKernel::RunMac (void)
 			m_Logger.Write (FromKernel, LogWarning, "The ARM clock is reduced to %u MHz (max %u): "
 					"the SoC is too hot (socmaxtemp in cmdline.txt)", nClock, nMaxClock);
 		}
+		const u64 nInstructions = m_Session.instructions ();
+		const unsigned nMs = (nNow - m_nLastStatsTicks) * (1000 / HZ);
+		if (nMs != 0)
+		{
+			m_nMipsX10 = (unsigned) ((nInstructions - m_nLastInstructions) / (100 * (u64) nMs));
+		}
+		m_nLastInstructions = nInstructions;
 		m_nGuestMs = 0;
 		m_nLastStatsTicks = nNow;
 	}
@@ -1379,11 +1552,16 @@ TShutdownMode CKernel::Run (void)
 			"Ctrl+Alt+Delete saves the log and reboots.");
 
 	SetUpSettings ();
+	StartNetwork ();
 
 	unsigned nLastThrottleTicks = m_Timer.GetTicks ();
 
 	while (m_ShutdownMode == ShutdownNone)
 	{
+		// Core 0's tasks: the network stack and the web server.
+		m_Scheduler.Yield ();
+		CheckWebAddress ();
+
 		// Must be called from TASK_LEVEL to update the tree of USB devices.
 		if (m_USBHCI.UpdatePlugAndPlay ())
 		{

@@ -17,6 +17,8 @@
 //   jit = no             ; yes: the CPU's block cache and generated code
 //   sound = yes          ; the built-in sound (DAV bus, Burgundy), played by the host
 //   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
+//   web = yes            ; the web interface (platform/common/web_ui.h)
+//   web_password = text  ; needed by the web interface if set (no ; or # in it)
 //   [ata0.master]
 //   type = cdrom         ; none | disk | cdrom
 //   image = /g3macpi/disks/Mac OS 9.iso
@@ -58,6 +60,10 @@ struct MachineConfig {
     // Built-in sound and Ethernet (docs/hardware/davbus.md, bmac.md).
     bool sound = true;
     bool network = true;
+    // The web interface, and its password (empty: none).
+    static constexpr u32 kPasswordMax = 64;
+    bool web = true;
+    char web_password[kPasswordMax] = {};
     Drive drive[kDrives];
 
     MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master
