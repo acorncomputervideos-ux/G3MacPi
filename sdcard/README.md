@@ -36,6 +36,15 @@ or hard disk, with an image from `/g3macpi/disks`), the start-up disk and
 the screen mode. The Blue & White G3 has no floppy drive, so the floppy
 line is greyed out.
 
+**Start-up.** The Pi goes straight to the Mac: a start-up screen, then
+Mac OS (no text log on the screen; it goes to the serial port and to
+`/g3macpi/logs/boot.log`). Hold **F12** or **Esc** while the start-up
+screen shows to get the settings menu instead; F12 also opens it later.
+If the Mac can't start (no SD card, no ROM file, ...) the menu shows with
+the reason. "At power-on" in the menu (`autostart` in the settings) can
+make it always open the menu. To see the log on the screen while
+starting, add ` bootlog=1` to `cmdline.txt` (same line).
+
 "Start the Mac" boots the emulated Mac with those settings. Its screen is
 centred on HDMI, scaled up by a whole factor where it fits. The keyboard
 and mouse go to the Mac. F12 opens the menu again and pauses the Mac:

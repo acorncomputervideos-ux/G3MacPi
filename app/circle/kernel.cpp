@@ -129,7 +129,16 @@ boolean CKernel::Initialize (void)
 	if (bOK)
 	{
 		// Screen first so the startup screen is the first thing on HDMI.
-		ShowStartupScreen ();
+		m_bQuietBoot = m_Options.GetAppOptionDecimal ("bootlog", 0) == 0;
+		if (m_bQuietBoot)
+		{
+			m_LogTee.EnableFirst (FALSE);	// the log: UART (and later the SD card) only
+			DrawSplash (&m_Screen, "Starting...", "");
+		}
+		else
+		{
+			ShowStartupScreen ();
+		}
 
 		bOK = m_Logger.Initialize (&m_LogTee);
 	}
@@ -169,8 +178,9 @@ boolean CKernel::Initialize (void)
 
 	if (bOK)
 	{
-#ifndef G3_QEMU_DRAWTEST	// QEMU's raspi4b has no Pi 4 USB controller
+#if !defined (G3_QEMU_DRAWTEST) && !defined (G3_QEMU_BOOT)	// QEMU's raspi4b has no Pi 4 USB controller
 		bOK = m_USBHCI.Initialize ();
+		m_bUSBReady = bOK;
 #endif
 	}
 
@@ -242,7 +252,7 @@ void CKernel::StartDrawCore (void)
 // or no network, and runs anyway.
 void CKernel::StartSoundAndNet (void)
 {
-#ifndef G3_QEMU_DRAWTEST
+#if !defined (G3_QEMU_DRAWTEST) && !defined (G3_QEMU_BOOT)
 	m_pHDMISound = new CHDMISoundBaseDevice (&m_Interrupt, SoundSampleRate, 384 * 10);
 	if (m_pHDMISound != 0
 	    && m_pHDMISound->AllocateQueueFrames (SoundSampleRate / 10)	// 100 ms
@@ -267,7 +277,7 @@ void CKernel::StartSoundAndNet (void)
 // core 3 there is no network.
 void CKernel::StartNetwork (void)
 {
-#ifndef G3_QEMU_DRAWTEST	// QEMU's raspi4b has no Pi 4 Ethernet adapter
+#if !defined (G3_QEMU_DRAWTEST) && !defined (G3_QEMU_BOOT)	// QEMU's raspi4b has no Pi 4 Ethernet adapter
 	const g3::MachineConfig &Config = m_pMenu->config ();
 	if (!m_DrawCore.m_bIoStarted || (!Config.network && !Config.web))
 	{
@@ -966,6 +976,13 @@ void CKernel::ProcessInputEvents (void)
 					m_nHeldModifiers &= ~nBit;
 			}
 
+			// Esc while the Mac is about to start: the settings instead.
+			if (m_bBootWait && Event.key.pressed && Usage == g3::menu_key::kEscape)
+			{
+				ShowMenu (TRUE);
+				continue;
+			}
+
 			// The settings menu takes key presses (F12 toggles it).
 			if (Event.key.pressed && m_pMenu != 0)
 			{
@@ -1076,10 +1093,46 @@ void CKernel::SetUpSettings (void)
 	m_pMenu->set_media_folders (G3_CD_DIR, G3_HDD_DIR);
 	if (!m_bSDMounted)
 	{
-		m_pMenu->set_status ("No SD card file system: settings cannot be saved.");
+		m_pMenu->set_status ("The SD card could not be read: no settings, ROM or disk images.");
 	}
+}
 
-	ShowMenu (TRUE);
+// After the settings: start the Mac at once (autostart), unless F12 or Esc
+// comes within 1.5 seconds (the keyboard is set up meanwhile), the SD card
+// could not be read, or the Mac cannot start; the menu shows then, with
+// the reason in its status line.
+void CKernel::BootToMac (void)
+{
+	if (!m_pMenu->config ().autostart || !m_bSDMounted)
+	{
+		ShowMenu (TRUE);
+		return;
+	}
+	if (m_bQuietBoot)
+	{
+		DrawSplash (&m_Screen, "Starting the Mac...", "F12 or Esc: settings");
+	}
+	m_bBootWait = TRUE;
+	const unsigned nStart = m_Timer.GetTicks ();
+	while (!m_bMenuShown && m_Timer.GetTicks () - nStart < 3 * HZ / 2)
+	{
+		m_Scheduler.Yield ();
+		if (m_bUSBReady && m_USBHCI.UpdatePlugAndPlay ())
+		{
+			AttachInputDevices ();
+		}
+		ProcessInputEvents ();
+	}
+	m_bBootWait = FALSE;
+	if (m_bMenuShown)
+	{
+		return;		// asked for the settings
+	}
+	StartMac ();
+	if (!m_bMacRunning)
+	{
+		ShowMenu (TRUE);	// StartMac set the reason
+	}
 }
 
 void CKernel::ShowMenu (boolean bShow)
@@ -1607,6 +1660,7 @@ TShutdownMode CKernel::Run (void)
 
 	SetUpSettings ();
 	StartNetwork ();
+	BootToMac ();
 
 	unsigned nLastThrottleTicks = m_Timer.GetTicks ();
 
@@ -1617,7 +1671,7 @@ TShutdownMode CKernel::Run (void)
 		CheckWebAddress ();
 
 		// Must be called from TASK_LEVEL to update the tree of USB devices.
-		if (m_USBHCI.UpdatePlugAndPlay ())
+		if (m_bUSBReady && m_USBHCI.UpdatePlugAndPlay ())
 		{
 			AttachInputDevices ();
 		}

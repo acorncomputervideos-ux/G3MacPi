@@ -4,6 +4,8 @@
 arm_64bit=1
 kernel_address=0x80000
 initial_turbo=0
+# No rainbow screen at power-on: straight to G3MacPi.
+disable_splash=1
 
 [pi4]
 armstub=armstub8-rpi4.bin

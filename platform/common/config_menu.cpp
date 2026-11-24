@@ -268,6 +268,8 @@ void ConfigMenu::change_main(u32 item, int dir)
         cfg_.sound = !cfg_.sound;
     } else if (item == kNetwork) {
         cfg_.network = !cfg_.network;
+    } else if (item == kAutostart) {
+        cfg_.autostart = !cfg_.autostart;
     } else {
         return;
     }
@@ -622,6 +624,9 @@ void ConfigMenu::render(Screen& s) const
             } else if (i == kNetwork) {
                 scat(label, sizeof label, "Ethernet");
                 scopy(buf, sizeof buf, cfg_.network ? "On (the Pi's Ethernet port)" : "Off");
+            } else if (i == kAutostart) {
+                scat(label, sizeof label, "At power-on");
+                scopy(buf, sizeof buf, cfg_.autostart ? "Start the Mac (F12: this menu)" : "Show this menu");
             } else if (i == kSave) {
                 ++row;
                 line(s, row, item_attr(sel, false), dirty_ ? "Save settings (unsaved changes)" : "Save settings");

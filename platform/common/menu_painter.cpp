@@ -141,6 +141,36 @@ u32 text_width(const char* t)
 }
 } // namespace ui
 
+void MenuPainter::paint_splash(const ScreenSurface& out, const char* message, const char* hint)
+{
+    if (!out.base || (out.depth != 32 && out.depth != 16))
+        return;
+    const u32 k = scale_for(out.width, out.height);
+    const Canvas c{out, k, out.width / k, out.height / k};
+    const s32 W = static_cast<s32>(c.w), H = static_cast<s32>(c.h);
+    for (s32 y = 0; y < H; ++y)
+        for (s32 x = 0; x < W; ++x)
+            c.dot(x, y, ((x ^ y) & 1) ? kDesk1 : kDesk2);
+    // The mark at four times its size, on a white rounded tile.
+    const Canvas big{out, k * 4, out.width / (k * 4), out.height / (k * 4)};
+    const s32 bx = static_cast<s32>(big.w) / 2 - 7, by = static_cast<s32>(big.h) / 2 - 9;
+    big.fill(bx - 3, by - 3, 20, 20, kBlack);
+    big.fill(bx - 2, by - 2, 18, 18, kWhite);
+    mark(big, bx, by);
+    // The message on a white strip under it.
+    const s32 ty = (by + 19) * 4 + 6;
+    if (message && message[0]) {
+        const s32 tw = static_cast<s32>(ui::text_width(message));
+        c.fill(W / 2 - tw / 2 - 8, ty - 2, tw + 16, static_cast<s32>(ui::kLineHeight) + 4, kWhite);
+        c.text(W / 2 - tw / 2, ty, message, kBlack);
+    }
+    if (hint && hint[0]) {
+        const s32 hw = static_cast<s32>(ui::text_width(hint));
+        c.fill(W / 2 - hw / 2 - 8, H - 30, hw + 16, static_cast<s32>(ui::kLineHeight) + 4, kWhite);
+        c.text(W / 2 - hw / 2, H - 28, hint, kGrey);
+    }
+}
+
 u32 MenuPainter::scale_for(u32 width, u32 height)
 {
     // A window of 24 rows with a footer, and a margin around it: the

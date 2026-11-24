@@ -41,6 +41,9 @@ public:
                       const char* hint = "Arrows: move/change   Enter: choose   Esc: back");
     // The scale paint() uses for this screen size (at least 1).
     static u32 scale_for(u32 width, u32 height);
+    // The start-up screen: the desktop pattern, our computer mark large in
+    // the middle, `message` under it and `hint` at the bottom ("" for none).
+    static void paint_splash(const ScreenSurface& out, const char* message, const char* hint);
 };
 
 } // namespace g3

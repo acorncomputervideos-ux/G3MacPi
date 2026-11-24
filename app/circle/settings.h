@@ -57,5 +57,7 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage);
 
 // Draws the menu's screen: a classic Mac desktop and window (menu_painter.h).
 void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen);
+// The start-up screen (no log on HDMI): see MenuPainter::paint_splash.
+void DrawSplash (CScreenDevice *pScreen, const char *pMessage, const char *pHint);
 
 #endif

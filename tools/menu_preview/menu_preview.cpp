@@ -5,7 +5,7 @@
 // at the design without a Pi.
 //
 //   g3_menu_preview <out-prefix> [width height]
-// writes <prefix>-main.ppm, -drive.ppm, -files.ppm, -running.ppm.
+// writes <prefix>-main.ppm, -drive.ppm, -files.ppm, -running.ppm, -splash.ppm.
 
 #include "platform/common/config_menu.h"
 #include "platform/common/menu_painter.h"
@@ -105,5 +105,8 @@ int main(int argc, char** argv)
     menu.set_running(true);
     menu.set_status("");
     shot("running");
+    MenuPainter::paint_splash(s, "Starting the Mac...", "F12 or Esc: settings");
+    const std::string sp = prefix + "-splash.ppm";
+    std::printf("%s %s\n", save(sp, px, w, h) ? "wrote" : "FAILED", sp.c_str());
     return 0;
 }

@@ -17,6 +17,7 @@
 //   jit = no             ; yes: the CPU's block cache and generated code
 //   sound = yes          ; the built-in sound (DAV bus, Burgundy), played by the host
 //   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
+//   autostart = yes      ; at power-on start the Mac at once (no: show the menu)
 //   web = yes            ; the web interface (platform/common/web_ui.h)
 //   web_password = text  ; needed by the web interface if set (no ; or # in it)
 //   [ata0.master]
@@ -63,6 +64,8 @@ struct MachineConfig {
     // The web interface, and its password (empty: none).
     static constexpr u32 kPasswordMax = 64;
     bool web = true;
+    // At power-on: start the Mac at once (the menu with F12 or Esc).
+    bool autostart = true;
     char web_password[kPasswordMax] = {};
     Drive drive[kDrives];
 

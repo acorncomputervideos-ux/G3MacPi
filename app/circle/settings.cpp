@@ -210,22 +210,40 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
 	return bOK;
 }
 
-void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
+// The frame buffer as a surface to draw on; the text cursor hidden.
+static boolean ScreenSurfaceOf (CScreenDevice *pScreen, g3::ScreenSurface &Surface)
 {
-	// The menu as a classic Mac desktop (platform/common/menu_painter.h),
-	// drawn straight into the frame buffer; the text cursor stays hidden.
 	static const char HideCursor[] = "\x1b[?25l";
 	pScreen->Write (HideCursor, sizeof HideCursor - 1);
 	CBcmFrameBuffer *pFrameBuffer = pScreen->GetFrameBuffer ();
 	if (pFrameBuffer == 0)
 	{
-		return;
+		return FALSE;
 	}
-	g3::ScreenSurface Surface;
 	Surface.base = (u8 *) (uintptr) pFrameBuffer->GetBuffer ();
 	Surface.width = pFrameBuffer->GetWidth ();
 	Surface.height = pFrameBuffer->GetHeight ();
 	Surface.pitch = pFrameBuffer->GetPitch ();
 	Surface.depth = pFrameBuffer->GetDepth ();
-	g3::MenuPainter::paint (Screen, Surface);
+	return TRUE;
+}
+
+void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
+{
+	// The menu as a classic Mac desktop (platform/common/menu_painter.h),
+	// drawn straight into the frame buffer.
+	g3::ScreenSurface Surface;
+	if (ScreenSurfaceOf (pScreen, Surface))
+	{
+		g3::MenuPainter::paint (Screen, Surface);
+	}
+}
+
+void DrawSplash (CScreenDevice *pScreen, const char *pMessage, const char *pHint)
+{
+	g3::ScreenSurface Surface;
+	if (ScreenSurfaceOf (pScreen, Surface))
+	{
+		g3::MenuPainter::paint_splash (Surface, pMessage, pHint);
+	}
 }

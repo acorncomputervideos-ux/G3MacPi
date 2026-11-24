@@ -235,6 +235,11 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     CHECK(!r.menu.config().network);
     r.press(kLeft);
     CHECK(r.menu.config().network);
+    r.press(kDown);                                    // At power-on
+    CHECK(r.has("Start the Mac (F12: this menu)"));
+    CHECK(r.press(kEnter) == ConfigMenu::Action::None);
+    CHECK(!r.menu.config().autostart);
+    CHECK(r.has("Show this menu"));
     r.press(kDown);
     CHECK(r.press(kEnter) == ConfigMenu::Action::Save);
     r.menu.mark_saved();
