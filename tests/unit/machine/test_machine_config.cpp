@@ -230,6 +230,48 @@ TEST_CASE("machine/config/sound_and_network_options")
     CHECK_EQ(r3.ignored, 1u);
 }
 
+TEST_CASE("machine/config/wifi")
+{
+    MachineConfig d;
+    CHECK(!d.wifi);  // the Ethernet port by default
+    CHECK_EQ(d.wifi_name[0], 0);
+    const char text[] = "[machine]\nwifi = yes\nwifi_name = Home Net 5G\nwifi_password = pa$$w0rd!#x\n"
+                        "wifi_country = GB\n";
+    MachineConfig c;
+    ConfigParseReport r;
+    parse_machine_config(text, sizeof text - 1, c, r);
+    CHECK_EQ(r.ignored, 0u);
+    CHECK(c.wifi);
+    CHECK(std::strcmp(c.wifi_name, "Home Net 5G") == 0);
+    CHECK(std::strcmp(c.wifi_password, "pa$$w0rd!#x") == 0);  // '#' not after a blank: kept
+    CHECK(std::strcmp(c.wifi_country, "GB") == 0);
+    char out[4096];
+    const u32 n = write_machine_config(c, out, sizeof out);
+    MachineConfig c2;
+    ConfigParseReport r2;
+    parse_machine_config(out, n, c2, r2);
+    CHECK_EQ(r2.ignored, 0u);
+    CHECK(c2.wifi);
+    CHECK(std::strcmp(c2.wifi_name, "Home Net 5G") == 0);
+    CHECK(std::strcmp(c2.wifi_password, "pa$$w0rd!#x") == 0);
+    CHECK(std::strcmp(c2.wifi_country, "GB") == 0);
+    // Refused: a password too short, or with a quote; a long name; a bad country.
+    const char bad[] = "[machine]\nwifi_password = short\nwifi_password = has\"quote1\n"
+                       "wifi_name = 123456789012345678901234567890123\nwifi_country = gb\nwifi = maybe\n";
+    ConfigParseReport r3;
+    parse_machine_config(bad, sizeof bad - 1, c2, r3);
+    CHECK_EQ(r3.ignored, 5u);
+    CHECK(std::strcmp(c2.wifi_password, "pa$$w0rd!#x") == 0);  // unchanged
+    CHECK(std::strcmp(c2.wifi_name, "Home Net 5G") == 0);
+    // An empty password: an open network.
+    const char open[] = "[machine]\nwifi_password =\nwifi_name = 12345678901234567890123456789012\n";
+    ConfigParseReport r4;
+    parse_machine_config(open, sizeof open - 1, c2, r4);
+    CHECK_EQ(r4.ignored, 0u);
+    CHECK_EQ(c2.wifi_password[0], 0);
+    CHECK_EQ(std::strlen(c2.wifi_name), 32u);
+}
+
 TEST_CASE("machine/config/choose_boot_drive")
 {
     MachineConfig c;

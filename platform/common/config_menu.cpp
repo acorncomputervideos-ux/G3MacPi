@@ -269,6 +269,9 @@ void ConfigMenu::change_main(u32 item, int dir)
         cfg_.sound = !cfg_.sound;
     } else if (item == kNetwork) {
         cfg_.network = !cfg_.network;
+    } else if (item == kWifi) {
+        cfg_.wifi = !cfg_.wifi;
+        set_status("The network port changes when the Pi restarts: save the settings first.");
     } else if (item == kAutostart) {
         cfg_.autostart = !cfg_.autostart;
     } else if (item == kJit) {
@@ -626,7 +629,18 @@ void ConfigMenu::render(Screen& s) const
                 scopy(buf, sizeof buf, cfg_.sound ? "On (HDMI)" : "Off");
             } else if (i == kNetwork) {
                 scat(label, sizeof label, "Ethernet");
-                scopy(buf, sizeof buf, cfg_.network ? "On (the Pi's Ethernet port)" : "Off");
+                scopy(buf, sizeof buf, !cfg_.network ? "Off" : cfg_.wifi ? "On (through the Pi's WiFi)"
+                                                                      : "On (the Pi's Ethernet port)");
+            } else if (i == kWifi) {
+                scat(label, sizeof label, "Network port");
+                if (!cfg_.wifi) {
+                    scopy(buf, sizeof buf, "Ethernet");
+                } else if (cfg_.wifi_name[0]) {
+                    scopy(buf, sizeof buf, "WiFi: ");
+                    scat(buf, sizeof buf, cfg_.wifi_name);
+                } else {
+                    scopy(buf, sizeof buf, "WiFi (no network set: wifi_name in g3macpi.ini)");
+                }
             } else if (i == kAutostart) {
                 scat(label, sizeof label, "At power-on");
                 scopy(buf, sizeof buf, cfg_.autostart ? "Start the Mac (F12: this menu)" : "Show this menu");

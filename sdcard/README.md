@@ -73,7 +73,22 @@ its network to the Pi's Ethernet port, with the Pi's own Ethernet address.
 Both are new and not yet working end to end in Mac OS: see
 docs/hardware/davbus.md and docs/hardware/bmac.md.
 
-Web interface: with an Ethernet cable in, open the address the menu shows
+WiFi instead of the Ethernet cable: set the network in the settings file
+`g3macpi/g3macpi.ini` (or on the web page's Settings), then restart the Pi:
+
+    wifi = yes
+    wifi_name = My Network
+    wifi_password = my passphrase
+    wifi_country = GB
+
+The menu's "Network port" row switches between Ethernet and WiFi. The
+WiFi chip's firmware is in the `firmware` folder of this package (keep it
+on the card). WPA2 (or open) networks; not WPA3-only ones. The Mac shares
+the Pi's WiFi address (an access point accepts only the address that
+joined it), so TCP/IP, DHCP and AppleTalk are translated: see docs/wifi.md.
+Untested on a real Pi so far.
+
+Web interface: with an Ethernet cable in (or on WiFi), open the address the menu shows
 (`http://<the Pi's address>/`) to see the status, upload CD and disk
 images, edit the settings and update the emulator itself (upload a new
 kernel8-rpi4.img, then "Restart the Pi"). Set `web_password` on a shared

@@ -24,6 +24,10 @@ network = yes                  ; built-in Ethernet, on the Pi's Ethernet port (d
 autostart = yes                ; at power-on start the Mac at once (no: show the settings menu)
 web = yes                      ; the web interface (docs/web-interface.md)
 web_password = something       ; optional: the web interface asks for it
+wifi = no                      ; yes: the Pi's WiFi instead of its Ethernet port (docs/wifi.md)
+wifi_name = My Network         ; the WiFi network (SSID), up to 32 bytes
+wifi_password = secret123      ; WPA2 passphrase, 8-63 characters; leave out for an open network
+wifi_country = GB              ; optional: two-letter country code (allowed channels)
 
 [ata0.master]                  ; also ata0.slave, ata1.master, ata1.slave
 type = cdrom                   ; none | disk | cdrom
@@ -31,9 +35,13 @@ image = /g3macpi/disks/Mac OS 9.iso
 readonly = yes                 ; disks; CD-ROMs are always read-only
 ```
 
-`sound` and `network` are also in the menu ("Sound", "Ethernet"); a
-change applies when the Mac restarts. `jit` is not in the menu yet; set it in the file. It is off by default
-until it has been measured on a Pi.
+`sound`, `network`, `wifi`, `autostart` and `jit` are also in the menu
+("Sound", "Ethernet", "Network port", "At power-on", "CPU emulation"); a
+change applies when the Mac restarts (the network port: when the Pi
+restarts). `jit` is off by default until it has been measured on a Pi.
+The WiFi name and password are set in the file (or on the web page's
+settings): a value ends at a `;` or `#` that follows a space, and spaces at
+either end are dropped; a password may not contain `"`.
 
 Invalid lines are ignored and reported (count, first line and reason);
 everything valid still applies. Keys and words are case-insensitive.

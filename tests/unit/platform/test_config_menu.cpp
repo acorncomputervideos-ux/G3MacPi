@@ -235,6 +235,30 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     CHECK(!r.menu.config().network);
     r.press(kLeft);
     CHECK(r.menu.config().network);
+    CHECK(r.has("On (the Pi's Ethernet port)"));
+    r.press(kDown);                                    // Network port: Ethernet or WiFi
+    CHECK(r.has("Network port"));
+    CHECK(!r.menu.config().wifi);
+    r.press(kRight);
+    CHECK(r.menu.config().wifi);
+    CHECK(r.has("WiFi (no network set: wifi_name in g3macpi.ini)"));
+    CHECK(r.has("On (through the Pi's WiFi)"));
+    CHECK(r.has("changes when the Pi restarts"));
+    {
+        MachineConfig named;                           // as if read from the file
+        named.wifi = true;
+        std::strcpy(named.wifi_name, "Home");
+        ConfigMenu m2{named, r.fs, "/g3macpi/disks", "/g3macpi/rom"};
+        ConfigMenu::Screen s2;
+        m2.render(s2);
+        bool found = false;
+        for (const auto& row : s2.text)
+            found = found || std::strstr(row, "WiFi: Home") != nullptr;
+        CHECK(found);
+    }
+    r.press(kLeft);
+    CHECK(!r.menu.config().wifi);
+    CHECK(r.has("Ethernet"));
     r.press(kDown);                                    // At power-on
     CHECK(r.has("Start the Mac (F12: this menu)"));
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);

@@ -27,6 +27,8 @@ if [[ "${1:-}" == "clean" ]]; then
     rm -f "$APP/ndrv_data.cpp"
     make -C "$CIRCLE/addon/SDCard" clean || true
     make -C "$CIRCLE/addon/fatfs" clean || true
+    make -C "$CIRCLE/addon/wlan" clean || true
+    make -C "$CIRCLE/addon/wlan/hostap/wpa_supplicant" -f Makefile.circle clean || true
     make -C "$CIRCLE/boot/armstub" clean || true
     rm -rf "$OUT"
     exit 0
@@ -56,9 +58,15 @@ echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400, multi-core, kernel up
 echo "==> Building Circle libraries"
 (cd "$CIRCLE" && MAKE="make -j$JOBS" ./makeall --nosample >/dev/null)
 
-echo "==> Building Circle add-ons (SD card driver, FatFs)"
+echo "==> Building Circle add-ons (SD card driver, FatFs, WiFi driver and WPA supplicant)"
 make -s -C "$CIRCLE/addon/SDCard" -j"$JOBS"
 make -s -C "$CIRCLE/addon/fatfs" -j"$JOBS"
+# The WPA supplicant (a port of hostap) is a submodule of Circle's.
+if [[ ! -f "$CIRCLE/addon/wlan/hostap/wpa_supplicant/Makefile.circle" ]]; then
+    (cd "$CIRCLE" && git submodule update --init addon/wlan/hostap)
+fi
+make -s -C "$CIRCLE/addon/wlan" -j"$JOBS"
+make -s -C "$CIRCLE/addon/wlan/hostap/wpa_supplicant" -f Makefile.circle -j"$JOBS"
 
 echo "==> Building armstub8-rpi4.bin"
 make -s -C "$CIRCLE/boot/armstub" armstub8-rpi4.bin
@@ -111,6 +119,36 @@ if [[ $FETCH_FW -eq 1 ]]; then
             exit 1
         }
     done
+fi
+
+if [[ $FETCH_FW -eq 1 ]]; then
+    # The WiFi chip's firmware (Circle's WLAN driver loads it from
+    # /firmware), at the revision Circle pins (addon/wlan/firmware/Makefile),
+    # from Raspberry Pi OS's firmware-nonfree; its licence terms are in
+    # debian/copyright there, copied alongside.
+    echo "==> Fetching WiFi firmware (revision pinned by Circle)"
+    WLAN_REV="$(sed -n 's/^FIRMWARE ?= *//p' "$CIRCLE/addon/wlan/firmware/Makefile")"
+    WBASE="https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/$WLAN_REV"
+    mkdir -p "$OUT/firmware"
+    # Name on the card <- path in firmware-nonfree (as in Circle's Makefile).
+    while read -r name src; do
+        curl -sSfL --retry 3 -o "$OUT/firmware/$name" "$WBASE/debian/config/brcm80211/$src" || {
+            echo "error: failed to download $src" >&2
+            rm -f "$OUT/firmware/$name"
+            exit 1
+        }
+    done <<'LIST'
+brcmfmac43455-sdio.bin cypress/cyfmac43455-sdio-minimal.bin
+brcmfmac43455-sdio.txt brcm/brcmfmac43455-sdio.txt
+brcmfmac43455-sdio.clm_blob cypress/cyfmac43455-sdio.clm_blob
+brcmfmac43456-sdio.bin brcm/brcmfmac43456-sdio.bin
+brcmfmac43456-sdio.txt brcm/brcmfmac43456-sdio.txt
+brcmfmac43456-sdio.clm_blob brcm/brcmfmac43456-sdio.clm_blob
+LIST
+    curl -sSfL --retry 3 -o "$OUT/firmware/LICENCE-firmware-nonfree.txt" "$WBASE/debian/copyright" || {
+        echo "error: failed to download the WiFi firmware's licence" >&2
+        exit 1
+    }
 fi
 
 echo "==> Done:"

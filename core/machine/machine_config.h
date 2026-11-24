@@ -20,6 +20,10 @@
 //   autostart = yes      ; at power-on start the Mac at once (no: show the menu)
 //   web = yes            ; the web interface (platform/common/web_ui.h)
 //   web_password = text  ; needed by the web interface if set (no ; or # in it)
+//   wifi = no            ; yes: the Pi's WiFi instead of its Ethernet port
+//   wifi_name = My WiFi  ; the network to join (its SSID, up to 32 bytes)
+//   wifi_password = text ; WPA2 passphrase, 8-63 characters; none: an open network
+//   wifi_country = GB    ; two-letter country code (sets the allowed channels)
 //   [ata0.master]
 //   type = cdrom         ; none | disk | cdrom
 //   image = /g3macpi/disks/Mac OS 9.iso
@@ -67,6 +71,14 @@ struct MachineConfig {
     // At power-on: start the Mac at once (the menu with F12 or Esc).
     bool autostart = true;
     char web_password[kPasswordMax] = {};
+    // WiFi (the Pi's own radio) instead of the Ethernet port, for the Mac
+    // and the web interface (docs/wifi.md).
+    static constexpr u32 kWifiNameMax = 33;      // SSID: up to 32 bytes (IEEE 802.11)
+    static constexpr u32 kWifiPasswordMax = 64;  // WPA2 passphrase: 8 to 63 characters
+    bool wifi = false;
+    char wifi_name[kWifiNameMax] = {};
+    char wifi_password[kWifiPasswordMax] = {};
+    char wifi_country[3] = {};
     Drive drive[kDrives];
 
     MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master

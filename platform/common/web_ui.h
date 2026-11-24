@@ -50,6 +50,7 @@ struct WebStatus {
     u8 host_mac[6] = {};
     u8 mac_mac[6] = {};
     bool sound = false, network = false;
+    const char* port = "";        // the Pi's network connection, e.g. "Ethernet", "WiFi: Home (connected)"
     // The four drive positions: "none", "cdrom" or "disk", and the image.
     struct Drive { const char* label = ""; const char* type = "none"; const char* image = ""; };
     Drive drives[4];

@@ -23,6 +23,7 @@
 
 #include "platform/common/net_bridge.h"
 #include "platform/common/web_ui.h"
+#include "platform/common/wifi_bridge.h"
 
 // The Pi's network stack's view of the Ethernet port (core 0).
 class CPiNetPort : public CNetDevice
@@ -46,6 +47,28 @@ private:
 	g3::NetBridge	m_Bridge;
 	CMACAddress	m_MAC;
 	CNetDevice	*m_pAdapter = 0;
+};
+
+// WiFi: the frame switch between the radio, the Mac and the Pi's stack
+// (platform/common/wifi_bridge.h). A task on core 0, not on core 3 as for
+// Ethernet: Circle's WLAN driver (a port of Plan 9's) does its SDIO work in
+// core 0's scheduler tasks and may block, so it is only called from there.
+// Runs once each time core 0 yields (between the Mac's time slices).
+class CWifiSwitch : public CTask
+{
+public:
+	CWifiSwitch (CNetDevice *pRadio, g3::NetBridge *pMac, g3::NetBridge *pPi,
+		     const u8 *pPiAddress, const u8 *pMacAddress);
+	void Run (void) override;
+
+private:
+	void Service (void);
+
+	CNetDevice	*m_pRadio;
+	g3::NetBridge	*m_pMac;	// 0: the Mac has no network
+	g3::NetBridge	*m_pPi;		// 0: no web interface
+	g3::WifiBridge	m_Bridge;
+	u8		m_Frame[FRAME_BUFFER_SIZE];
 };
 
 // Files on the SD card, the machine's state and actions, for WebUi.

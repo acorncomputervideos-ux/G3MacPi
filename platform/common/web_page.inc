@@ -117,7 +117,7 @@ async function status() {
     const rows = [["Emulator", s.name + " " + s.version], ["The Mac", s.mac_state],
       ["Speed", s.mips + " MIPS"], ["Pi running for", h + " h " + m + " min"],
       ["Pi address", s.ip || "(none yet)"], ["Pi Ethernet", s.pi_ethernet], ["Mac Ethernet", s.mac_ethernet],
-      ["Sound", s.sound ? "on (HDMI)" : "off"], ["Network", s.network ? "on" : "off"],
+      ["Sound", s.sound ? "on (HDMI)" : "off"], ["Mac network", s.network ? "on" : "off"], ["Pi connection", s.port || "(none)"],
       ["Password", s.password ? "set" : "none (set web_password in the settings)"]];
     cdDrive = s.drives.findIndex(d => d.type === "cdrom");
     const drives = s.drives.map((d, i) => d.type === "none" ? "" :

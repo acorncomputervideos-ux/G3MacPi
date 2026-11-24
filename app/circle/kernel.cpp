@@ -24,6 +24,7 @@
 #include "ndrv_data.h"
 #include "platform/common/cpu_selftest.h"
 #include "platform/common/net_switch.h"
+#include "platform/common/wpa_config.h"
 
 #include <circle/new.h>
 
@@ -279,11 +280,17 @@ void CKernel::StartNetwork (void)
 {
 #if !defined (G3_QEMU_DRAWTEST) && !defined (G3_QEMU_BOOT)	// QEMU's raspi4b has no Pi 4 Ethernet adapter
 	const g3::MachineConfig &Config = m_pMenu->config ();
+	if (Config.wifi && (Config.network || Config.web))
+	{
+		StartWifi ();
+		return;
+	}
 	if (!m_DrawCore.m_bIoStarted || (!Config.network && !Config.web))
 	{
 		m_Logger.Write (FromKernel, LogNotice, "Network: off");
 		return;
 	}
+	m_Port = "Ethernet";
 	m_PiPort.Register ();	// first: the stack takes it
 	m_pNet = new CNetSubSystem (0, 0, 0, 0, "g3macpi");
 	if (m_pNet == 0 || !m_pNet->Initialize (FALSE))	// FALSE: don't wait for a link or DHCP
@@ -336,6 +343,108 @@ void CKernel::StartNetwork (void)
 #endif
 }
 
+// WiFi (wifi = yes): Circle's WLAN driver for the on-board radio (its
+// firmware files in /firmware on the SD card), its WPA supplicant with a
+// configuration written from the settings (platform/common/wpa_config.h),
+// the Pi's TCP/IP stack on CPiNetPort as with Ethernet, and the frame
+// switch as a task on core 0 (CWifiSwitch). As in Circle's WLAN sample
+// (addon/wlan/sample/hello_wlan): the radio before the stack, the
+// supplicant after it.
+#define G3_WLAN_FIRMWARE	G3_SD_DRIVE "/firmware/"
+#define G3_WPA_CONFIG		"/g3macpi/wpa_supplicant.conf"
+
+void CKernel::StartWifi (void)
+{
+#if !defined (G3_QEMU_DRAWTEST) && !defined (G3_QEMU_BOOT)
+	const g3::MachineConfig &Config = m_pMenu->config ();
+	if (Config.wifi_name[0] == '\0')
+	{
+		m_Port = "WiFi: no network name (wifi_name in the settings)";
+		m_Logger.Write (FromKernel, LogWarning, "WiFi: no network name set (wifi_name in g3macpi.ini)");
+		m_pMenu->set_status ("WiFi: set wifi_name (and wifi_password) in g3macpi.ini or on the web page.");
+		return;
+	}
+
+	// The supplicant's configuration, from the settings.
+	static char Text[1024];
+	const u32 nText = g3::write_wpa_config (Config, Text, sizeof Text);
+	FIL File;
+	UINT nWritten = 0;
+	if (nText == 0 || f_open (&File, G3_SD_DRIVE G3_WPA_CONFIG, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	{
+		m_Port = "WiFi: could not write " G3_WPA_CONFIG;
+		m_Logger.Write (FromKernel, LogWarning, "WiFi: could not write %s", G3_WPA_CONFIG);
+		return;
+	}
+	const boolean bWritten = f_write (&File, Text, nText, &nWritten) == FR_OK && nWritten == nText;
+	if (f_close (&File) != FR_OK || !bWritten)
+	{
+		m_Port = "WiFi: could not write " G3_WPA_CONFIG;
+		m_Logger.Write (FromKernel, LogWarning, "WiFi: could not write %s", G3_WPA_CONFIG);
+		return;
+	}
+
+	m_PiPort.Register ();	// first: the stack takes it
+	m_pWLAN = new CBcm4343Device (G3_WLAN_FIRMWARE);
+	if (m_pWLAN == 0 || !m_pWLAN->Initialize ())
+	{
+		m_Port = "WiFi: the radio did not start (firmware files in /firmware?)";
+		m_Logger.Write (FromKernel, LogWarning,
+				"WiFi: the radio did not start (are the firmware files in /firmware on the SD card?)");
+		m_pMenu->set_status ("WiFi did not start: are the firmware files in /firmware on the SD card?");
+		return;
+	}
+	m_PiPort.SetAdapter (m_pWLAN);		// the Pi's address: the radio's
+	m_pNet = new CNetSubSystem (0, 0, 0, 0, "g3macpi");
+	if (m_pNet == 0 || !m_pNet->Initialize (FALSE))
+	{
+		m_Port = "WiFi: the network stack did not start";
+		m_Logger.Write (FromKernel, LogWarning, "WiFi: the network stack did not start");
+		return;
+	}
+	// Let the stack's task pick its device (CPiNetPort) before the
+	// supplicant asks the stack for its address.
+	for (unsigned i = 0; i < 10; i++)
+	{
+		m_Scheduler.Yield ();
+	}
+
+	const u8 *pPiAddress = m_pWLAN->GetMACAddress ()->Get ();
+	u8 MacAddress[6];
+	g3::net_switch::mac_address_for (pPiAddress, MacAddress);
+	// AppleTalk's broadcast (the radio passes the Pi's own address and
+	// broadcasts already).
+	static u8 Groups[2][MAC_ADDRESS_SIZE] = {{0x09, 0x00, 0x07, 0xFF, 0xFF, 0xFF}, {0}};
+	m_pWLAN->SetMulticastFilter (Groups);
+	if (Config.network)
+	{
+		m_MacHost.EnableNet (MacAddress);
+	}
+	new CWifiSwitch (m_pWLAN, Config.network ? m_MacHost.GetNetBridge () : 0,
+			 m_PiPort.Bridge (), pPiAddress, MacAddress);
+
+	m_pSupplicant = new CWPASupplicant (G3_SD_DRIVE G3_WPA_CONFIG);
+	if (m_pSupplicant == 0 || !m_pSupplicant->Initialize ())
+	{
+		m_Port = "WiFi: the WPA supplicant did not start";
+		m_Logger.Write (FromKernel, LogWarning, "WiFi: the WPA supplicant did not start");
+		return;
+	}
+	m_Port.Format ("WiFi: %s", Config.wifi_name);
+	m_Logger.Write (FromKernel, LogNotice,
+			"WiFi: joining \"%s\" as %02X:%02X:%02X:%02X:%02X:%02X; the Mac shares that address",
+			Config.wifi_name, pPiAddress[0], pPiAddress[1], pPiAddress[2],
+			pPiAddress[3], pPiAddress[4], pPiAddress[5]);
+	if (Config.web)
+	{
+		CCircleWebHost::TKernelHooks Hooks = {this, WebStatus, WebInUse, WebPassword, WebReboot,
+						      WebConfigChanged, WebInsertMedia};
+		m_pWebHost = new CCircleWebHost (Hooks);
+		new CWebServer (m_pNet, m_pWebHost);
+	}
+#endif
+}
+
 // Once DHCP has given the Pi an address: show the web interface's address
 // in the menu and the log.
 void CKernel::CheckWebAddress (void)
@@ -375,6 +484,7 @@ void CKernel::WebStatus (void *pContext, g3::WebStatus &Out)
 	pThis->m_MacHost.mac_address (Out.mac_mac);
 	Out.sound = pThis->m_pMenu->config ().sound;
 	Out.network = pThis->m_pMenu->config ().network;
+	Out.port = pThis->m_Port;
 	const g3::MachineConfig &Config = pThis->m_pMenu->config ();
 	for (unsigned i = 0; i < g3::MachineConfig::kDrives && i < 4; i++)
 	{

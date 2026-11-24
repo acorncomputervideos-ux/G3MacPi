@@ -291,13 +291,31 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
             } else if (word_is(key, kn, "web_password")) {
                 if (!copy(c.web_password, MachineConfig::kPasswordMax, val, vn))
                     reject(r, line_no, "web_password: up to 63 characters");
+            } else if (word_is(key, kn, "wifi_name")) {
+                if (!copy(c.wifi_name, MachineConfig::kWifiNameMax, val, vn))
+                    reject(r, line_no, "wifi_name: up to 32 characters");
+            } else if (word_is(key, kn, "wifi_password")) {
+                char pw[MachineConfig::kWifiPasswordMax];
+                bool ok = (vn == 0 || vn >= 8) && copy(pw, MachineConfig::kWifiPasswordMax, val, vn);
+                for (u32 i = 0; ok && i < vn; ++i)
+                    ok = val[i] != '"' && static_cast<u8>(val[i]) >= 0x20 && static_cast<u8>(val[i]) < 0x7F;
+                if (ok)
+                    copy(c.wifi_password, MachineConfig::kWifiPasswordMax, val, vn);
+                else
+                    reject(r, line_no, "wifi_password: 8-63 characters, no \"");
+            } else if (word_is(key, kn, "wifi_country")) {
+                const bool ok = vn == 0 || (vn == 2 && val[0] >= 'A' && val[0] <= 'Z' && val[1] >= 'A' && val[1] <= 'Z');
+                if (ok)
+                    copy(c.wifi_country, 3, val, vn);
+                else
+                    reject(r, line_no, "wifi_country: two capital letters, e.g. GB");
             } else if (word_is(key, kn, "sound") || word_is(key, kn, "network") || word_is(key, kn, "web") ||
-                       word_is(key, kn, "autostart")) {
+                       word_is(key, kn, "autostart") || word_is(key, kn, "wifi")) {
                 bool& flag = word_is(key, kn, "sound") ? c.sound : word_is(key, kn, "network") ? c.network
-                             : word_is(key, kn, "web") ? c.web : c.autostart;
+                             : word_is(key, kn, "web") ? c.web : word_is(key, kn, "wifi") ? c.wifi : c.autostart;
                 if (word_is(val, vn, "yes")) flag = true;
                 else if (word_is(val, vn, "no")) flag = false;
-                else reject(r, line_no, "sound/network/web/autostart: yes or no");
+                else reject(r, line_no, "sound/network/web/autostart/wifi: yes or no");
             } else {
                 reject(r, line_no, "unknown key in [machine]");
             }
@@ -363,6 +381,20 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     if (c.web_password[0]) {
         o.str("\nweb_password = ");
         o.str(c.web_password);
+    }
+    o.str("\nwifi = ");
+    o.str(c.wifi ? "yes" : "no");
+    if (c.wifi_name[0]) {
+        o.str("\nwifi_name = ");
+        o.str(c.wifi_name);
+    }
+    if (c.wifi_password[0]) {
+        o.str("\nwifi_password = ");
+        o.str(c.wifi_password);
+    }
+    if (c.wifi_country[0]) {
+        o.str("\nwifi_country = ");
+        o.str(c.wifi_country);
     }
     o.str("\n");
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {

@@ -8,6 +8,7 @@
 #include <circle/net/in.h>
 #include <circle/net/ipaddress.h>
 #include <circle/new.h>
+#include <circle/sched/scheduler.h>
 #include <circle/util.h>
 
 #include "settings.h"
@@ -47,6 +48,83 @@ boolean CPiNetPort::IsLinkUp (void)
 TNetDeviceSpeed CPiNetPort::GetLinkSpeed (void)
 {
 	return m_pAdapter != 0 ? m_pAdapter->GetLinkSpeed () : NetDeviceSpeedUnknown;
+}
+
+// --- WiFi ---------------------------------------------------------------------------------
+
+CWifiSwitch::CWifiSwitch (CNetDevice *pRadio, g3::NetBridge *pMac, g3::NetBridge *pPi,
+			  const u8 *pPiAddress, const u8 *pMacAddress)
+:	m_pRadio (pRadio),
+	m_pMac (pMac),
+	m_pPi (pPi),
+	m_Bridge (pPiAddress, pMacAddress)
+{
+	SetName ("wifiswitch");
+}
+
+void CWifiSwitch::Run (void)
+{
+	for (;;)
+	{
+		Service ();
+		CScheduler::Get ()->Yield ();
+	}
+}
+
+void CWifiSwitch::Service (void)
+{
+	using g3::WifiBridge;
+	unsigned nLength;
+	for (unsigned i = 0; i < 16 && m_pRadio->ReceiveFrame (m_Frame, &nLength); i++)
+	{
+		const u32 nTo = m_Bridge.from_air (m_Frame, nLength);
+		if ((nTo & WifiBridge::kToMac) && m_pMac != 0)
+		{
+			m_pMac->put_incoming (m_Frame, nLength);
+		}
+		if ((nTo & WifiBridge::kToHost) && m_pPi != 0)
+		{
+			m_pPi->put_incoming (m_Frame, nLength);
+		}
+	}
+	// The Pi's frames (its own stack and the WPA supplicant's EAPOL frames)
+	// go out even before the network is joined; the Mac's only once it is.
+	for (unsigned i = 0; m_pPi != 0 && i < 16; i++)
+	{
+		const u32 n = m_pPi->take_outgoing (m_Frame);
+		if (n == 0)
+		{
+			break;
+		}
+		const u32 nTo = m_Bridge.route_from_host (m_Frame, n);
+		if ((nTo & WifiBridge::kToMac) && m_pMac != 0)
+		{
+			m_pMac->put_incoming (m_Frame, n);
+		}
+		if (nTo & WifiBridge::kToAir)
+		{
+			m_pRadio->SendFrame (m_Frame, n);
+		}
+	}
+	const boolean bJoined = m_pRadio->IsLinkUp ();
+	for (unsigned i = 0; m_pMac != 0 && i < 16; i++)
+	{
+		const u32 n = m_pMac->take_outgoing (m_Frame);
+		if (n == 0)
+		{
+			break;
+		}
+		const u32 nTo = m_Bridge.route_from_mac (m_Frame, n);
+		if ((nTo & WifiBridge::kToHost) && m_pPi != 0)
+		{
+			m_pPi->put_incoming (m_Frame, n);
+		}
+		if ((nTo & WifiBridge::kToAir) && bJoined)
+		{
+			m_Bridge.to_air (m_Frame, n);
+			m_pRadio->SendFrame (m_Frame, n);
+		}
+	}
 }
 
 // --- files ----------------------------------------------------------------------------------
