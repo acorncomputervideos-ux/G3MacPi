@@ -73,16 +73,19 @@ its network to the Pi's Ethernet port, with the Pi's own Ethernet address.
 Both are new and not yet working end to end in Mac OS: see
 docs/hardware/davbus.md and docs/hardware/bmac.md.
 
-WiFi instead of the Ethernet cable: set the network in the settings file
-`g3macpi/g3macpi.ini` (or on the web page's Settings), then restart the Pi:
+WiFi instead of the Ethernet cable: in the menu, select "Network port"
+and press Enter. On that page, set "Use WiFi" to Yes and type the
+network's name, password and country (Enter starts typing, Enter ends it;
+set "Keyboard" to UK first on a UK keyboard so symbols come out right).
+Then "Save settings" and restart the Pi. Or set it in the settings file
+`g3macpi/g3macpi.ini` (or on the web page's Settings):
 
     wifi = yes
     wifi_name = My Network
     wifi_password = my passphrase
     wifi_country = GB
 
-The menu's "Network port" row switches between Ethernet and WiFi. The
-WiFi chip's firmware is in the `firmware` folder of this package (keep it
+The WiFi chip's firmware is in the `firmware` folder of this package (keep it
 on the card). WPA2 (or open) networks; not WPA3-only ones. The Mac shares
 the Pi's WiFi address (an access point accepts only the address that
 joined it), so TCP/IP, DHCP and AppleTalk are translated: see docs/wifi.md.

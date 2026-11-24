@@ -1284,7 +1284,7 @@ void CKernel::ShowMenu (boolean bShow)
 
 void CKernel::HandleMenuKey (u8 ucUsage)
 {
-	switch (m_pMenu->key (ucUsage))
+	switch (m_pMenu->key (ucUsage, (u8) m_nHeldModifiers))	// Shift matters when typing (bit n: usage 0xE0+n, as HID)
 	{
 	case g3::ConfigMenu::Action::Save:
 		if (m_bSDMounted && SaveSettings (m_pMenu->config ()))

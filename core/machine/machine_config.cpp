@@ -303,6 +303,10 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                     copy(c.wifi_password, MachineConfig::kWifiPasswordMax, val, vn);
                 else
                     reject(r, line_no, "wifi_password: 8-63 characters, no \"");
+            } else if (word_is(key, kn, "keyboard")) {
+                if (word_is(val, vn, "us")) c.keyboard = MachineConfig::Keyboard::Us;
+                else if (word_is(val, vn, "uk")) c.keyboard = MachineConfig::Keyboard::Uk;
+                else reject(r, line_no, "keyboard: us or uk");
             } else if (word_is(key, kn, "wifi_country")) {
                 const bool ok = vn == 0 || (vn == 2 && val[0] >= 'A' && val[0] <= 'Z' && val[1] >= 'A' && val[1] <= 'Z');
                 if (ok)
@@ -396,6 +400,8 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
         o.str("\nwifi_country = ");
         o.str(c.wifi_country);
     }
+    o.str("\nkeyboard = ");
+    o.str(c.keyboard == MachineConfig::Keyboard::Uk ? "uk" : "us");
     o.str("\n");
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         const MachineConfig::Drive& d = c.drive[i];

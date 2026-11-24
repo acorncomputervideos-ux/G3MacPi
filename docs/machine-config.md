@@ -28,6 +28,7 @@ wifi = no                      ; yes: the Pi's WiFi instead of its Ethernet port
 wifi_name = My Network         ; the WiFi network (SSID), up to 32 bytes
 wifi_password = secret123      ; WPA2 passphrase, 8-63 characters; leave out for an open network
 wifi_country = GB              ; optional: two-letter country code (allowed channels)
+keyboard = us                  ; us | uk: the Pi keyboard's layout, for typing in the menu
 
 [ata0.master]                  ; also ata0.slave, ata1.master, ata1.slave
 type = cdrom                   ; none | disk | cdrom
@@ -39,8 +40,9 @@ readonly = yes                 ; disks; CD-ROMs are always read-only
 ("Sound", "Ethernet", "Network port", "At power-on", "CPU emulation"); a
 change applies when the Mac restarts (the network port: when the Pi
 restarts). `jit` is off by default until it has been measured on a Pi.
-The WiFi name and password are set in the file (or on the web page's
-settings): a value ends at a `;` or `#` that follows a space, and spaces at
+The WiFi name, password and country can be typed in the menu (Enter on
+"Network port" opens the WiFi page; `keyboard` picks US or UK symbols for
+typing), set on the web page's settings, or in the file: a value ends at a `;` or `#` that follows a space, and spaces at
 either end are dropped; a password may not contain `"`.
 
 Invalid lines are ignored and reported (count, first line and reason);

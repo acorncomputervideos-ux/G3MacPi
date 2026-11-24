@@ -5,7 +5,7 @@
 // at the design without a Pi.
 //
 //   g3_menu_preview <out-prefix> [width height]
-// writes <prefix>-main.ppm, -drive.ppm, -files.ppm, -running.ppm, -splash.ppm.
+// writes <prefix>-main.ppm, -drive.ppm, -files.ppm, -wifi.ppm, -running.ppm, -splash.ppm.
 
 #include "platform/common/config_menu.h"
 #include "platform/common/menu_painter.h"
@@ -100,6 +100,26 @@ int main(int argc, char** argv)
     menu.key(menu_key::kDown);
     shot("files");
     menu.key(menu_key::kEscape);
+    menu.key(menu_key::kEscape);
+    menu.key(menu_key::kEscape);
+    // The WiFi page, typing the network's name ("My WiFi").
+    menu.set_status("");
+    while (menu.key(menu_key::kDown), true) {
+        menu.render(scr);
+        bool at = false;
+        for (u32 r = 0; r < ConfigMenu::kRows; ++r)
+            at = at || (scr.attr[r] == ConfigMenu::Attr::Selected && std::strstr(scr.text[r], "Network port"));
+        if (at)
+            break;
+    }
+    menu.key(menu_key::kEnter);
+    menu.key(menu_key::kEnter);   // Use WiFi: yes
+    menu.key(menu_key::kDown);
+    menu.key(menu_key::kEnter);   // type the name
+    const u8 typed[][2] = {{0x10, 0x02}, {0x1C, 0}, {0x2C, 0}, {0x1A, 0x02}, {0x0C, 0x02}, {0x09, 0x02}, {0x0C, 0x02}};
+    for (const auto& k : typed)
+        menu.key(k[0], k[1]);
+    shot("wifi");
     menu.key(menu_key::kEscape);
     menu.key(menu_key::kEscape);
     menu.set_running(true);

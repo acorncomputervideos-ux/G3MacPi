@@ -3,6 +3,7 @@
 // platform/common/config_menu.cpp — see config_menu.h.
 
 #include "platform/common/config_menu.h"
+#include "platform/common/key_text.h"
 
 namespace g3 {
 
@@ -153,14 +154,129 @@ bool ConfigMenu::needs_restart() const
 
 // --- keys ----------------------------------------------------------------------------
 
-ConfigMenu::Action ConfigMenu::key(u8 usage)
+ConfigMenu::Action ConfigMenu::key(u8 usage, u8 modifiers)
 {
+    if (editing_ != kNotEditing) {
+        key_edit(usage, modifiers);
+        return Action::None;
+    }
     switch (page_) {
     case Page::Main: return key_main(usage);
     case Page::Drive: return key_drive(usage);
     case Page::Files: return key_files(usage);
+    case Page::Wifi: return key_wifi(usage);
     }
     return Action::None;
+}
+
+// --- the WiFi page ---------------------------------------------------------------------
+
+void ConfigMenu::toggle_wifi()
+{
+    cfg_.wifi = !cfg_.wifi;
+    dirty_ = true;
+    set_status("The network port changes when the Pi restarts: save the settings first.");
+}
+
+ConfigMenu::Action ConfigMenu::key_wifi(u8 usage)
+{
+    switch (usage) {
+    case menu_key::kEscape:
+    case menu_key::kBackspace:
+        page_ = Page::Main;
+        return Action::None;
+    case menu_key::kLeft:
+    case menu_key::kRight:
+        if (wifi_sel_ == kWUse) {
+            toggle_wifi();
+        } else if (wifi_sel_ == kWKeyboard) {
+            cfg_.keyboard = cfg_.keyboard == MachineConfig::Keyboard::Us ? MachineConfig::Keyboard::Uk
+                                                                       : MachineConfig::Keyboard::Us;
+            dirty_ = true;
+        }
+        return Action::None;
+    case menu_key::kEnter:
+    case menu_key::kSpace:
+        if (wifi_sel_ == kWBack)
+            page_ = Page::Main;
+        else if (wifi_sel_ == kWName || wifi_sel_ == kWPassword || wifi_sel_ == kWCountry)
+            start_edit(static_cast<u8>(wifi_sel_));
+        else
+            return key_wifi(menu_key::kRight);
+        return Action::None;
+    default:
+        move(usage, wifi_sel_, kWifiItems, &ConfigMenu::wifi_enabled);
+        return Action::None;
+    }
+}
+
+void ConfigMenu::start_edit(u8 item)
+{
+    editing_ = item;
+    scopy(edit_, sizeof edit_, item == kWName ? cfg_.wifi_name : item == kWPassword ? cfg_.wifi_password
+                                                                                     : cfg_.wifi_country);
+    status_[0] = 0;
+}
+
+void ConfigMenu::key_edit(u8 usage, u8 modifiers)
+{
+    const u32 max = editing_ == kWName ? MachineConfig::kWifiNameMax - 1
+                    : editing_ == kWPassword ? MachineConfig::kWifiPasswordMax - 1 : 2;
+    u32 len = slen(edit_);
+    if (usage == menu_key::kEscape) {
+        editing_ = kNotEditing;
+        status_[0] = 0;
+        return;
+    }
+    if (usage == menu_key::kBackspace) {
+        if (len > 0)
+            edit_[len - 1] = 0;
+        return;
+    }
+    if (usage == menu_key::kEnter) {
+        if (editing_ == kWPassword && len > 0 && len < 8) {
+            set_status("A WiFi password has 8 to 63 characters (none for an open network).");
+            return;
+        }
+        if (editing_ == kWCountry && len == 1) {
+            set_status("A country code has two letters, e.g. GB, US, DE.");
+            return;
+        }
+        char* dst = editing_ == kWName ? cfg_.wifi_name : editing_ == kWPassword ? cfg_.wifi_password
+                                                                                : cfg_.wifi_country;
+        const u32 cap = editing_ == kWName ? MachineConfig::kWifiNameMax
+                        : editing_ == kWPassword ? MachineConfig::kWifiPasswordMax : 3;
+        if (!seq(dst, edit_)) {
+            scopy(dst, cap, edit_);
+            dirty_ = true;
+        }
+        editing_ = kNotEditing;
+        set_status("Changes to WiFi apply when the Pi restarts: save the settings first.");
+        return;
+    }
+    const KeyLayout layout = cfg_.keyboard == MachineConfig::Keyboard::Uk ? KeyLayout::Uk : KeyLayout::Us;
+    char c = key_char(usage, shift_held(modifiers), layout);
+    if (c == 0)
+        return;
+    if (editing_ == kWCountry) {
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+        if (c < 'A' || c > 'Z')
+            return;
+    }
+    if (editing_ == kWPassword && c == '"') {
+        set_status("A WiFi password here can't contain \" (the WPA supplicant's file format).");
+        return;
+    }
+    if ((c == '#' || c == ';') && (len == 0 || edit_[len - 1] == ' ')) {
+        // The settings file would read it as the start of a comment.
+        set_status("# or ; can't come first or after a space (g3macpi.ini reads a comment there).");
+        return;
+    }
+    if (len >= max)
+        return;
+    edit_[len] = c;
+    edit_[len + 1] = 0;
 }
 
 void ConfigMenu::move(u8 usage, u32& sel, u32 count, bool (ConfigMenu::*enabled)(u32) const)
@@ -221,6 +337,11 @@ ConfigMenu::Action ConfigMenu::key_main(u8 usage)
             open_files(true);
             return Action::None;
         }
+        if (sel_ == kWifi) {
+            wifi_sel_ = kWUse;
+            page_ = Page::Wifi;
+            return Action::None;
+        }
         if (sel_ == kSave)
             return Action::Save;
         if (sel_ == kStart)
@@ -270,8 +391,8 @@ void ConfigMenu::change_main(u32 item, int dir)
     } else if (item == kNetwork) {
         cfg_.network = !cfg_.network;
     } else if (item == kWifi) {
-        cfg_.wifi = !cfg_.wifi;
-        set_status("The network port changes when the Pi restarts: save the settings first.");
+        toggle_wifi();
+        return;
     } else if (item == kAutostart) {
         cfg_.autostart = !cfg_.autostart;
     } else if (item == kJit) {
@@ -701,6 +822,50 @@ void ConfigMenu::render(Screen& s) const
                 line(s, row, a, "Back");
             }
         }
+    } else if (page_ == Page::Wifi) {
+        line(s, row, Attr::Title, "WiFi network");
+        ++row;
+        for (u32 i = 0; i < kWifiItems; ++i) {
+            const bool sel = i == wifi_sel_;
+            const bool typing_here = editing_ == i;
+            const Attr a = item_attr(sel, false);
+            char value[kCols + 1];
+            if (typing_here) {
+                scopy(value, sizeof value, edit_);
+                scat(value, sizeof value, "_");
+            }
+            if (i == kWUse) {
+                line(s, row, a, "Use WiFi", cfg_.wifi ? "Yes: the Pi's WiFi instead of its Ethernet port"
+                                                       : "No: the Pi's Ethernet port");
+            } else if (i == kWName) {
+                line(s, row, a, "Network name",
+                     typing_here ? value : cfg_.wifi_name[0] ? cfg_.wifi_name : "(none) - press Enter to type it");
+            } else if (i == kWPassword) {
+                if (!typing_here) {
+                    const u32 n = slen(cfg_.wifi_password);
+                    if (n == 0) {
+                        scopy(value, sizeof value, "(none: an open network)");
+                    } else {
+                        for (u32 k = 0; k < n; ++k)
+                            value[k] = '*';
+                        value[n] = 0;
+                    }
+                }
+                line(s, row, a, "Password", value);
+            } else if (i == kWCountry) {
+                line(s, row, a, "Country", typing_here ? value : cfg_.wifi_country[0] ? cfg_.wifi_country
+                                                                       : "(not set) - e.g. GB, US");
+            } else if (i == kWKeyboard) {
+                line(s, row, a, "Keyboard (for typing)",
+                     cfg_.keyboard == MachineConfig::Keyboard::Uk ? "UK" : "US");
+            } else {
+                ++row;
+                line(s, row, a, "Back");
+            }
+        }
+        ++row;
+        line(s, row, Attr::Dim, "WPA2 or open networks. The password shows while you type it.");
+        line(s, row, Attr::Dim, "Changes apply when the Pi restarts (Save settings on the main page).");
     } else {
         line(s, row, Attr::Title, picking_rom_ ? "Choose the Mac OS ROM file" : "Choose an image file");
         line(s, row, Attr::Dim, dir_);
@@ -784,7 +949,8 @@ void ConfigMenu::render(Screen& s) const
     else
         ++row;
     ++row;
-    line(s, row, Attr::Dim, page_ == Page::Files ? "Up/Down: select   Enter: open/choose   Esc: cancel"
+    line(s, row, Attr::Dim, editing_ != kNotEditing ? "Type the text   Backspace: delete   Enter: done   Esc: cancel"
+                            : page_ == Page::Files ? "Up/Down: select   Enter: open/choose   Esc: cancel"
                             : "Up/Down: select   Left/Right: change   Enter: open   Esc: back");
 }
 

@@ -547,3 +547,98 @@ TEST_CASE("platform/menu/long_status_wraps")
     CHECK(shown == msg);  // every word, in order, none cut
     CHECK(r.has("Up/Down: select"));  // the help line is still there
 }
+
+TEST_CASE("platform/menu/wifi_page_typing")
+{
+    Rig r;
+    // To "Network port", Enter opens the WiFi page.
+    while (r.selected().find("Network port") == std::string::npos)
+        r.press(kDown);
+    r.press(kEnter);
+    CHECK(r.has("WiFi network"));
+    CHECK(r.selected().find("Use WiFi") != std::string::npos);
+    r.press(kEnter);                                   // Use WiFi: yes
+    CHECK(r.menu.config().wifi);
+    CHECK(r.menu.dirty());
+    r.press(kDown);                                    // Network name
+    CHECK(r.has("(none) - press Enter to type it"));
+    r.press(kEnter);
+    CHECK(r.menu.typing());
+    CHECK(r.has("Backspace: delete"));
+    // "Home 5g", then Backspace and "G": Shift is the left-Shift bit.
+    const u8 kH = 0x0B, kO = 0x12, kM = 0x10, kE = 0x08, k5 = 0x22, kG = 0x0A;
+    r.menu.key(kH, 0x02);
+    for (u8 k : {kO, kM, kE, static_cast<u8>(0x2C), k5, kG})
+        r.menu.key(k);
+    CHECK(r.has("Home 5g_"));
+    r.press(kBackspace);
+    r.menu.key(kG, 0x20);                              // right Shift
+    CHECK(r.has("Home 5G_"));
+    CHECK(r.press(kUp) == ConfigMenu::Action::None);   // arrows type nothing while typing
+    r.press(kEnter);
+    CHECK(!r.menu.typing());
+    CHECK(std::strcmp(r.menu.config().wifi_name, "Home 5G") == 0);
+    CHECK(r.has("Home 5G"));
+    // Esc cancels typing.
+    r.press(kEnter);
+    r.menu.key(kH);
+    r.press(kEscape);
+    CHECK(std::strcmp(r.menu.config().wifi_name, "Home 5G") == 0);
+    CHECK(r.has("WiFi network"));                      // still on the page
+    // Password: too short is refused; shown as stars afterwards.
+    r.press(kDown);
+    r.press(kEnter);
+    for (int i = 0; i < 5; ++i)
+        r.menu.key(kE);
+    r.press(kEnter);
+    CHECK(r.menu.typing());
+    CHECK(r.has("8 to 63 characters"));
+    // The keyboard layout matters for symbols: US Shift+2 is @.
+    r.menu.key(0x1F, 0x02);
+    r.menu.key(0x34, 0x02);                            // US Shift+' is ", refused in a password
+    CHECK(r.has("can't contain"));
+    r.menu.key(kO);
+    r.menu.key(kO);
+    r.press(kEnter);
+    CHECK(!r.menu.typing());
+    CHECK(std::strcmp(r.menu.config().wifi_password, "eeeee@oo") == 0);
+    CHECK(r.has("********"));
+    CHECK(!r.has("eeeee@oo"));
+    // Country: letters only, made capitals, two at most.
+    r.press(kDown);
+    r.press(kEnter);
+    r.menu.key(kG);
+    r.menu.key(0x1E);                                  // '1': ignored
+    r.menu.key(0x05);                                  // 'b'
+    r.menu.key(kE);                                    // a third letter: ignored
+    r.press(kEnter);
+    CHECK(std::strcmp(r.menu.config().wifi_country, "GB") == 0);
+    // UK keyboard: Shift+2 types ", Shift+' types @.
+    r.press(kDown);
+    r.press(kRight);
+    CHECK(r.menu.config().keyboard == MachineConfig::Keyboard::Uk);
+    CHECK(r.has("UK"));
+    r.press(kUp, 3);                                   // to Network name
+    r.press(kEnter);
+    r.menu.key(0x1F, 0x02);
+    r.menu.key(0x34, 0x02);
+    r.menu.key(0x2C);                                  // space, then '#' (UK: its own key): refused
+    r.menu.key(0x32);
+    CHECK(r.has("can't come first or after a space"));
+    r.press(kBackspace);                               // the space
+    r.press(kEnter);
+    CHECK(std::strcmp(r.menu.config().wifi_name, "Home 5G\"@") == 0);
+    // Back to the main page; the row shows the network.
+    r.press(kEscape);
+    CHECK(r.has("WiFi: Home 5G\"@"));
+    // The settings file keeps it all.
+    char out[4096];
+    const u32 n = write_machine_config(r.menu.config(), out, sizeof out);
+    MachineConfig back;
+    ConfigParseReport rep;
+    parse_machine_config(out, n, back, rep);
+    CHECK_EQ(rep.ignored, 0u);
+    CHECK(std::strcmp(back.wifi_name, "Home 5G\"@") == 0);
+    CHECK(std::strcmp(back.wifi_password, "eeeee@oo") == 0);
+    CHECK(back.keyboard == MachineConfig::Keyboard::Uk);
+}

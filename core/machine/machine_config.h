@@ -24,6 +24,7 @@
 //   wifi_name = My WiFi  ; the network to join (its SSID, up to 32 bytes)
 //   wifi_password = text ; WPA2 passphrase, 8-63 characters; none: an open network
 //   wifi_country = GB    ; two-letter country code (sets the allowed channels)
+//   keyboard = us        ; us | uk: the Pi keyboard's layout, for typing in the menu
 //   [ata0.master]
 //   type = cdrom         ; none | disk | cdrom
 //   image = /g3macpi/disks/Mac OS 9.iso
@@ -79,6 +80,10 @@ struct MachineConfig {
     char wifi_name[kWifiNameMax] = {};
     char wifi_password[kWifiPasswordMax] = {};
     char wifi_country[3] = {};
+    // The layout of the Pi's keyboard, for text typed into the menu (the
+    // Mac has its own keyboard layout setting).
+    enum class Keyboard : u8 { Us, Uk };
+    Keyboard keyboard = Keyboard::Us;
     Drive drive[kDrives];
 
     MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master

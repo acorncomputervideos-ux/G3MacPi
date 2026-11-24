@@ -17,6 +17,9 @@ interface and the Mac's Ethernet (BMAC+, docs/hardware/bmac.md).
   package's licence terms (`firmware/LICENCE-firmware-nonfree.txt`).
   WPA/WPA2 personal and open networks (Circle's supplicant build has no
   WPA3/SAE).
+- **Menu**: Enter on "Network port" opens a WiFi page where the name,
+  password and country are typed (platform/common/key_text.h maps keys to
+  characters for US and UK keyboards).
 - **Configuration**: the settings `wifi_name`, `wifi_password`,
   `wifi_country` are written as `/g3macpi/wpa_supplicant.conf` each start
   (platform/common/wpa_config.h); the name in hex, so any name works.

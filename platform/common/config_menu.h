@@ -14,6 +14,10 @@
 //    the size, Enter asks the front end to create it; Action::CreateDisk),
 //    back.
 //  - File picker: directories first, ".." to go up; Enter picks a file.
+//  - WiFi network (Enter on "Network port"): WiFi on/off, the network's
+//    name, password and country typed in (Enter starts typing, Enter ends,
+//    Esc cancels, Backspace deletes; key() then needs the Shift state),
+//    and the keyboard's layout (US/UK) for typing them.
 //
 // Keys: Up/Down (and PageUp/PageDown/Home/End) move, Left/Right change a
 // value, Enter opens or activates, Esc goes back (on the main page it means
@@ -72,8 +76,10 @@ public:
     ConfigMenu(const MachineConfig& config, DirectoryLister& lister, const char* disks_dir,
                const char* rom_dir);
 
-    // A key press. Returns what the front end should do now.
-    Action key(u8 usage);
+    // A key press. Returns what the front end should do now. `modifiers`:
+    // the HID modifier byte (Shift matters when text is being typed).
+    Action key(u8 usage, u8 modifiers = 0);
+    bool typing() const { return editing_ != kNotEditing; }
 
     void render(Screen& out) const;
 
@@ -112,14 +118,21 @@ public:
     static u32 disk_size_mb(u32 index);  // 256, 512, 1024, 2048, 4095
 
 private:
-    enum class Page : u8 { Main, Drive, Files };
+    enum class Page : u8 { Main, Drive, Files, Wifi };
     enum MainItem : u8 { kRam, kRom, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kMode,
                          kDepth, kSound, kNetwork, kWifi, kAutostart, kJit, kSave, kStart, kSelfTest, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
+    enum WifiItem : u8 { kWUse, kWName, kWPassword, kWCountry, kWKeyboard, kWBack, kWifiItems };
+    static constexpr u8 kNotEditing = 0xFF;
 
     Action key_main(u8 usage);
     Action key_drive(u8 usage);
     Action key_files(u8 usage);
+    Action key_wifi(u8 usage);
+    void key_edit(u8 usage, u8 modifiers);
+    void start_edit(u8 item);
+    bool wifi_enabled(u32) const { return true; }
+    void toggle_wifi();
     void move(u8 usage, u32& sel, u32 count, bool (ConfigMenu::*enabled)(u32) const);
     bool main_enabled(u32 i) const;
     bool drive_enabled(u32 i) const;
@@ -142,7 +155,9 @@ private:
     const char* cd_dir_;
     const char* hdd_dir_;
     Page page_ = Page::Main;
-    u32 sel_ = 0, drive_sel_ = 0, file_sel_ = 0;
+    u32 sel_ = 0, drive_sel_ = 0, file_sel_ = 0, wifi_sel_ = 0;
+    u8 editing_ = kNotEditing;   // the WiFi item being typed
+    char edit_[MachineConfig::kWifiPasswordMax] = {};
     mutable u32 file_top_ = 0;  // first visible file (render scrolls)
     u32 drive_ = 0;          // drive being edited
     bool picking_rom_ = false;
