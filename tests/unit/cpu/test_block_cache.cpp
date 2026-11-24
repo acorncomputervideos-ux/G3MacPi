@@ -1242,3 +1242,32 @@ TEST_CASE("cpu/blocks/table_grows_with_the_arena")
             CHECK(table_bytes * 2 > arena.size() / 8);
     }
 }
+
+BOTH(condition_register_moves)
+{
+    // mfcr and mtcrf with every field mask, compared with the interpreter
+    // (random programs rarely produce a valid mfcr: its other fields must
+    // be zero).
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        std::vector<std::pair<u32, u32>> code;
+        u32 at = 0x5000;
+        for (u32 fxm = 0; fxm < 256; fxm += 17) {
+            code.push_back({at, mtcrf(fxm, 5)});
+            code.push_back({at + 4, mfcr(6)});
+            code.push_back({at + 8, add(7, 7, 6)});
+            code.push_back({at + 12, addi(5, 5, 0x1357)});
+            at += 16;
+        }
+        code.push_back({at, b(0)});
+        for (auto& w : code)
+            store_be32(m->ram.data() + w.first, w.second);
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[5] = 0x89ABCDEFu;
+        m->cpu.state().cr = 0x12345678u;
+        m->cpu.run(16 * 4 + 1);
+    }
+    CHECK(same(a, c, "cr moves", 0, 0));
+    CHECK(c.cpu.state().gpr[7] != 0u);
+}

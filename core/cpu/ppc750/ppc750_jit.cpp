@@ -307,10 +307,20 @@ struct JitCompiler {
     // exception.
     bool add_family(u32 insn)
     {
-        enum In : u8 { RA, NOT_RA, RB, ZERO, ONES, CA, ONE };
+        enum In : u8 { RA, NOT_RA, RB, ZERO, ONES, CA, ONE, IMM };
         In x, y, cin;
         bool writes_ca = true;
-        switch (field::xo9(insn)) {
+        bool rc = field::rc(insn), oe = field::oe(insn);
+        const u32 op = field::opcd(insn);
+        if (op != 31) {  // D-form: addic, addic. (CR0), subfic: as op_add_family with xo 0
+            oe = false;
+            switch (op) {
+            case 12: x = RA; y = IMM; cin = ZERO; rc = false; break;
+            case 13: x = RA; y = IMM; cin = ZERO; rc = true; break;
+            case 8:  x = NOT_RA; y = IMM; cin = ONE; rc = false; break;
+            default: return false;
+            }
+        } else switch (field::xo9(insn)) {
         case 266: x = RA; y = RB; cin = ZERO; writes_ca = false; break;      // add
         case 10:  x = RA; y = RB; cin = ZERO; break;                         // addc
         case 138: x = RA; y = RB; cin = CA; break;                           // adde
@@ -324,7 +334,6 @@ struct JitCompiler {
         case 104: x = NOT_RA; y = ZERO; cin = ONE; writes_ca = false; break; // neg
         default: return false;
         }
-        const bool oe = field::oe(insn);
         const u32 ra = field::ra(insn), rb = field::rb(insn), rd = field::rd(insn);
         const bool need_xer = cin == CA || writes_ca || oe;
         if (need_xer)
@@ -338,6 +347,7 @@ struct JitCompiler {
                 a.eor(false, w, w, X12);
                 break;
             case RB: load_gpr(w, rb); break;
+            case IMM: a.mov_imm32(w, field::simm(insn)); break;
             case ZERO: a.movz(false, w, 0, 0); break;
             case ONES: a.mov_imm32(w, 0xFFFFFFFFu); break;
             default: break;
@@ -367,7 +377,7 @@ struct JitCompiler {
         }
         if (writes_ca || oe)
             a.str(false, X13, X20, spr_off(spr::XER));
-        if (field::rc(insn)) {
+        if (rc) {
             a.mov(false, X8, X11);
             cr0_from_w8();                                // reads the new XER[SO]
         }
@@ -381,6 +391,8 @@ struct JitCompiler {
     {
         const u32 rd = field::rd(insn), ra = field::ra(insn), rb = field::rb(insn);
         switch (field::opcd(insn)) {
+        case 8: case 12: case 13:  // subfic addic addic.
+            return add_family(insn);
         case 10:  // cmpli
             a.mov_imm32(X9, field::uimm(insn));
             compare(insn, X9, false);
@@ -479,6 +491,32 @@ struct JitCompiler {
                     a.and_(false, X8, X8, X9);
                 }
                 a.str(false, X8, X20, spr_off(n));
+                return true;
+            }
+            case 144: {  // mtcrf: CR fields picked by FXM from rS
+                if (field::rc(insn) || (insn & 0x00100800u))
+                    return false;  // bit 11 and bit 20 must be 0
+                const u32 fxm = (insn >> 12) & 0xFF;
+                u32 mask = 0;
+                for (u32 f = 0; f < 8; ++f)
+                    if (fxm & (0x80u >> f))
+                        mask |= 0xF0000000u >> (4 * f);
+                const Reg vs = use(rd, X8);
+                a.ldr(false, X9, X20, cr_off());
+                a.mov_imm32(X10, ~mask);
+                a.and_(false, X9, X9, X10);
+                a.mov_imm32(X10, mask);
+                a.and_(false, X10, vs, X10);
+                a.orr(false, X9, X9, X10);
+                a.str(false, X9, X20, cr_off());
+                return true;
+            }
+            case 19: {  // mfcr
+                if (field::rc(insn) || (insn & 0x001FF800u))
+                    return false;
+                const Reg d = def(rd, X8);
+                a.ldr(false, d, X20, cr_off());
+                defined(rd, d);
                 return true;
             }
             case 0:   // cmp
@@ -628,6 +666,7 @@ struct JitCompiler {
         u32 size;
         bool store, update;
         bool sign = false;  // lha, lhau: sign-extend the halfword
+        bool indexed = false;  // X-form: EA = (rA|0) + rB
     };
     static bool memory_op(u32 insn, MemOp& m)
     {
@@ -646,6 +685,28 @@ struct JitCompiler {
         case 43: m = {2, false, true, true}; return true;   // lhau
         case 44: m = {2, true, false}; return true;   // sth
         case 45: m = {2, true, true}; return true;    // sthu
+        case 31:
+            if (field::rc(insn))
+                return false;
+            switch (field::xo10(insn)) {
+            case 23:  m = {4, false, false}; break;        // lwzx
+            case 55:  m = {4, false, true}; break;         // lwzux
+            case 87:  m = {1, false, false}; break;        // lbzx
+            case 119: m = {1, false, true}; break;         // lbzux
+            case 151: m = {4, true, false}; break;         // stwx
+            case 183: m = {4, true, true}; break;          // stwux
+            case 215: m = {1, true, false}; break;         // stbx
+            case 247: m = {1, true, true}; break;          // stbux
+            case 279: m = {2, false, false}; break;        // lhzx
+            case 311: m = {2, false, true}; break;         // lhzux
+            case 343: m = {2, false, false, true}; break;  // lhax
+            case 375: m = {2, false, true, true}; break;   // lhaux
+            case 407: m = {2, true, false}; break;         // sthx
+            case 439: m = {2, true, true}; break;          // sthux
+            default: return false;
+            }
+            m.indexed = true;
+            return true;
         default: return false;
         }
     }
@@ -676,7 +737,12 @@ struct JitCompiler {
             base_reg = use(ra, X8);
         else
             a.movz(false, X8, 0, 0);
-        add_const(X8, base_reg, field::simm(insn));
+        if (m.indexed) {
+            const Reg vb = use(field::rb(insn), X9);
+            a.add(false, X8, base_reg, vb);
+        } else {
+            add_const(X8, base_reg, field::simm(insn));
+        }
         if (m.size > 1) {
             a.ubfx(X9, X8, 0, 12);
             a.cmp_imm(false, X9, 0x1000 - m.size);
