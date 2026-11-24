@@ -24,7 +24,7 @@ menu and the log view; Ctrl+Alt+Delete reboots). On first start it creates:
 
 | Folder / file | Put there |
 |---|---|
-| `/g3macpi/rom/` | the Mac OS ROM file (from your own Mac OS 9 install) |
+| `/g3macpi/rom/` | the Mac OS ROM file (from your own Mac OS 9 install); optional with a Mac OS 9 CD image in the CD drive |
 | `/g3macpi/cd/` | CD images (`.iso`, `.toast`, `.cdr`); the file picker starts here for CD-ROM drives |
 | `/g3macpi/hdd/` | hard-disk images; the picker starts here for hard disks, and new blank disks are made here |
 | `/g3macpi/disks/` | any images (kept for older setups; still usable from the picker) |
@@ -35,6 +35,13 @@ The menu sets memory, the ROM file, the four ATA drive positions (CD-ROM
 or hard disk, with an image from `/g3macpi/disks`), the start-up disk and
 the screen mode. The Blue & White G3 has no floppy drive, so the floppy
 line is greyed out.
+
+**The Mac OS ROM file.** The Blue & White G3 starts Mac OS from a file,
+"Mac OS ROM", in the System Folder of Mac OS 9 (not from a ROM chip: a
+"…Power Mac G3 desktop.ROM" dump of an older beige G3's chip will not
+work). If the ROM file in the settings is missing or is not that file,
+G3MacPi takes "Mac OS ROM" from the System Folder of the CD image in the
+CD drive, so a Mac OS 9 CD image alone is enough.
 
 **Start-up.** The Pi goes straight to the Mac: a start-up screen, then
 Mac OS (no text log on the screen; it goes to the serial port and to

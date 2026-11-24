@@ -1387,6 +1387,7 @@ void CKernel::StartMac (void)
 		return;
 	}
 	m_DrawCore.AttachWorker (m_Session.jit_worker ());	// nullptr: compiling here
+	m_Logger.Write (FromKernel, LogNotice, "Mac OS ROM file: %s", m_Session.rom_source ());
 	m_Logger.Write (FromKernel, LogNotice, "CPU: %s%s", m_Session.jit_on () ? "block cache and generated code"
 			: m_Session.block_cache_on () ? "block cache" : "interpreter",
 			m_Session.jit_worker () != 0 ? " (compiled on core 2)" : "");

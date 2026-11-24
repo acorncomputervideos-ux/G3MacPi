@@ -149,7 +149,7 @@ private:
     bool running_ = false;
     bool dirty_ = false;
     u32 media_drive_ = 0;
-    char status_[kCols + 1] = {};
+    char status_[3 * kCols + 1] = {};  // shown on up to three lines
     char dir_[MachineConfig::kPathMax] = {};
     DirEntry files_[kMaxFiles];
     u32 nfiles_ = 0;

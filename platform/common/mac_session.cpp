@@ -3,6 +3,7 @@
 // platform/common/mac_session.cpp — see mac_session.h.
 
 #include "platform/common/mac_session.h"
+#include "platform/common/rom_from_disc.h"
 
 #include "core/machine/bw_firmware.h"
 #include "core/machine/yosemite.h"
@@ -18,6 +19,14 @@ namespace {
 // it (the boot script reads it back). The Mac OS ROM file normally lives in
 // the System Folder of the start-up volume.
 constexpr const char* kBootPath = "hd:2,\\\\:tbxi";
+
+u32 text_len(const char* s)
+{
+    u32 n = 0;
+    while (s[n])
+        ++n;
+    return n;
+}
 
 void copy_text(char* dst, u32 cap, const char* src)
 {
@@ -42,6 +51,7 @@ const char* MacSession::error_text(Error e)
     case Error::RomTooBig: return "the Mac OS ROM file is too large";
     case Error::Firmware: return "Open Firmware failed to start";
     case Error::BootFailed: return "the Mac OS ROM file did not start Mac OS";
+    case Error::NotMacOsRom: return "no Mac OS ROM file to start from";
     }
     return "unknown error";
 }
@@ -170,10 +180,43 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
         return fail(Error::Firmware);
     fw_->set_console(console_sink, this);
 
+    // The Mac OS ROM file: the one in the settings if it is one (a CHRP boot
+    // file), else the one in the System Folder of a CD in a drive (as a real
+    // B&W's firmware finds it), read into the upper half of the Mac's RAM,
+    // which nothing uses before the boot (the firmware sits at the top and
+    // copies the file to its load address, far below).
     u32 rom_size = 0;
     const u8* rom = host.load_file(config.rom, rom_size);
-    if (!rom || rom_size == 0)
-        return fail(Error::NoRom, config.rom);
+    const bool file_ok = rom && rom_size != 0 && is_mac_os_rom(rom, rom_size);
+    copy_text(rom_source_, sizeof rom_source_, config.rom);
+    if (!file_ok) {
+        const u32 cap = mem.ram_size / 4;
+        u8* scratch = mem.ram + mem.ram_size / 2;
+        for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
+            if (!is_cd_[i] || !image_[i])
+                continue;
+            const u32 n = find_mac_os_rom(*image_[i], scratch, cap);
+            if (n) {
+                rom = scratch;
+                rom_size = n;
+                copy_text(rom_source_, sizeof rom_source_, "the System Folder of the CD in the ");
+                const u32 at = text_len(rom_source_);
+                copy_text(rom_source_ + at, sizeof rom_source_ - at, MachineConfig::drive_label(i));
+                break;
+            }
+        }
+        if (rom != scratch) {
+            // Say what is wrong with the file in the settings.
+            if (!rom || rom_size == 0)
+                return fail(Error::NoRom, config.rom);
+            return fail(Error::NotMacOsRom,
+                        rom_size >= (512u << 10) && rom_size <= (4u << 20)
+                            ? "the ROM file is a ROM chip image of an older Mac. Use \"Mac OS ROM\" from "
+                              "Mac OS 9's System Folder, or put a Mac OS 9 CD image in the CD drive."
+                            : "the ROM file is not \"Mac OS ROM\" (from Mac OS 9's System Folder). Choose "
+                              "that, or put a Mac OS 9 CD image in the CD drive.");
+        }
+    }
     // The start-up disk (boot = auto/cdrom/disk): /chosen bootpath, and the
     // same path for the loaded file. Without one the Mac shows the "?" disk
     // (or Mac OS 9.2 reports that it cannot find its bootpath).

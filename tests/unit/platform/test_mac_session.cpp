@@ -12,6 +12,9 @@
 #include "platform/common/mac_session.h"
 #include "platform/common/machine_state.h"
 #include "tests/framework/g3test.h"
+#include "tests/unit/storage/hfs_image.h"
+
+#include <algorithm>
 #include "tests/unit/machine/test_client.h"
 
 #include <cstring>
@@ -203,11 +206,50 @@ TEST_CASE("platform/session/start_failures")
     }
     {
         Rig r;
-        r.host.files[r.cfg.rom] = std::vector<u8>(4096, 0x41);   // not a boot file
-        CHECK(r.start() == MacSession::Error::BootFailed);
+        r.host.files[r.cfg.rom] = std::vector<u8>(4096, 0x41);   // not a Mac OS ROM file
+        CHECK(r.start() == MacSession::Error::NotMacOsRom);
         CHECK(!r.session.running());
+        CHECK(std::string(r.session.detail()).find("not \"Mac OS ROM\"") != std::string::npos);
+    }
+    {
+        Rig r;
+        r.host.files[r.cfg.rom] = std::vector<u8>(4u << 20, 0x00);  // an older Mac's ROM chip, dumped
+        CHECK(r.start() == MacSession::Error::NotMacOsRom);
+        CHECK(std::string(r.session.detail()).find("ROM chip image") != std::string::npos);
+    }
+    {
+        Rig r;  // a CHRP boot file whose script fails
+        const std::string bad = "<CHRP-BOOT><BOOT-SCRIPT>\nnot-a-word\n</BOOT-SCRIPT></CHRP-BOOT>\n";
+        r.host.files[r.cfg.rom] = std::vector<u8>(bad.begin(), bad.end());
+        CHECK(r.start() == MacSession::Error::BootFailed);
         CHECK(std::string(MacSession::error_text(MacSession::Error::BootFailed)).find("did not start") !=
               std::string::npos);
+    }
+}
+
+TEST_CASE("platform/session/rom_file_from_the_cd")
+{
+    // No usable ROM file in the settings, but a CD image whose System
+    // Folder holds "Mac OS ROM": the Mac starts from that.
+    for (int with_chip = 0; with_chip < 2; ++with_chip) {
+        Rig r;
+        hfs_image::Volume vol;
+        const std::vector<u8> rom = boot_file(r.client);
+        auto it = std::search(vol.img.d.begin(), vol.img.d.end(), vol.rom.begin(), vol.rom.begin() + 64);
+        REQUIRE(it != vol.img.d.end());
+        std::copy(rom.begin(), rom.end(), it);
+        r.host.files["/cd/Mac OS 9.iso"] = vol.img.d;
+        r.cfg.drive[0].type = MachineConfig::DriveType::CdRom;
+        REQUIRE(r.cfg.set_image(0, "/cd/Mac OS 9.iso"));
+        if (with_chip)
+            r.host.files[r.cfg.rom] = std::vector<u8>(4u << 20, 0x00);
+        else
+            r.host.files.erase(r.cfg.rom);
+        REQUIRE(r.start() == MacSession::Error::None);
+        CHECK(r.session.firmware()->client_started());
+        CHECK(std::string(r.session.rom_source()).find("System Folder of the CD") != std::string::npos);
+        r.session.run(1000000000ull);
+        CHECK(r.host.console_text.find("booting") != std::string::npos);
     }
 }
 

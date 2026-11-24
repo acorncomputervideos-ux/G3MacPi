@@ -721,11 +721,45 @@ void ConfigMenu::render(Screen& s) const
         }
     }
 
-    // Status and help at the bottom.
+    // Status and help at the bottom. A long status wraps (at spaces) onto
+    // up to three lines, upwards, where those rows are free.
     row = kRows - 3;
-    if (status_[0])
-        line(s, row, Attr::Status, status_);
-    else if (running_ && needs_restart())
+    if (status_[0]) {
+        char parts[3][kCols + 1] = {};
+        u32 n = 0;
+        const u32 width = kCols - 2;
+        const char* p = status_;
+        while (*p && n < 3) {
+            u32 len = slen(p);
+            if (len > width && n < 2) {
+                len = width;
+                while (len > 0 && p[len] != ' ')
+                    --len;
+                if (len == 0)
+                    len = width;
+            }
+            if (len > width)
+                len = width;
+            for (u32 i = 0; i < len; ++i)
+                parts[n][i] = p[i];
+            parts[n][len] = 0;
+            ++n;
+            p += len;
+            while (*p == ' ')
+                ++p;
+        }
+        u32 first = kRows - 3 - (n - 1);
+        for (u32 r = first; r < kRows - 3; ++r)
+            for (const char* t = s.text[r]; *t; ++t)
+                if (*t != ' ')
+                    first = kRows - 3;  // taken: one line only
+        if (first == kRows - 3)
+            n = 1;
+        u32 r = first;
+        for (u32 k = 0; k < n; ++k)
+            line(s, r, Attr::Status, parts[k]);
+        row = kRows - 2;
+    } else if (running_ && needs_restart())
         line(s, row, Attr::Status, "* takes effect when the Mac restarts");
     else
         ++row;

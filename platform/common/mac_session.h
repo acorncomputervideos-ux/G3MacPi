@@ -68,6 +68,7 @@ public:
         RomTooBig,       // it does not fit at load-base
         Firmware,        // Open Firmware failed to power on
         BootFailed,      // the boot script failed or did not start a client
+        NotMacOsRom,     // the ROM file is not a Mac OS ROM file, and no CD has one
     };
 
     MacSession() = default;
@@ -103,6 +104,9 @@ public:
     bool running() const { return fw_ != nullptr; }
     Error error() const { return error_; }
     const char* detail() const { return detail_; }  // e.g. the drive or file at fault
+    // Where the Mac OS ROM file came from: the configured path, or "the CD
+    // in <drive>" when it was taken from a CD's System Folder.
+    const char* rom_source() const { return rom_source_; }
     static const char* error_text(Error e);
 
     // Emulates `picoseconds` of guest time.
@@ -152,6 +156,7 @@ private:
     EjectSlot eject_slot_[MachineConfig::kDrives] = {};
     Error error_ = Error::None;
     char detail_[MachineConfig::kPathMax] = {};
+    char rom_source_[MachineConfig::kPathMax] = {};
 };
 
 } // namespace g3

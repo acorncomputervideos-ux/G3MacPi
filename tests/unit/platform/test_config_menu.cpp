@@ -492,3 +492,29 @@ TEST_CASE("platform/menu/insert_media_from_outside")
     CHECK(r.menu.insert_media(9, "/x", ok) == ConfigMenu::Action::None);
     CHECK(!ok);
 }
+
+TEST_CASE("platform/menu/long_status_wraps")
+{
+    Rig r;
+    const std::string msg =
+        "Cannot start: no Mac OS ROM file to start from: the ROM file is a ROM chip image of an older Mac. "
+        "Use \"Mac OS ROM\" from Mac OS 9's System Folder, or put a Mac OS 9 CD image in the CD drive.";
+    r.menu.set_status(msg.c_str());
+    r.menu.render(r.scr);
+    std::string shown;
+    u32 lines = 0;
+    for (u32 row = 0; row < ConfigMenu::kRows; ++row)
+        if (r.scr.attr[row] == ConfigMenu::Attr::Status) {
+            std::string t = r.scr.text[row];
+            while (!t.empty() && t.back() == ' ')
+                t.pop_back();
+            while (!t.empty() && t.front() == ' ')
+                t.erase(0, 1);
+            shown += (shown.empty() ? "" : " ") + t;
+            ++lines;
+        }
+    CHECK(lines >= 2);
+    CHECK(lines <= 3);
+    CHECK(shown == msg);  // every word, in order, none cut
+    CHECK(r.has("Up/Down: select"));  // the help line is still there
+}
