@@ -26,6 +26,8 @@
 
 namespace g3::ppc {
 
+class JitWorker;
+
 class Ppc750 {
 public:
     // The junction temperature the thermal assist unit reports (our choice).
@@ -140,7 +142,12 @@ public:
     struct JitStats {
         u64 compiled = 0, native_ops = 0, helper_ops = 0, resets = 0, runs = 0;
         u64 memory_slow = 0;  // generated loads/stores that took the handler
+        u64 queued = 0, queue_full = 0, installed = 0, stale = 0;  // with a worker
     };
+    // Background compilation (jit_worker.h): blocks are compiled by `w`,
+    // polled on another core, instead of here. After set_jit(); nullptr
+    // compiles here again. Only while the CPU isn't running.
+    void set_jit_worker(JitWorker* w);
     const JitStats& jit_stats() const { return jit_stats_; }
     // Ends the current run() after the instruction executing now (e.g. after a
     // decrementer write, so the next expiry is planned again).
@@ -366,6 +373,13 @@ private:
     void* step_ctx_ = nullptr;
     // --- JIT (ppc750_jit.cpp)
     bool jit_compile(BlockCache::Block* b);
+    // Generates b's code at `at` (room words); words used in `size`. Reads
+    // nothing of the CPU that changes while it runs (callable from the worker).
+    bool jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st);
+    void jit_request(BlockCache::Block* b);
+    void jit_collect();
+    JitWorker* jit_worker_ = nullptr;
+    friend class JitWorker;
     void jit_run(BlockCache::Block* b);
     u32* jit_code_ = nullptr;
     u32 jit_words_ = 0, jit_used_ = 0;

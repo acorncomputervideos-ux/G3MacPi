@@ -203,11 +203,55 @@ void CKernel::StartDrawCore (void)
 	m_bDrawCore = m_DrawCore.m_bStarted;
 	m_Logger.Write (FromKernel, LogNotice, "Screen drawing: %s",
 			m_bDrawCore ? "core 1" : "core 0 (core 1 did not start)");
+	for (unsigned i = 0; i < 100 && !m_DrawCore.m_bWorkerStarted; i++)
+	{
+		CTimer::SimpleMsDelay (1);
+	}
+	m_Logger.Write (FromKernel, LogNotice, "JIT compiling: %s",
+			m_DrawCore.m_bWorkerStarted ? "core 2" : "core 0 (core 2 did not start)");
 }
 
-// Core 1: draw about 60 times a second. Cores 2 and 3 return (they halt).
+void CDrawCore::AttachWorker (g3::ppc::JitWorker *pWorker)
+{
+	__atomic_store_n (&m_pWorker, pWorker, __ATOMIC_SEQ_CST);
+	asm volatile ("sev");		// core 2 may be waiting in WFE
+}
+
+void CDrawCore::DetachWorker (void)
+{
+	__atomic_store_n (&m_pWorker, (g3::ppc::JitWorker *) 0, __ATOMIC_SEQ_CST);
+	while (__atomic_load_n (&m_nWorkerBusy, __ATOMIC_SEQ_CST))
+	{
+		// core 2 is finishing a poll()
+	}
+}
+
+// Core 2: compile what the Mac's core queues; sleep in WFE when there is
+// nothing to do (the CPU executes SEV after each request, AttachWorker too).
+void CDrawCore::RunWorker (void)
+{
+	m_bWorkerStarted = TRUE;
+	for (;;)
+	{
+		__atomic_store_n (&m_nWorkerBusy, 1u, __ATOMIC_SEQ_CST);
+		g3::ppc::JitWorker *pWorker = __atomic_load_n (&m_pWorker, __ATOMIC_SEQ_CST);
+		const u32 nDone = pWorker != 0 ? pWorker->poll () : 0;
+		__atomic_store_n (&m_nWorkerBusy, 0u, __ATOMIC_SEQ_CST);
+		if (nDone == 0)
+		{
+			asm volatile ("wfe");
+		}
+	}
+}
+
+// Core 1: draw about 60 times a second. Core 2 compiles; core 3 returns (halts).
 void CDrawCore::Run (unsigned nCore)
 {
+	if (nCore == 2)
+	{
+		RunWorker ();
+		return;
+	}
 	if (nCore != 1 || m_pPresenter == 0)
 	{
 		return;
@@ -755,11 +799,23 @@ void CKernel::RunSelfTest (void)
 	Setup.code = g3_selftest_code;
 	Setup.code_words = SelfTestCodeWords;
 	Setup.clock_us = SelfTestClock;
+	if (m_DrawCore.m_bWorkerStarted)
+	{
+		// Compile on core 2, as the Mac does; the running Mac's own worker
+		// is handed back afterwards (the Mac is paused meanwhile).
+		m_DrawCore.DetachWorker ();
+		Setup.worker_attach = SelfTestAttach;
+		Setup.worker_context = this;
+	}
 	m_Logger.Write (FromKernel, LogNotice, "CPU self-test: %u random programs, then the speed benchmark",
 			Setup.programs);
 	const u64 nStart = CTimer::GetClockTicks64 ();
 	const g3::CpuSelfTest::Result Result = g3::CpuSelfTest::run (Setup);
 	const unsigned nMs = (unsigned) ((CTimer::GetClockTicks64 () - nStart) / 1000);
+	if (m_bMacRunning)
+	{
+		m_DrawCore.AttachWorker (m_Session.jit_worker ());
+	}
 
 	char Line1[160], Line2[160];
 	g3::CpuSelfTest::describe (Result, Line1, sizeof Line1, Line2, sizeof Line2);
@@ -772,6 +828,19 @@ void CKernel::RunSelfTest (void)
 	CString Status;
 	Status.Format ("%s %s", Result.ok () ? "Self-test PASS." : "Self-test FAIL (see log).", Line2);
 	m_pMenu->set_status (Status);
+}
+
+void CKernel::SelfTestAttach (void *pContext, void *pWorker)
+{
+	CKernel *pThis = static_cast<CKernel *> (pContext);
+	if (pWorker != 0)
+	{
+		pThis->m_DrawCore.AttachWorker (static_cast<g3::ppc::JitWorker *> (pWorker));
+	}
+	else
+	{
+		pThis->m_DrawCore.DetachWorker ();
+	}
 }
 
 void CKernel::StartMac (void)
@@ -833,6 +902,7 @@ void CKernel::StartMac (void)
 		Memory.blocks_size = m_pBlocks != 0 ? BlockCacheSize : 0;
 		Memory.code = s_JitCode;
 		Memory.code_words = JitCodeWords;
+		Memory.jit_background = m_DrawCore.m_bWorkerStarted;	// compile on core 2
 	}
 	m_MacHost.SetEjectHandler (DiscEjected, this);
 
@@ -848,8 +918,10 @@ void CKernel::StartMac (void)
 		m_pMenu->set_status (Status);
 		return;
 	}
-	m_Logger.Write (FromKernel, LogNotice, "CPU: %s", m_Session.jit_on () ? "block cache and generated code"
-			: m_Session.block_cache_on () ? "block cache" : "interpreter");
+	m_DrawCore.AttachWorker (m_Session.jit_worker ());	// nullptr: compiling here
+	m_Logger.Write (FromKernel, LogNotice, "CPU: %s%s", m_Session.jit_on () ? "block cache and generated code"
+			: m_Session.block_cache_on () ? "block cache" : "interpreter",
+			m_Session.jit_worker () != 0 ? " (compiled on core 2)" : "");
 	if (g_NdrvSize == 0)
 	{
 		m_Logger.Write (FromKernel, LogWarning, "No display driver built in: Mac OS will not draw");
@@ -900,6 +972,7 @@ void CKernel::StopMac (void)
 			m_pPresenter->pause ();	// before the Mac's video memory changes hands
 		}
 		SaveMacState (TRUE);
+		m_DrawCore.DetachWorker ();	// core 2 lets go of the Mac's JIT first
 		m_Session.stop ();	// closes (and flushes) the images
 		m_bMacRunning = FALSE;
 		m_pMenu->set_running (FALSE);
@@ -981,6 +1054,36 @@ static u8 s_TestVram[800 * 600 * 4];
 
 void CKernel::DrawTest (void)
 {
+	// First the CPU self-test (generated AArch64 code runs natively here),
+	// compiling on core 0, then on core 2.
+	m_pSelfTestWork = new (HEAP_HIGH) u8[g3::CpuSelfTest::kWorkBytes];
+	for (unsigned nMode = 0; nMode < 2 && m_pSelfTestWork != 0; nMode++)
+	{
+		g3::CpuSelfTest::Setup Setup;
+		Setup.work = m_pSelfTestWork;
+		Setup.code = g3_selftest_code;
+		Setup.code_words = SelfTestCodeWords;
+		Setup.clock_us = SelfTestClock;
+		Setup.programs = 20;
+		Setup.bench_instructions = 2000000;
+		if (nMode == 1)
+		{
+			if (!m_DrawCore.m_bWorkerStarted)
+			{
+				m_Logger.Write (FromKernel, LogError, "drawtest: core 2 is not compiling");
+				break;
+			}
+			Setup.worker_attach = SelfTestAttach;
+			Setup.worker_context = this;
+		}
+		const g3::CpuSelfTest::Result Result = g3::CpuSelfTest::run (Setup);
+		char Line1[160], Line2[160];
+		g3::CpuSelfTest::describe (Result, Line1, sizeof Line1, Line2, sizeof Line2);
+		m_Logger.Write (FromKernel, Result.ok () ? LogNotice : LogError, "drawtest: %s", Line1);
+		m_Logger.Write (FromKernel, LogNotice, "drawtest: %s; %u block runs in generated code, %u compiled on core 2",
+				Line2, (unsigned) Result.jit_block_runs, (unsigned) Result.installed);
+	}
+
 	if (!m_bDrawCore)
 	{
 		m_Logger.Write (FromKernel, LogError, "drawtest: core 1 is not drawing");

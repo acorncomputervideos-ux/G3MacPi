@@ -32,6 +32,7 @@
 #include "mac_host.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/screen_presenter.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "settings.h"
 #include "teedevice.h"
 
@@ -42,8 +43,8 @@ enum TShutdownMode
 	ShutdownReboot
 };
 
-// The second core draws the Mac's screen (ScreenPresenter); cores 2 and 3
-// are left idle.
+// The other cores: core 1 draws the Mac's screen (ScreenPresenter), core 2
+// compiles the JIT's code (JitWorker); core 3 is left idle.
 class CDrawCore : public CMultiCoreSupport
 {
 public:
@@ -54,11 +55,20 @@ public:
 		m_Surface = Surface;
 	}
 	void Run (unsigned nCore) override;
-	volatile boolean m_bStarted = FALSE;	// set by core 1 when it runs
+	volatile boolean m_bStarted = FALSE;		// set by core 1 when it runs
+	volatile boolean m_bWorkerStarted = FALSE;	// set by core 2 when it runs
+
+	// Core 0: give core 2 the running Mac's JIT worker, or take it away
+	// (DetachWorker returns once core 2 no longer uses it).
+	void AttachWorker (g3::ppc::JitWorker *pWorker);
+	void DetachWorker (void);
 
 private:
+	void RunWorker (void);
 	g3::ScreenPresenter *m_pPresenter = 0;
 	g3::ScreenSurface m_Surface;
+	g3::ppc::JitWorker *m_pWorker = 0;	// atomic accesses only
+	unsigned m_nWorkerBusy = 0;		// core 2 is inside poll()
 };
 
 class CKernel
@@ -84,6 +94,7 @@ private:
 	void SetUpSettings (void);
 	void ShowMenu (boolean bShow);
 	void StartDrawCore (void);
+	static void SelfTestAttach (void *pContext, void *pWorker);	// CpuSelfTest::Setup::worker_attach
 #ifdef G3_QEMU_DRAWTEST
 	void DrawTest (void);
 #endif

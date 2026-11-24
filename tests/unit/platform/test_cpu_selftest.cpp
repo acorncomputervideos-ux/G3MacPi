@@ -6,10 +6,13 @@
 
 #include "platform/common/cpu_selftest.h"
 #include "core/cpu/ppc750/ppc750.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "tests/framework/g3test.h"
 #include "tools/a64sim/a64_sim.h"
 
+#include <atomic>
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -116,4 +119,62 @@ TEST_CASE("platform/selftest/notices_a_broken_cpu")
     std::printf("    %s\n", l1);
     CHECK(std::strncmp(l1, "CPU self-test: FAIL", 19) == 0);
     CHECK(std::strstr(l1, "differs") != nullptr);
+}
+
+namespace {
+// Stands in for the Pi's core 2: a thread polling whichever worker is attached.
+struct WorkerThread {
+    std::atomic<void*> worker{nullptr};
+    std::atomic<int> busy{0};
+    std::atomic<bool> stop{false};
+    u32 attached = 0;
+    std::thread t{[this] {
+        while (!stop.load()) {
+            busy.store(1);
+            if (void* w = worker.load())
+                static_cast<ppc::JitWorker*>(w)->poll();
+            busy.store(0);
+            std::this_thread::yield();
+        }
+    }};
+    static void attach(void* ctx, void* w)
+    {
+        auto* self = static_cast<WorkerThread*>(ctx);
+        self->worker.store(w);
+        if (w) {
+            ++self->attached;
+        } else {
+            while (self->busy.load())
+                std::this_thread::yield();
+        }
+    }
+    ~WorkerThread()
+    {
+        stop.store(true);
+        t.join();
+    }
+};
+} // namespace
+
+TEST_CASE("platform/selftest/background_compilation")
+{
+    Rig r;
+    WorkerThread wt;
+    CpuSelfTest::Setup s = r.setup();
+    s.worker_attach = WorkerThread::attach;
+    s.worker_context = &wt;
+    s.clock_us = nullptr;  // correctness only
+    const CpuSelfTest::Result res = CpuSelfTest::run(s);
+    CHECK(res.ok());
+    CHECK(res.jit);
+    CHECK(res.background);
+    CHECK_EQ(wt.attached, 20u);           // one worker per program
+    CHECK(wt.worker.load() == nullptr);   // detached at the end
+    CHECK(res.installed > 100);           // code really came from the other thread
+    char l1[160], l2[160];
+    CpuSelfTest::describe(res, l1, sizeof l1, l2, sizeof l2);
+    std::printf("    %s (%llu blocks compiled on the other thread)\n", l1,
+                static_cast<unsigned long long>(res.installed));
+    CHECK(std::strstr(l1, "PASS, 20/20") != nullptr);
+    CHECK(std::strstr(l1, "another core") != nullptr);
 }

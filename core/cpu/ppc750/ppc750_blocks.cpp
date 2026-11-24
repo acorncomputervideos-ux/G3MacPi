@@ -10,6 +10,7 @@
 // written at any time is never run from a stale decode.
 
 #include "core/cpu/ppc750/ppc750.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "core/common/bitops.h"
 
 namespace g3::ppc {
@@ -274,7 +275,9 @@ BlockCache::Block* Ppc750::build_block(u32 pa, const u8* host_page)
     }
     b->count = n;
     cache_->commit(b);
-    if (jit_code_ && !jit_compile(b))
+    if (jit_worker_)
+        jit_request(b);  // compiled on another core; runs through its handlers until then
+    else if (jit_code_ && !jit_compile(b))
         jit_full_ = true;
     return b;
 }
@@ -318,6 +321,8 @@ void Ppc750::run_blocks(u64 count)
             fetch_pa_page_ = pa & ~0xFFFu;
             fetch_msr_ = fetch_msr;
         }
+        if (jit_worker_)
+            jit_collect();  // code the worker finished
         const u32 pa = fetch_pa_page_ | (s_.pc & 0xFFFu);
         BlockCache::Block* b = cache_->find(pa);
         if (!b)

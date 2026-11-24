@@ -38,6 +38,12 @@ struct CpuSelfTest {
         void* runner_context = nullptr;
         u64 (*clock_us)(void* context) = nullptr;  // for the speed part (nullptr: skipped)
         void* clock_context = nullptr;
+        // Background compilation (core/cpu/ppc750/jit_worker.h) for the
+        // correctness part: called with each test CPU's JitWorker (as void*)
+        // to start polling it on another core, then with nullptr, and must
+        // return only once it is no longer polled. nullptr: compile here.
+        void (*worker_attach)(void* context, void* worker) = nullptr;
+        void* worker_context = nullptr;
         u32 programs = 200;             // random programs for the correctness part
         u64 bench_instructions = 20000000;
     };
@@ -49,6 +55,8 @@ struct CpuSelfTest {
         char first_failure[64] = {};    // what differed first
         u64 instructions = 0;           // compared, per machine
         u64 jit_block_runs = 0;
+        bool background = false;        // compiled on another core
+        u64 installed = 0;              // blocks given code compiled there
         // Speed in units of 0.01 MIPS: interpreter, block cache, generated code (0 = not run).
         u32 mips_x100[3] = {};
         bool ok() const { return programs > 0 && failed == 0; }

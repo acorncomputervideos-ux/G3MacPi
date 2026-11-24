@@ -10,6 +10,7 @@
 #include "core/common/endian.h"
 #include "core/cpu/ppc750/block_cache.h"
 #include "core/cpu/ppc750/ppc750.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "core/mem/flat_memory.h"
 
 namespace g3 {
@@ -198,6 +199,13 @@ const char* differential(const CpuSelfTest::Setup& setup, u32 seed, bool transla
     m->fast.set_block_cache(&m->cache);
     if (setup.code && m->fast.set_jit(setup.code, setup.code_words, setup.runner, setup.runner_context))
         res.jit = true;
+    JitWorker* worker = nullptr;
+    if (res.jit && setup.worker_attach) {
+        worker = new JitWorker(m->fast);
+        m->fast.set_jit_worker(worker);
+        setup.worker_attach(setup.worker_context, worker);
+        res.background = true;
+    }
     Rng r(seed);
     for (u32 a = 0; a < kCodeBytes; a += 4)
         store_be32(m->ram_a + a, random_insn(r, translate));
@@ -231,6 +239,11 @@ const char* differential(const CpuSelfTest::Setup& setup, u32 seed, bool transla
     }
     res.instructions += m->interp.instructions_executed();
     res.jit_block_runs += m->fast.jit_stats().runs;
+    res.installed += m->fast.jit_stats().installed;
+    if (worker) {
+        setup.worker_attach(setup.worker_context, nullptr);  // returns once no longer polled
+        delete worker;
+    }
     delete m;
     return bad;
 }
@@ -356,7 +369,9 @@ void CpuSelfTest::describe(const Result& r, char* l1, u32 c1, char* l2, u32 c2)
     append_num(l1, c1, n, r.programs - r.failed);
     append(l1, c1, n, "/");
     append_num(l1, c1, n, r.programs);
-    append(l1, c1, n, r.jit ? " programs identical with generated code" : " programs identical (block cache only, no generated code)");
+    append(l1, c1, n, r.jit ? (r.background ? " programs identical with generated code (compiled on another core)"
+                                             : " programs identical with generated code")
+                            : " programs identical (block cache only, no generated code)");
     if (r.failed) {
         append(l1, c1, n, "; first: program ");
         append_num(l1, c1, n, r.first_failed_program);

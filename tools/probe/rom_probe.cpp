@@ -18,7 +18,9 @@
 #include "core/storage/block_device.h"
 
 #include <cstdint>
+#include <atomic>
 #include <cstdio>
+#include <thread>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -106,7 +108,19 @@ int main(int argc, char** argv)
         cfg.jit_runner_context = jit_range;
 #endif
     }
+    // G3_JITBG: with G3_JITCODE, compile on another thread (jit_worker.h).
+    cfg.jit_background = std::getenv("G3_JITBG") != nullptr;
     YosemiteMachine m(cfg);
+    static std::atomic<bool> jitbg_stop{false};
+    static std::thread jitbg_thread;
+    if (ppc::JitWorker* w = m.jit_worker()) {
+        jitbg_thread = std::thread([w] {
+            while (!jitbg_stop.load(std::memory_order_acquire))
+                if (!w->poll())
+                    std::this_thread::yield();
+        });
+        std::printf("[probe] compiling on another thread\n");
+    }
     if (!jit.empty())
         std::printf("[probe] block cache: %s, %u blocks; generated code: %s\n", m.cpu().block_cache() ? "on" : "FAILED",
                     m.cpu().block_cache() ? m.cpu().block_cache()->capacity() : 0,
@@ -949,6 +963,14 @@ int main(int argc, char** argv)
             std::printf("[via] %s %-6s %02X  pc=%08X r24=%08X  at %llu\n", (x & 0x80000000u) ? "W" : "R", names[(x >> 8) & 15],
                         x & 0xFF, via.pc[k], via.pc68[k], static_cast<unsigned long long>(via.when[k]));
         }
+    }
+    if (jitbg_thread.joinable()) {
+        jitbg_stop.store(true, std::memory_order_release);
+        jitbg_thread.join();
+        const auto& js = m.cpu().jit_stats();
+        std::printf("[probe] background jit: %llu queued, %llu installed, %llu stale, %llu queue full\n",
+                    static_cast<unsigned long long>(js.queued), static_cast<unsigned long long>(js.installed),
+                    static_cast<unsigned long long>(js.stale), static_cast<unsigned long long>(js.queue_full));
     }
     // A fingerprint of all of RAM (FNV-1a), for comparing runs.
     {

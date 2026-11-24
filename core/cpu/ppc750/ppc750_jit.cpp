@@ -20,6 +20,7 @@
 // data TLB. w8-w15 are scratch; x16 holds call targets, x17 far addresses.
 
 #include "core/cpu/ppc750/ppc750.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "core/cpu/ppc750/jit/a64_assembler.h"
 #include "core/common/bitops.h"
 
@@ -64,6 +65,7 @@ struct JitCompiler {
     static_assert(sizeof(Ppc750::TlbEntry) == 12, "the generated TLB lookup assumes 12-byte entries");
     static_assert(Ppc750::kTlbSize == 256, "the generated TLB lookup assumes 256 entries");
     u32 ram_off, ram_size_off, dtlb_off, tlb_on_off, slow_off;
+    Ppc750::JitStats* st;  // compile-time counts (the worker keeps its own)
 
     // Base + offset into x17 when the offset does not fit the instruction.
     Reg far(Reg base, u32& off, u32 size)
@@ -498,23 +500,23 @@ struct JitCompiler {
             const BlockOp& op = b.ops[i];
             if (native(op.insn)) {
                 ++pending;
-                ++c.jit_stats_.native_ops;
+                ++st->native_ops;
                 continue;
             }
             if (i + 1 == b.count && is_branch(op.insn)) {
                 branch(i, op.insn, pending);
-                ++c.jit_stats_.native_ops;
+                ++st->native_ops;
                 continue;
             }
             sync(i, pending);
             MemOp m;
             if (memory_op(op.insn, m)) {
                 memory(i, b.count, op, m, out);
-                ++c.jit_stats_.native_ops;
+                ++st->native_ops;
                 continue;
             }
             call_handler(i, b.count, op, out);
-            ++c.jit_stats_.helper_ops;
+            ++st->helper_ops;
         }
         sync(b.count, pending);
         a.bind(out);
@@ -551,6 +553,21 @@ void sync_icache(const void* begin, const void* end)
 }
 } // namespace
 
+bool Ppc750::jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st)
+{
+    Assembler a(at, room);
+    auto off = [this](const void* p) {
+        return static_cast<u32>(static_cast<const u8*>(p) - reinterpret_cast<const u8*>(this));
+    };
+    JitCompiler jc{*this, a, off(&instr_count_), off(&exit_), off(&ram_), off(&ram_size_), off(&dtlb_[0]),
+                   off(&tlb_enabled_), off(&jit_stats_.memory_slow), &st};
+    if (!jc.compile(b))
+        return false;  // out of room
+    sync_icache(at, at + a.size());
+    size = a.size();
+    return true;
+}
+
 bool Ppc750::jit_compile(BlockCache::Block* b)
 {
     if (cache_->stats().flushes != jit_epoch_) {
@@ -560,21 +577,111 @@ bool Ppc750::jit_compile(BlockCache::Block* b)
         jit_used_ = 0;
         ++jit_stats_.resets;
     }
-    Assembler a(jit_code_ + jit_used_, jit_words_ - jit_used_);
-    auto off = [this](const void* p) {
-        return static_cast<u32>(static_cast<const u8*>(p) - reinterpret_cast<const u8*>(this));
-    };
-    JitCompiler jc{*this, a, off(&instr_count_), off(&exit_), off(&ram_), off(&ram_size_), off(&dtlb_[0]),
-                   off(&tlb_enabled_), off(&jit_stats_.memory_slow)};
-    if (!jc.compile(*b))
+    u32 size = 0;
+    if (!jit_generate(*b, jit_code_ + jit_used_, jit_words_ - jit_used_, size, jit_stats_))
         return false;  // out of room: the block runs without code
-    sync_icache(jit_code_ + jit_used_, jit_code_ + jit_used_ + a.size());
     b->code = jit_used_ + 1;
-    jit_used_ += a.size();
+    jit_used_ += size;
     ++jit_stats_.compiled;
     return true;
 }
 
+// --- background compilation (jit_worker.h) ------------------------------------------
+
+void Ppc750::set_jit_worker(JitWorker* w)
+{
+    jit_worker_ = jit_code_ ? w : nullptr;
+    if (cache_)
+        cache_->flush();  // a clean start: the worker owns the code buffer now
+    jit_used_ = 0;
+}
+
+void Ppc750::jit_request(BlockCache::Block* b)
+{
+    JitRequest& r = jit_worker_->req_out_;
+    r.block = b;
+    r.epoch = cache_->stats().flushes;
+    r.pa = b->pa;
+    r.count = b->count;
+    for (u32 i = 0; i < b->count; ++i)
+        r.ops[i] = b->ops[i];
+    if (jit_worker_->requests_.push(r)) {
+        ++jit_stats_.queued;
+#if defined(__aarch64__)
+        asm volatile("sev" ::: "memory");  // wakes a worker core waiting in WFE
+#endif
+    }
+    else
+        ++jit_stats_.queue_full;  // the block keeps running through its handlers
+}
+
+void Ppc750::jit_collect()
+{
+    JitResult r;
+    bool installed = false;
+    while (jit_worker_->results_.pop(r)) {
+        if (r.epoch != cache_->stats().flushes || r.block->pa != r.pa) {
+            ++jit_stats_.stale;  // the cache was flushed since: not that block any more
+            continue;
+        }
+        if (r.code == 0) {
+            jit_full_ = true;  // flush at the next build: a new epoch empties the buffer
+            continue;
+        }
+        r.block->code = r.code;
+        jit_stats_.native_ops += r.native_ops;
+        jit_stats_.helper_ops += r.helper_ops;
+        ++jit_stats_.compiled;
+        ++jit_stats_.installed;
+        installed = true;
+    }
+#if defined(__aarch64__)
+    if (installed)
+        asm volatile("isb" ::: "memory");  // code another core wrote is about to run here
+#else
+    (void)installed;
+#endif
+}
+
+u32 JitWorker::poll(u32 max)
+{
+    u32 n = 0;
+    while (n < max && requests_.pop(req_)) {
+        ++n;
+        if (have_epoch_ && req_.epoch < epoch_) {
+            ++stats_.stale;  // made before a flush the worker has already seen
+            continue;
+        }
+        if (!have_epoch_ || req_.epoch != epoch_) {
+            epoch_ = req_.epoch;  // the CPU flushed its cache: no code is in use
+            have_epoch_ = true;
+            used_ = 0;
+            ++stats_.resets;
+        }
+        auto* b = reinterpret_cast<BlockCache::Block*>(block_);
+        b->pa = req_.pa;
+        b->gen = 0;
+        b->count = req_.count;
+        b->code = 0;
+        for (u32 i = 0; i < req_.count; ++i)
+            b->ops[i] = req_.ops[i];
+        Ppc750::JitStats st;
+        u32 size = 0;
+        JitResult res{req_.block, req_.epoch, req_.pa, 0, 0, 0};
+        if (cpu_.jit_generate(*b, cpu_.jit_code_ + used_, cpu_.jit_words_ - used_, size, st)) {
+            res.code = used_ + 1;
+            res.native_ops = static_cast<u32>(st.native_ops);
+            res.helper_ops = static_cast<u32>(st.helper_ops);
+            used_ += size;
+            ++stats_.compiled;
+        } else {
+            ++stats_.full;
+        }
+        if (!results_.push(res))
+            ++stats_.dropped_results;  // that block keeps running through its handlers
+    }
+    return n;
+}
 void Ppc750::jit_run(BlockCache::Block* b)
 {
     void* code = jit_code_ + (b->code - 1);

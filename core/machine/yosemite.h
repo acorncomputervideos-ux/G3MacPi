@@ -28,6 +28,7 @@
 #include "core/machine/execution_loop.h"
 #include "core/mem/physical_bus.h"
 #include "core/devices/ata/cmd646.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "core/sched/scheduler.h"
 
 namespace g3 {
@@ -54,6 +55,9 @@ struct YosemiteConfig {
     u32 jit_code_words = 0;
     ppc::Ppc750::JitRunner jit_runner = nullptr;
     void* jit_runner_context = nullptr;
+    // Compile on another core (core/cpu/ppc750/jit_worker.h): the front end
+    // then polls jit_worker() there. Needs jit_code.
+    bool jit_background = false;
 };
 
 class YosemiteMachine {
@@ -84,6 +88,8 @@ public:
 
     ppc::Ppc750& cpu() { return cpu_; }
     bool jit_enabled() const { return jit_; }  // generated code in use
+    // The background compiler to poll on another core, or nullptr.
+    ppc::JitWorker* jit_worker() { return jit_ && jit_background_ ? &jit_worker_ : nullptr; }
     u32 ram_size() const { return ram_size_; }
     u64 cpu_hz() const { return cpu_hz_; }
     u64 bus_hz() const { return bus_hz_; }
@@ -105,6 +111,8 @@ private:
     ppc::Ppc750 cpu_;
     ppc::BlockCache blocks_;
     bool jit_ = false;
+    bool jit_background_ = false;
+    ppc::JitWorker jit_worker_{cpu_};
     ExecutionLoop loop_;
     Grackle grackle_;
     PciToPciBridge bridge_;

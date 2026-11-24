@@ -21,6 +21,10 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
         }, &blocks_);
         if (c.jit_code)
             jit_ = cpu_.set_jit(c.jit_code, c.jit_code_words, c.jit_runner, c.jit_runner_context);
+        if (jit_ && c.jit_background) {
+            cpu_.set_jit_worker(&jit_worker_);
+            jit_background_ = true;
+        }
     }
     cpu_hz_ = c.cpu_hz;
     bus_hz_ = c.bus_hz;

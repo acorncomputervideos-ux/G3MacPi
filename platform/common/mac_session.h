@@ -23,6 +23,9 @@
 namespace g3 {
 
 class YosemiteMachine;
+namespace ppc {
+class JitWorker;
+}
 class BwFirmware;
 struct MachineState;
 struct ScreenFrame;
@@ -74,6 +77,9 @@ public:
         u32 blocks_size = 0;
         u32* code = nullptr;
         u32 code_words = 0;
+        // Compile generated code on another core: the front end then polls
+        // jit_worker() there (core/cpu/ppc750/jit_worker.h).
+        bool jit_background = false;
     };
     // Builds and starts the Mac. `driver`: our display driver (PEF), which
     // Mac OS needs to draw; `unix_time`: the real-time clock at power-on;
@@ -96,6 +102,9 @@ public:
     u64 instructions() const;         // executed so far (speed statistics)
     bool block_cache_on() const;      // the CPU uses its decoded-block cache
     bool jit_on() const;              // ... and generated code
+    // The background compiler to poll on another core (Memory::jit_background),
+    // or nullptr. Stop polling it before stop().
+    ppc::JitWorker* jit_worker();
     bool powered_off() const;         // Mac OS shut down (RTAS power-off)
     bool reboot_requested() const;    // Mac OS restarted (RTAS system-reboot)
 

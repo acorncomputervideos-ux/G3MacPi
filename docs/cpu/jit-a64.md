@@ -81,7 +81,8 @@ AArch64 host.
   invalidated (`dc cvau`, `ic ivau`, `dsb ish`, `isb`; the line sizes
   come from CTR_EL0).
 
-Native execution on the Pi has not been tested yet.
+Native execution has been tested in QEMU's raspi4b (see Background
+compilation); not yet on a real Pi.
 
 ## Checking it without an ARM machine
 
@@ -122,6 +123,51 @@ Native execution on the Pi has not been tested yet.
   boot with generated code on the simulator. Over 3 s of guest time
   (1.05 × 10⁹ instructions, 3.9 × 10⁸ block runs in generated code) it
   ends with the same registers and RAM hash as the interpreter.
+
+## Background compilation (another core)
+
+`core/cpu/ppc750/jit_worker.h`. With a `JitWorker` attached
+(`Ppc750::set_jit_worker`, `YosemiteConfig::jit_background`), the CPU
+doesn't compile a block when it builds it: it queues a copy of the
+block's operations (`JitRequest`, single-producer/single-consumer queue)
+and keeps running the block through its handlers. The worker, polled on
+another core, compiles into the code buffer (which it owns from then on)
+and queues a `JitResult`; the CPU collects results before looking up each
+block and gives the block its code.
+
+- **Epochs.** Each request carries the block cache's flush count. A result
+  is used only if the cache hasn't been flushed since; the worker empties
+  the code buffer when it sees a newer epoch. The CPU queues requests only
+  while building blocks, never inside generated code, so code in use is
+  never overwritten. Out of room: the result says so and the CPU flushes
+  at its next block build, as without a worker.
+- **Memory ordering.** The worker cleans the data cache and invalidates
+  the instruction cache for what it wrote (as before); the queues publish
+  with release/acquire; the CPU executes `isb` before running code it
+  collected. On AArch64 the CPU executes `sev` after each request, so an
+  idle worker core waits in `wfe`.
+- **Tests.**
+  - Every block-cache differential test also runs as `cpu/jitbg/*`, with
+    the worker on another thread (code arrives whenever the scheduler
+    allows; results must be identical).
+  - `stale_code_is_never_installed` builds the dangerous case on purpose:
+    a result made before a flush arriving after a new block for the same
+    address was built in the same pool slot. Sabotage: without the epoch
+    check, that test fails (the random tests did not catch it).
+  - The Pi's CPU self-test has a background mode (`worker_attach`), tested
+    on the host with a thread.
+- **Mac OS boot.** `G3_JIT=16 G3_JITCODE=8 G3_JITBG=1 g3_rom_probe` with
+  the Mac OS 9.2.1 CD, 4 s of guest time (1.4 x 10^9 instructions): 2.6
+  million blocks compiled on the other thread, 28 stale results dropped;
+  the end state (registers, instruction count, RAM hash) is identical to
+  the interpreter's and to compiling on the CPU's own thread.
+- **Pi.** Core 2 runs the worker (`CDrawCore::RunWorker`); the kernel
+  attaches the running Mac's worker after starting it and detaches it
+  before stopping it. The log says "JIT compiling: core 2".
+- **First run on ARM.** In QEMU's raspi4b (a test build,
+  `G3_DEFINES=-DG3_QEMU_DRAWTEST`), the CPU self-test ran the generated
+  code natively on (emulated) Cortex-A72 cores for the first time: 20/20
+  programs identical compiling on core 0, and 20/20 compiling on core 2.
 
 ## Coverage, and what comes next
 

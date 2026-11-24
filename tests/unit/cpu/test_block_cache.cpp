@@ -13,6 +13,7 @@
 // in the middle of blocks. Some runs have address translation on (BATs).
 
 #include "core/cpu/ppc750/block_cache.h"
+#include "core/cpu/ppc750/jit_worker.h"
 #include "core/cpu/ppc750/ppc750.h"
 #include "core/mem/flat_memory.h"
 #include "tests/framework/g3test.h"
@@ -21,7 +22,11 @@
 
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <chrono>
 #include <initializer_list>
+#include <memory>
+#include <thread>
 #include <vector>
 
 using namespace g3;
@@ -44,10 +49,14 @@ struct Rng {
     u32 below(u32 n) { return next() % n; }
 };
 
-// Every test runs twice: "cpu/blocks/..." with the block cache, and
+// Every test runs three times: "cpu/blocks/..." with the block cache,
 // "cpu/jit/..." with generated AArch64 code for the blocks as well (run on
-// the A64 simulator here; natively on an AArch64 host).
+// the A64 simulator here; natively on an AArch64 host), and "cpu/jitbg/..."
+// with the code compiled by a JitWorker on another thread while the CPU
+// runs (jit_worker.h): when code arrives is then up to the scheduler, and
+// the results must still be identical.
 bool g_jit = false;
+bool g_jit_bg = false;
 u32 g_jit_words = 1u << 20;
 
 struct Machine {
@@ -73,9 +82,33 @@ struct Machine {
 #else
                 REQUIRE(cpu.set_jit(code.data(), g_jit_words, a64::simulate_jit_block, range));
 #endif
+                if (g_jit_bg) {
+                    worker = std::make_unique<JitWorker>(cpu);
+                    cpu.set_jit_worker(worker.get());
+                    thread = std::thread([this] {
+                        while (!stop.load(std::memory_order_acquire))
+                            if (!worker->poll())
+                                std::this_thread::yield();
+                    });
+                }
             }
         }
     }
+    std::unique_ptr<JitWorker> worker;
+    std::thread thread;
+    std::atomic<bool> stop{false};
+    // Stops the worker thread; its statistics are then stable.
+    const JitWorker::Stats* stop_worker()
+    {
+        if (!worker)
+            return nullptr;
+        if (thread.joinable()) {
+            stop.store(true, std::memory_order_release);
+            thread.join();
+        }
+        return &worker->stats();
+    }
+    ~Machine() { stop_worker(); }
 };
 
 const u32 kOp31[] = {0, 32, 8, 10, 11, 19, 24, 26, 28, 40, 60, 75, 83, 104, 124, 136, 138, 144,
@@ -249,6 +282,8 @@ bool differential_run(int seed, bool translate, u32 arena_bytes, Totals& t)
     t.jit_runs += blocks.cpu.jit_stats().runs;
     t.jit_native += blocks.cpu.jit_stats().native_ops;
     t.jit_resets += blocks.cpu.jit_stats().resets;
+    if (const JitWorker::Stats* ws = blocks.stop_worker())
+        t.jit_resets += ws->resets;
     return true;
 }
 
@@ -267,6 +302,12 @@ bool differential_run(int seed, bool translate, u32 arena_bytes, Totals& t)
         g_jit = true;                                                                     \
         name##_body();                                                                    \
         g_jit = false;                                                                    \
+    }                                                                                     \
+    TEST_CASE("cpu/jitbg/" #name)                                                         \
+    {                                                                                     \
+        g_jit = g_jit_bg = true;                                                          \
+        name##_body();                                                                    \
+        g_jit = g_jit_bg = false;                                                         \
     }                                                                                     \
     static void name##_body()
 
@@ -716,14 +757,24 @@ BOTH(generated_loads_and_stores_take_the_fast_path)
                 m->ram[0x40000 + k] = static_cast<u8>(0xA0 + k);
             if (translated)
                 map_test_bats(*m);
-            m->cpu.run(2 + 100 * 7);
+            if (g_jit_bg && m->worker) {
+                // The first pass queues the blocks; give the worker time to
+                // compile them, as a real second core would have had.
+                m->cpu.run(2 + 7);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                m->cpu.run(99 * 7);
+            } else {
+                m->cpu.run(2 + 100 * 7);
+            }
         }
         CHECK(same(a, c, "fast path", translated, 0));
         CHECK_EQ(c.cpu.state().pc, 0x5024u);
         if (g_jit) {
             // 600 accesses; only the first of each kind may miss the TLB.
             CHECK(c.cpu.jit_stats().memory_slow <= 8);
-            CHECK(c.cpu.jit_stats().runs >= 99);
+            CHECK(c.cpu.jit_stats().runs >= (g_jit_bg ? 98u : 99u));
+            if (g_jit_bg)
+                CHECK(c.cpu.jit_stats().installed >= 1);
         }
     }
 }
@@ -829,4 +880,58 @@ TEST_CASE("cpu/step_hook_sees_every_instruction")
     m.cpu.run(10);
     CHECK_EQ(c.n, 101u);
     CHECK(m.cache.stats().built > 0);
+}
+
+TEST_CASE("cpu/jitbg/stale_code_is_never_installed")
+{
+    // A result made before a cache flush must not reach a block built
+    // after it, even one at the same pool address for the same physical
+    // address. Set up exactly that, polling the worker by hand:
+    //  1. P0 (0x2000) then A (0x1000) are built; their requests wait.
+    //  2. The cache is flushed; P0' and B (new code at the same addresses)
+    //     are built in the same pool slots; their requests wait too.
+    //  3. The worker compiles only the two old requests (A's code: r3 = 1).
+    //  4. The CPU runs B again: A's code must not be installed into B's
+    //     block (B sets r3 = 100).
+    g_jit = true;
+    Machine m(4u << 20);
+    g_jit = false;
+    JitWorker w(m.cpu);
+    m.cpu.set_jit_worker(&w);
+    auto program = [&](u32 p0_first, u32 r3) {
+        place(m, {
+            {0x2000, p0_first},
+            {0x2004, b(0x1000 - 0x2004)},
+            {0x1000, li(3, r3)},
+            {0x1004, li(4, r3 + 1)},
+            {0x1008, b(0x3000 - 0x1008)},
+            {0x3000, b(0x2000 - 0x3000)},
+        });
+    };
+    auto run_from = [&](u32 pc, u32 n) {
+        m.cpu.state().pc = pc;
+        m.cpu.state().msr = msr::ME;
+        m.cpu.run(n);
+    };
+    program(li(5, 7), 1);  // P0 natively compiled (short code)
+    run_from(0x2000, 6);   // P0, A, the block at 0x3000
+    m.cache.flush();
+    program(mfcr(5), 100);  // P0': a handler call (longer code), then B
+    run_from(0x2000, 6);
+    CHECK_EQ(m.cpu.state().gpr[3], 100u);
+    CHECK_EQ(w.poll(3), 3u);  // the three old requests only
+    for (int i = 0; i < 5; ++i)
+        run_from(0x2000, 6);  // picks up the old results: all must be dropped
+    CHECK_EQ(m.cpu.state().gpr[3], 100u);
+    CHECK_EQ(m.cpu.state().gpr[4], 101u);
+    CHECK(m.cpu.jit_stats().stale >= 3);
+    CHECK_EQ(m.cpu.jit_stats().installed, 0u);
+    // Now the new requests: B gets its own code and still sets 100.
+    w.poll();
+    for (int i = 0; i < 5; ++i)
+        run_from(0x2000, 6);
+    CHECK(m.cpu.jit_stats().installed >= 2);
+    CHECK(m.cpu.jit_stats().runs > 0);
+    CHECK_EQ(m.cpu.state().gpr[3], 100u);
+    CHECK_EQ(m.cpu.state().gpr[4], 101u);
 }
