@@ -1008,8 +1008,9 @@ int main(int argc, char** argv)
                     static_cast<unsigned long long>(st.flushes), static_cast<unsigned long long>(st.invalidations));
         const auto& js = m.cpu().jit_stats();
         if (m.jit_enabled())
-            std::printf("[probe] jit: %llu compiled, %llu runs (+ %llu chained), %llu native / %llu handler operations, "
+            std::printf("[probe] jit: %llu links, %llu compiled, %llu runs (+ %llu chained), %llu native / %llu handler operations, "
                         "%llu resets, %llu loads/stores on the slow path\n",
+                        static_cast<unsigned long long>(js.linked),
                         static_cast<unsigned long long>(js.compiled), static_cast<unsigned long long>(js.runs),
                         static_cast<unsigned long long>(js.chained),
                         static_cast<unsigned long long>(js.native_ops), static_cast<unsigned long long>(js.helper_ops),

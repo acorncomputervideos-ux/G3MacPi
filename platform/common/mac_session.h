@@ -130,6 +130,7 @@ public:
     // which instructions go to handlers most (jit_report.h); "" otherwise.
     u32 jit_report(char* out, u32 cap) const;
     const ppc::Ppc750::JitStats* jit_stats() const;  // nullptr without a running Mac
+    ppc::Ppc750* cpu();                               // diagnostics (nullptr without a Mac)
     // The background compiler to poll on another core (Memory::jit_background),
     // or nullptr. Stop polling it before stop().
     ppc::JitWorker* jit_worker();

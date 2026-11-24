@@ -45,6 +45,9 @@ void simulate_jit_block(void* code, void* cpu, void* context);
 // AArch64 instructions simulate_jit_block has executed so far (all calls):
 // the generated code's own work, without the handlers it calls.
 u64 simulated_instructions();
+// Diagnostics: for each executed instruction, ++counts[kinds[word]], where
+// word is its index from the code range's start; nullptr: off.
+void set_simulator_histogram(const u8* kinds, u64* counts);
 
 } // namespace g3::a64
 

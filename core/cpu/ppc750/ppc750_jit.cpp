@@ -121,7 +121,22 @@ struct JitCompiler {
     const u32* stub_enter = nullptr;
     const u32* stub_epilogue = nullptr;
     const u32* stub_static = nullptr;
-    u32 entry_off = 0, code_pages_off = 0, dtlb_ptr_off = 0;
+    u32 entry_off = 0, code_pages_off = 0, dtlb_ptr_off = 0, link_block_off = 0, link_slot_off = 0;
+    u8* kinds = nullptr;  // Ppc750::jit_word_kinds_ (diagnostics)
+    void tag_one(u32 w, u8 kind)
+    {
+        if (kinds && a.ok())
+            kinds[static_cast<u64>(a.start() - code_base) + w] = kind;
+    }
+    // Tags the words emitted since `from` (diagnostics only).
+    void tag(u32 from, u8 kind)
+    {
+        if (!kinds || !a.ok())
+            return;
+        const u64 base = static_cast<u64>(a.start() - code_base);
+        for (u32 i = from; i < a.size(); ++i)
+            kinds[base + i] = kind;
+    }
     // The prologue is padded to this many words; chained jumps enter here.
     static constexpr u32 kChainEntry = 0;  // blocks have no prologue: the shared entry stub sets up the frame
 
@@ -649,6 +664,7 @@ struct JitCompiler {
     {
         const u32 insn = op.insn, rd = field::rd(insn), ra = field::ra(insn);
         Assembler::Label slow, have_pa, done;
+        const u32 tag_from = a.size();
         // The register cache as the slow path finds it: what is dirty now
         // (the fast path changes no guest register before its last check).
         bool dirty0[32];
@@ -731,6 +747,8 @@ struct JitCompiler {
             dirty1[r] = dirty_[r];
         }
         a.b(done);
+        tag(tag_from, Ppc750::kWordMemFast);
+        const u32 slow_from = a.size();
         a.bind(slow);
         {
             u32 off = slow_off;
@@ -751,6 +769,7 @@ struct JitCompiler {
             valid_[r] = valid1[r];
             dirty_[r] = dirty1[r];  // (at most stores one value again)
         }
+        tag(slow_from, Ppc750::kWordMemSlow);
         a.bind(done);
     }
 
@@ -771,6 +790,7 @@ struct JitCompiler {
         s32 delta;
         u32 pa;
     };
+    u8 dispatch_kind = 0;  // diagnostics: what kind of block end jumps to dispatch
     void chain(Assembler::Label& out, const Static* statics, u32 nstatics, u32 own_gen)
     {
         Assembler::Label no_irq;
@@ -794,18 +814,38 @@ struct JitCompiler {
         // block's (it changes none of them; anything that does sets exit_),
         // so the block is found at a fixed table slot and checked against
         // fixed values.
+        // Each has a link slot: a NOP until the "static" stub has found its
+        // block with code, then a direct branch into that block (patched by
+        // Ppc750::jit_link). Same page, so anything that drops the target
+        // drops this block too, and sets exit_ (checked above). Before a
+        // linked jump, the budget as if the next block had kMaxOps
+        // instructions; run_blocks and the "enter" stub do it exactly.
+        Assembler::Label generic;
+        if (nstatics) {
+            load_field(true, X11, cnt_off, 8);
+            a.add_imm(true, X11, X11, BlockCache::kMaxOps);
+            load_field(true, X12, limit_off, 8);
+            a.cmp(true, X11, X12);
+            a.b_cond(Assembler::HI, generic);
+        }
         for (u32 k = 0; k < nstatics; ++k) {
             Assembler::Label other;
             add_const(X10, X21, static_cast<u32>(statics[k].delta));
             a.cmp(false, X8, X10);
             a.b_cond(Assembler::NE, other);
+            const u32* slot = a.start() + a.size();
+            a.nop();                                  // the link slot
             a.mov_imm32(X12, (statics[k].pa >> 2) & layout.table_mask);  // its table slot
             a.mov_imm32(X10, statics[k].pa);
             a.mov_imm32(X11, own_gen);
+            a.mov_imm64(X15, reinterpret_cast<u64>(slot));
             a.b_abs(stub_static);
             a.bind(other);
         }
+        a.bind(generic);
+        const u32 to_dispatch = a.size();
         a.b_abs(stub_dispatch);                       // w8: the PC, w9: the MSR
+        tag(to_dispatch, dispatch_kind);
     }
 
     // --- the shared code (once, at the start of the code buffer; see
@@ -832,6 +872,23 @@ struct JitCompiler {
         a.ldr(false, X13, X14, blk_gen);
         a.cmp(false, X13, X11);
         a.b_cond(Assembler::NE, out);                 // built under another generation
+        // It has code: link the caller's slot (x15) to it, once.
+        a.ldr(false, X13, X14, blk_code);
+        a.cbz(false, X13, enter);                     // no code yet: enter sends it back
+        {
+            u32 off = link_block_off;
+            const Reg base = far(X19, off, 8);
+            a.str(true, X14, base, off);
+        }
+        {
+            u32 off = link_slot_off;
+            const Reg base = far(X19, off, 8);
+            a.str(true, X15, base, off);
+        }
+        a.mov(true, X0, X19);
+        a.mov_imm64(X16, reinterpret_cast<u64>(&Ppc750::jit_link));
+        a.blr(X16);                                   // (x0-x18 not kept)
+        load_field(true, X14, link_block_off, 8);
         a.b(enter);
         // "entry", from run_blocks (x0 = the CPU): push the frame, x19 and
         // x20 as every block expects, then the block at jit_entry_.
@@ -1059,6 +1116,9 @@ struct JitCompiler {
         jc.entry_off = off(&c.jit_entry_);
         jc.code_pages_off = off(&c.jit_code_pages_);
         jc.dtlb_ptr_off = off(&c.jit_dtlb_);
+        jc.kinds = c.jit_word_kinds_;
+        jc.link_block_off = off(&c.jit_link_block_);
+        jc.link_slot_off = off(&c.jit_link_slot_);
         return jc;
     }
 
@@ -1078,23 +1138,29 @@ struct JitCompiler {
             load_field(true, X24, dtlb_ptr_off, 8);
         }
 
+        tag(0, Ppc750::kWordSetup);
         u32 pending = 0;
         for (u32 i = 0; i < b.count; ++i) {
             const BlockOp& op = b.ops[i];
+            u32 at = a.size();
             if (native(op.insn)) {
                 ++pending;
                 ++st->native_ops;
+                tag(at, Ppc750::kWordNative);
                 continue;
             }
             if (i + 1 == b.count && is_branch(op.insn)) {
                 branch(i, op.insn, pending);
                 ++st->native_ops;
+                tag(at, Ppc750::kWordBranch);
                 continue;
             }
             sync(i, pending);
+            tag(at, Ppc750::kWordSync);
+            at = a.size();
             MemOp m;
             if (memory_op(op.insn, m)) {
-                memory(i, b.count, op, m, out);
+                memory(i, b.count, op, m, out);  // tags its own words
                 ++st->native_ops;
                 continue;
             }
@@ -1102,14 +1168,28 @@ struct JitCompiler {
             call_handler(i, b.count, op, out);
             forget();
             ++st->helper_ops;
+            tag(at, Ppc750::kWordHandler);
         }
+        u32 at = a.size();
         sync(b.count, pending);
         flush();       // the next block, or run_blocks, reads the CpuState
+        tag(at, Ppc750::kWordSync);
+        at = a.size();
         Static statics[2];
         const u32 nstatics = static_targets(b, statics);
+        {
+            const u32 last = b.ops[b.count - 1].insn;
+            dispatch_kind = !is_branch(last) ? Ppc750::kWordToDispatchOther
+                            : field::opcd(last) != 19 ? Ppc750::kWordToDispatchFar
+                            : field::xo10(last) == 16 ? Ppc750::kWordToDispatchReturn : Ppc750::kWordToDispatchCtr;
+        }
         chain(out, statics, nstatics, b.gen);
         a.bind(out);
         a.b_abs(stub_epilogue);
+        // (the branch to dispatch keeps its own tag)
+        for (u32 w = at; w < a.size(); ++w)
+            if (!kinds || kinds[static_cast<u64>(a.start() - code_base) + w] < Ppc750::kWordToDispatchReturn)
+                tag_one(w, Ppc750::kWordChainHead);
         return a.ok();
     }
 };
@@ -1155,6 +1235,34 @@ bool Ppc750::jit_emit_stubs()
     sync_icache(jit_code_, jit_code_ + a.size());
     jit_stub_words_ = (a.size() + 15) & ~15u;  // blocks start on a 64-byte boundary after it
     return true;
+}
+
+// Called from the "static" stub: turns the NOP at jit_link_slot_ into a
+// branch to jit_link_block_'s code (B, imm26: the buffer is far smaller
+// than +-128 MB), and makes it visible to instruction fetch.
+void Ppc750::jit_link(void* cpu, u32)
+{
+    auto& c = *static_cast<Ppc750*>(cpu);
+    u32* slot = c.jit_link_slot_;
+    const u32* target = c.jit_code_ + (c.jit_link_block_->code - 1);
+    const s64 words = target - slot;
+    *slot = 0x14000000u | (static_cast<u32>(words) & 0x03FFFFFFu);
+    sync_icache(slot, slot + 1);
+    ++c.jit_stats_.linked;
+}
+
+void Ppc750::set_jit_word_kinds(u8* kinds)
+{
+    jit_word_kinds_ = kinds;
+    if (!kinds || !jit_code_)
+        return;
+    // The stubs, in the order emit_stubs writes them.
+    const u32 edges[] = {jit_stub_static_, jit_stub_entry_, jit_stub_dispatch_, jit_stub_enter_,
+                         jit_stub_epilogue_, jit_stub_words_};
+    const u8 what[] = {kWordStubStatic, kWordStubEntry, kWordStubDispatch, kWordStubEnter, kWordStubEpilogue};
+    for (u32 k = 0; k < 5; ++k)
+        for (u32 w = edges[k]; w < edges[k + 1]; ++w)
+            kinds[w] = what[k];
 }
 
 bool Ppc750::jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st)

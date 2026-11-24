@@ -777,7 +777,11 @@ BOTH(generated_loads_and_stores_take_the_fast_path)
             CHECK(c.cpu.jit_stats().memory_slow <= 8);
             // Each pass runs the loop block in generated code: entered from
             // run_blocks or straight from the previous pass (chained).
-            CHECK(c.cpu.jit_stats().runs + c.cpu.jit_stats().chained >= (g_jit_bg ? 97u : 99u));
+            // (entered from run_blocks, chained, or through a direct link):
+            // nothing after the first passes runs without code.
+            CHECK(c.cpu.jit_stats().interpreted <= (g_jit_bg ? 3u * 7u + 2u : 2u));
+            if (!g_jit_bg)
+                CHECK(c.cpu.jit_stats().linked >= 1);  // the loop's bdnz is linked to its own block
             if (g_jit_bg)
                 CHECK(c.cpu.jit_stats().installed >= 1);
         }

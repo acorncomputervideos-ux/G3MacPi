@@ -147,6 +147,7 @@ public:
         u64 interpreted = 0;  // instructions run_blocks ran without generated code
         u64 code_words = 0;   // AArch64 instructions generated (compiled here)
         u64 retried = 0;      // blocks asked again for code (a request or result was dropped)
+        u64 linked = 0;       // direct links patched (block to block, same page)
     };
     // Profile of the JIT's handler calls (docs/cpu/jit-a64.md): generated
     // code counts, per kind of instruction (jit_op_id), the instructions it
@@ -166,6 +167,15 @@ public:
     // compiles here again. Only while the CPU isn't running.
     void set_jit_worker(JitWorker* w);
     const JitStats& jit_stats() const { return jit_stats_; }
+    // Diagnostics (g3_host G3_JITHIST): one byte per code-buffer word, set
+    // to what each generated instruction is for (JitWordKind); nullptr: off.
+    // Compiling here only (no worker). Tags the shared stubs at once.
+    enum JitWordKind : u8 {
+        kWordSetup = 1, kWordNative, kWordMemFast, kWordMemSlow, kWordHandler, kWordBranch, kWordSync,
+        kWordChainHead, kWordStubStatic, kWordStubEntry, kWordStubDispatch, kWordStubEnter, kWordStubEpilogue,
+        kWordToDispatchReturn, kWordToDispatchCtr, kWordToDispatchFar, kWordToDispatchOther, kWordKinds
+    };
+    void set_jit_word_kinds(u8* kinds);
     // Power saving (750 UM 10.2): with MSR[POW] set and a mode selected in
     // HID0 (doze, nap or sleep) the processor stops until an interrupt
     // wakes it. Mac OS's idle loop does this. run() executes nothing while
@@ -406,6 +416,12 @@ private:
     const u32* jit_entry_ = nullptr;     // the block the entry stub jumps to (jit_run)
     const u8* jit_code_pages_ = nullptr; // the cache's per-page code flags (fixed after set_jit)
     const void* jit_dtlb_ = nullptr;     // &dtlb_[0]
+    u8* jit_word_kinds_ = nullptr;
+    // Direct links (ppc750_jit.cpp): the slot to patch and the block it
+    // jumps to, handed from generated code to jit_link.
+    u32* jit_link_slot_ = nullptr;
+    BlockCache::Block* jit_link_block_ = nullptr;
+    static void jit_link(void* cpu, u32 unused);
     // Generates b's code at `at` (room words); words used in `size`. Reads
     // nothing of the CPU that changes while it runs (callable from the worker).
     bool jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st);

@@ -278,6 +278,15 @@ int main(int argc, char** argv)
         return 1;
     }
     std::printf("[g3_host] started: %u MB, %ux%u\n", config.ram_mb, config.width, config.height);
+    // G3_JITHIST=1 (with G3_JITSIM): where the generated code's instructions
+    // go, by what they are for (Ppc750::JitWordKind), printed at the end.
+    static std::vector<u8> word_kinds;
+    static u64 kind_counts[256] = {};
+    if (std::getenv("G3_JITHIST") && mem.jit_runner && session.cpu()) {
+        word_kinds.assign(code.size(), 0);
+        session.cpu()->set_jit_word_kinds(word_kinds.data());
+        a64::set_simulator_histogram(word_kinds.data(), kind_counts);
+    }
     // G3_MHZ=n: the effective CPU clock (guest time per instruction), as the
     // Pi's pacer sets it when the host is slower than a real G3.
     if (const char* mhz = std::getenv("G3_MHZ"))
@@ -612,6 +621,23 @@ int main(int argc, char** argv)
                     "for %llu guest instructions\n", jit_line,
                     static_cast<unsigned long long>(a64::simulated_instructions()),
                     static_cast<unsigned long long>(session.instructions()));
+        if (!word_kinds.empty()) {
+            static const char* names[] = {"untagged", "block setup", "native ops", "memory fast path",
+                                          "memory slow path", "interpreter calls", "final branch",
+                                          "pc/count sync, write-back", "block end (flags, known targets)",
+                                          "stub: known target", "stub: entry", "stub: dispatch",
+                                          "stub: enter", "stub: epilogue", "-> dispatch: blr (returns)",
+                                          "-> dispatch: bctr (computed)", "-> dispatch: b/bc to another page",
+                                          "-> dispatch: other block ends"};
+            u64 total = 0;
+            for (u64 c : kind_counts)
+                total += c;
+            for (u32 k = 0; k < ppc::Ppc750::kWordKinds; ++k)
+                if (kind_counts[k])
+                    std::printf(k >= ppc::Ppc750::kWordToDispatchReturn ? "[g3_host]   %-34s %6.3f per guest instruction (%4.1f%%)  (= hops)\n" : "[g3_host]   %-34s %6.2f per guest instruction (%4.1f%%)\n", names[k],
+                                double(kind_counts[k]) / double(session.instructions()),
+                                100.0 * double(kind_counts[k]) / double(total));
+        }
         if (const auto* js = session.jit_stats())
             std::printf("[g3_host] blocks: %llu entered from run_blocks, %llu chained, %llu instructions run without code; %llu blocks compiled, %llu code buffer resets, %llu words\n",
                         static_cast<unsigned long long>(js->runs), static_cast<unsigned long long>(js->chained),

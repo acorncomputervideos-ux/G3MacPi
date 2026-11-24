@@ -13,6 +13,8 @@ namespace g3::a64 {
 namespace {
 constexpr u64 kReturnSentinel = 0;         // x30 at entry: RET to it ends the call
 constexpr u64 kPoison = 0xDEAD0000BAD0F00Dull;
+const u8* g_kinds = nullptr;  // set_simulator_histogram
+u64* g_counts = nullptr;
 constexpr u64 kMaxSteps = 1000000000;       // per call: chained blocks run up to a whole run() budget
 s64 sext(u64 v, u32 bits) { return static_cast<s64>(v << (64 - bits)) >> (64 - bits); }
 } // namespace
@@ -78,6 +80,8 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
         const bool x = (i >> 31) != 0;
         const u32* next = pc + 1;
         ++executed_;
+        if (g_kinds)
+            ++g_counts[g_kinds[pc - lo]];
 
         if ((i & 0x1F800000u) == 0x12800000u) {                // move wide
             const u32 opc = (i >> 29) & 3, hw = (i >> 21) & 3;
@@ -288,6 +292,12 @@ bool Simulator::call(const u32* entry, u64 arg, const void* code_lo, const void*
 namespace {
 u64 g_simulated = 0;
 } // namespace
+
+void set_simulator_histogram(const u8* kinds, u64* counts)
+{
+    g_kinds = kinds;
+    g_counts = counts;
+}
 
 u64 simulated_instructions() { return g_simulated; }
 

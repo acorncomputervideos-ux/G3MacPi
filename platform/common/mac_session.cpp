@@ -262,6 +262,7 @@ bool MacSession::block_cache_on() const { return m_ && m_->cpu().block_cache() !
 bool MacSession::jit_on() const { return m_ && m_->jit_enabled(); }
 
 const ppc::Ppc750::JitStats* MacSession::jit_stats() const { return m_ ? &m_->cpu().jit_stats() : nullptr; }
+ppc::Ppc750* MacSession::cpu() { return m_ ? &m_->cpu() : nullptr; }
 
 u32 MacSession::jit_report(char* out, u32 cap) const
 {
