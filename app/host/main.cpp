@@ -524,7 +524,14 @@ int main(int argc, char** argv)
             }
         }
         const double real = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        std::printf("[g3_host] %u s guest, %.1f s real, screen %s\n", s + 1, real, session.screen_on() ? "on" : "off");
+        static double last_real = 0;
+        static u64 last_instr = 0;
+        const u64 instr = session.instructions();
+        const double mips = real > last_real ? (instr - last_instr) / (real - last_real) / 1e6 : 0;
+        last_real = real;
+        last_instr = instr;
+        std::printf("[g3_host] %u s guest, %.1f s real, screen %s, %.1f MIPS\n", s + 1, real,
+                    session.screen_on() ? "on" : "off", mips);
         std::fflush(stdout);
     }
     if (video) {
