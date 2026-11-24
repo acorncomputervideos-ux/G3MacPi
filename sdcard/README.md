@@ -55,7 +55,13 @@ images, edit the settings and update the emulator itself (upload a new
 kernel8-rpi4.img, then "Restart the Pi"). Set `web_password` on a shared
 network. See docs/web-interface.md.
 
-Not yet tested on a Raspberry Pi; please report what you see. Known: the
+If the log says "The SD card could not be read" (or `emmc: ... failed`),
+the Pi started but G3MacPi can't use the card: no settings, images or log
+are read or written. Try another card, formatted FAT32 (the folders above
+are on it already when you copy this whole package), and tell us the
+card's make and size and the lines above the message.
+
+First runs on a Pi 400 have been reported; please report what you see. Known: the
 Pi 400 has no battery clock, so the Mac's clock starts at 2001-01-01; the
 emulation is several times slower than a real G3.
 

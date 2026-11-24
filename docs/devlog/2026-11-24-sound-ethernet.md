@@ -58,3 +58,18 @@ restart. Circle's TCP/IP stack now runs on core 0's scheduler on a stand-in
 device; core 3 switches the Ethernet adapter between it and the Mac, who
 gets an address derived from the Pi's. Tested on Linux (unit tests,
 sabotage, curl, Chromium); not yet run on a Pi.
+
+## First report from a real Pi 400
+
+- **USB assertion** `xhciendpoint.cpp: (uintptr) pBuffer > MEM_KERNEL_END`
+  while the keyboard was set up. Cause: `CKernel` was a local in `main()`,
+  on core 0's 128 KB start-up stack, and had grown to 297 KB (the Mac's
+  sound and network queues, the web port's queue). The stack overflowed
+  below MEM_KERNEL_END and Circle's xHCI driver caught a stack buffer
+  there. `CKernel` is now on the heap; the log reports core 0's stack use
+  at start-up (5 of 128 KB in QEMU).
+- **SD card**: `emmc: Inquiry ACMD41 failed`. Not explained yet (the Pi
+  400's SD regulators are the Pi 4B's: expander GPIO 4 for the 1.8/3.3 V
+  I/O, GPIO 6 for power, as Circle assumes). Now tried three times, with a
+  clear message if it still fails. The SD package now carries the
+  `g3macpi/rom`, `cd`, `hdd`, `disks` and `logs` folders.

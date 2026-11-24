@@ -91,7 +91,14 @@ fi
 echo "==> Kernel ends at 0x$END (limit 0x$(printf %X $LIMIT))"
 cp "$APP/kernel8-rpi4.img" "$OUT/"
 cp "$CIRCLE/boot/armstub/armstub8-rpi4.bin" "$OUT/"
-cp "$ROOT/sdcard/config.txt" "$ROOT/sdcard/cmdline.txt" "$OUT/"
+cp "$ROOT/sdcard/config.txt" "$ROOT/sdcard/cmdline.txt" "$ROOT/sdcard/README.md" "$OUT/"
+# The folders G3MacPi uses, ready to fill on a computer (the Pi also
+# creates them when it can read the card).
+mkdir -p "$OUT/g3macpi/rom" "$OUT/g3macpi/cd" "$OUT/g3macpi/hdd" "$OUT/g3macpi/disks" "$OUT/g3macpi/logs"
+printf 'Put the "Mac OS ROM" file here (from the System Folder of your own Mac OS 9 CD or install).\r\n' > "$OUT/g3macpi/rom/README.txt"
+printf 'Put CD images here (images of the whole disc, e.g. .iso).\r\n' > "$OUT/g3macpi/cd/README.txt"
+printf 'Hard-disk images go here; the settings menu can make a new blank one.\r\n' > "$OUT/g3macpi/hdd/README.txt"
+printf 'Other disk images (older setups); the menu lists them too.\r\n' > "$OUT/g3macpi/disks/README.txt"
 
 if [[ $FETCH_FW -eq 1 ]]; then
     echo "==> Fetching Raspberry Pi firmware (revision pinned by Circle)"

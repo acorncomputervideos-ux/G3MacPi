@@ -146,10 +146,24 @@ boolean CKernel::Initialize (void)
 
 	if (bOK)
 	{
-		// A missing/unreadable SD card is not fatal: we only lose the log file.
-		if (!m_EMMC.Initialize ())
+		// A missing/unreadable SD card is not fatal (no settings, images or
+		// log file, though). Tried a few times: a card that did not answer
+		// at once may after a pause and another reset of the controller.
+		boolean bCard = FALSE;
+		for (unsigned nTry = 1; nTry <= 3 && !bCard; nTry++)
 		{
-			m_Logger.Write (FromKernel, LogWarning, "SD card (EMMC) init failed");
+			bCard = m_EMMC.Initialize ();
+			if (!bCard)
+			{
+				m_Logger.Write (FromKernel, LogWarning, "SD card (EMMC) init failed (try %u of 3)", nTry);
+				CTimer::SimpleMsDelay (200);
+			}
+		}
+		if (!bCard)
+		{
+			m_Logger.Write (FromKernel, LogError,
+					"The SD card could not be read: no settings, disk images or log. "
+					"Try another card (FAT32), or report the lines above.");
 		}
 	}
 
@@ -676,6 +690,16 @@ void CKernel::ShowStartupScreen (void)
 
 void CKernel::LogHostInfo (void)
 {
+	// Core 0's start-up stack (KERNEL_STACK_SIZE below MEM_KERNEL_STACK): how
+	// much is in use here, deep in nothing yet. A kernel object on it once
+	// overflowed it (see main.cpp).
+	{
+		u64 nSP;
+		asm volatile ("mov %0, sp" : "=r" (nSP));
+		m_Logger.Write (FromKernel, LogNotice, "Core 0 stack: %u of %u KB in use",
+				(unsigned) ((MEM_KERNEL_STACK - nSP) / 1024), (unsigned) (KERNEL_STACK_SIZE / 1024));
+	}
+
 	CMachineInfo *pInfo = CMachineInfo::Get ();
 
 	m_Logger.Write (FromKernel, LogNotice, "%s %s (git %s)",
