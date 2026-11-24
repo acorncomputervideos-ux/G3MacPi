@@ -44,8 +44,8 @@ enum TShutdownMode
 };
 
 // The other cores: core 1 draws the Mac's screen (ScreenPresenter), core 2
-// compiles the JIT's code (JitWorker); core 3 is left idle.
-class CDrawCore : public CMultiCoreSupport
+// compiles the JIT's code (JitWorker), core 3 does disk-image I/O (DiskCache).
+class CDrawCore : public CMultiCoreSupport, public CDiskIoCore
 {
 public:
 	CDrawCore (CMemorySystem *pMemorySystem) : CMultiCoreSupport (pMemorySystem) {}
@@ -63,8 +63,18 @@ public:
 	void AttachWorker (g3::ppc::JitWorker *pWorker);
 	void DetachWorker (void);
 
+	// CDiskIoCore (core 0)
+	volatile boolean m_bIoStarted = FALSE;	// set by core 3 when it runs
+	boolean DiskIoRunning (void) const override { return m_bIoStarted; }
+	void AttachDisk (g3::DiskCache *pCache) override;
+	void DetachDisk (g3::DiskCache *pCache) override;
+
 private:
 	void RunWorker (void);
+	void RunDiskIo (void);
+	static const unsigned MaxDisks = 8;
+	g3::DiskCache *m_pDisk[MaxDisks] = {};	// atomic accesses only
+	unsigned m_nIoBusy = 0;			// core 3 is serving the disks
 	g3::ScreenPresenter *m_pPresenter = 0;
 	g3::ScreenSurface m_Surface;
 	g3::ppc::JitWorker *m_pWorker = 0;	// atomic accesses only

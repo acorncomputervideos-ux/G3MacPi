@@ -209,6 +209,13 @@ void CKernel::StartDrawCore (void)
 	}
 	m_Logger.Write (FromKernel, LogNotice, "JIT compiling: %s",
 			m_DrawCore.m_bWorkerStarted ? "core 2" : "core 0 (core 2 did not start)");
+	for (unsigned i = 0; i < 100 && !m_DrawCore.m_bIoStarted; i++)
+	{
+		CTimer::SimpleMsDelay (1);
+	}
+	m_MacHost.SetDiskIoCore (&m_DrawCore);
+	m_Logger.Write (FromKernel, LogNotice, "Disk image I/O: %s",
+			m_DrawCore.m_bIoStarted ? "core 3" : "core 0 (core 3 did not start)");
 }
 
 void CDrawCore::AttachWorker (g3::ppc::JitWorker *pWorker)
@@ -244,12 +251,70 @@ void CDrawCore::RunWorker (void)
 	}
 }
 
-// Core 1: draw about 60 times a second. Core 2 compiles; core 3 returns (halts).
+void CDrawCore::AttachDisk (g3::DiskCache *pCache)
+{
+	for (unsigned i = 0; i < MaxDisks; i++)
+	{
+		g3::DiskCache *pNone = 0;
+		if (__atomic_compare_exchange_n (&m_pDisk[i], &pNone, pCache, false, __ATOMIC_SEQ_CST,
+						 __ATOMIC_SEQ_CST))
+		{
+			asm volatile ("sev");
+			return;
+		}
+	}
+}
+
+void CDrawCore::DetachDisk (g3::DiskCache *pCache)
+{
+	for (unsigned i = 0; i < MaxDisks; i++)
+	{
+		g3::DiskCache *pThis = pCache;
+		__atomic_compare_exchange_n (&m_pDisk[i], &pThis, (g3::DiskCache *) 0, false, __ATOMIC_SEQ_CST,
+					     __ATOMIC_SEQ_CST);
+	}
+	while (__atomic_load_n (&m_nIoBusy, __ATOMIC_SEQ_CST))
+	{
+		// core 3 is finishing a pass over the disks
+	}
+}
+
+// Core 3: serve the attached disk caches; sleep in WFE when idle (the
+// caches execute SEV after each request).
+void CDrawCore::RunDiskIo (void)
+{
+	m_bIoStarted = TRUE;
+	for (;;)
+	{
+		__atomic_store_n (&m_nIoBusy, 1u, __ATOMIC_SEQ_CST);
+		u32 nDone = 0;
+		for (unsigned i = 0; i < MaxDisks; i++)
+		{
+			g3::DiskCache *pCache = __atomic_load_n (&m_pDisk[i], __ATOMIC_SEQ_CST);
+			if (pCache != 0)
+			{
+				nDone += pCache->service ();
+			}
+		}
+		__atomic_store_n (&m_nIoBusy, 0u, __ATOMIC_SEQ_CST);
+		if (nDone == 0)
+		{
+			asm volatile ("wfe");
+		}
+	}
+}
+
+// Core 1 draws about 60 times a second; core 2 compiles; core 3 does disk I/O.
 void CDrawCore::Run (unsigned nCore)
 {
 	if (nCore == 2)
 	{
 		RunWorker ();
+		return;
+	}
+	if (nCore == 3)
+	{
+		RunDiskIo ();
 		return;
 	}
 	if (nCore != 1 || m_pPresenter == 0)

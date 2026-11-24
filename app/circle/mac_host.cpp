@@ -171,16 +171,61 @@ g3::BlockDevice *CCircleMacHost::open_image (const char *pPath, bool bReadOnly)
 	CLogger::Get ()->Write (FromMac, LogNotice, "Image %s: %u MB%s", pPath,
 				(unsigned) (pImage->sector_count () / 2048),
 				pImage->read_only () ? ", read-only" : "");
-	return pImage;
+	if (m_pIoCore == 0 || !m_pIoCore->DiskIoRunning ())
+	{
+		return pImage;		// I/O on the Mac's core
+	}
+	for (unsigned i = 0; i < MaxCached; i++)
+	{
+		TCached &C = m_Cached[i];
+		if (C.pCache != 0)
+		{
+			continue;
+		}
+		const u32 nLines = 64;			// 4 MB
+		const u32 nWriteSectors = 256;		// 128 KB
+		C.pLines = new (HEAP_HIGH) u8[nLines * g3::DiskCache::kLineBytes];
+		C.pWriteQueue = new (HEAP_HIGH) u8[nWriteSectors * g3::BlockDevice::kSectorSize];
+		if (C.pLines == 0 || C.pWriteQueue == 0)
+		{
+			delete [] C.pLines;
+			delete [] C.pWriteQueue;
+			C = TCached ();
+			break;
+		}
+		C.pImage = pImage;
+		C.pCache = new g3::DiskCache (*pImage, C.pLines, nLines, C.pWriteQueue, nWriteSectors);
+		C.pCache->set_wait ([] (void *) { asm volatile ("yield"); }, 0);
+		m_pIoCore->AttachDisk (C.pCache);
+		return C.pCache;
+	}
+	return pImage;		// no slot or memory: I/O on the Mac's core
 }
 
 void CCircleMacHost::close_image (g3::BlockDevice *pImage)
 {
-	if (pImage != 0)
+	if (pImage == 0)
 	{
-		pImage->flush ();
+		return;
 	}
-	delete static_cast<CFatFsImage *> (pImage);	// we only hand out CFatFsImage
+	for (unsigned i = 0; i < MaxCached; i++)
+	{
+		TCached &C = m_Cached[i];
+		if (C.pCache != pImage)
+		{
+			continue;
+		}
+		C.pCache->flush ();			// everything written reaches the card
+		m_pIoCore->DetachDisk (C.pCache);	// the I/O core lets go of it
+		delete C.pCache;
+		delete [] C.pLines;
+		delete [] C.pWriteQueue;
+		pImage = C.pImage;
+		C = TCached ();
+		break;
+	}
+	pImage->flush ();
+	delete static_cast<CFatFsImage *> (pImage);	// a CFatFsImage, behind a cache or not
 }
 
 void CCircleMacHost::console (const char *pText, u32 nLength)

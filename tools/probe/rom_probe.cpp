@@ -18,6 +18,8 @@
 #include "core/storage/block_device.h"
 
 #include <cstdint>
+#include "platform/common/disk_cache.h"
+
 #include <atomic>
 #include <cstdio>
 #include <thread>
@@ -257,6 +259,8 @@ int main(int argc, char** argv)
     // Drives from the configuration: ata0.master = channel 0 device 0, etc.
     static std::vector<u8> drive_bytes[MachineConfig::kDrives];
     static RamBlockDevice* drive_dev[MachineConfig::kDrives] = {};
+    static DiskCache* cached_dev[MachineConfig::kDrives] = {};
+    auto dev = [&](u32 i) -> BlockDevice* { return cached_dev[i] ? static_cast<BlockDevice*>(cached_dev[i]) : drive_dev[i]; };
     static AtapiCdrom cdrom[MachineConfig::kDrives];
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         const MachineConfig::Drive& d = mc.drive[i];
@@ -269,6 +273,22 @@ int main(int argc, char** argv)
                 return 1;
             }
             drive_dev[i] = new RamBlockDevice(drive_bytes[i].data(), drive_bytes[i].size(), d.read_only);
+            // G3_DISKCACHE: the drive's I/O through a DiskCache served by
+            // another thread (platform/common/disk_cache.h), as on the Pi.
+            if (std::getenv("G3_DISKCACHE")) {
+                static std::vector<u8> lines[MachineConfig::kDrives], wq[MachineConfig::kDrives];
+                lines[i].resize(64 * DiskCache::kLineBytes);
+                wq[i].resize(256 * BlockDevice::kSectorSize);
+                auto* c = new DiskCache(*drive_dev[i], lines[i].data(), 64, wq[i].data(), 256);
+                c->set_wait([](void*) { std::this_thread::yield(); }, nullptr);
+                new std::thread([c] {  // runs until the probe exits
+                    for (;;)
+                        if (!c->service())
+                            std::this_thread::yield();
+                });
+                cached_dev[i] = c;
+                std::printf("[probe] %s: through a disk cache (I/O on another thread)\n", MachineConfig::drive_name(i));
+            }
         }
         if (d.type == MachineConfig::DriveType::CdRom) {
             // G3_ATAPI: print every packet command (up to 300) with its sense.
@@ -284,11 +304,11 @@ int main(int argc, char** argv)
                 }, nullptr);
             }
             bus.attach_cdrom(i % 2, &cdrom[i]);
-            cdrom[i].insert(drive_dev[i]);  // nullptr: an empty drive
+            cdrom[i].insert(dev(i));  // nullptr: an empty drive
             std::printf("[probe] %s: CD-ROM, %s (%u blocks)\n", MachineConfig::drive_name(i),
                         d.image[0] ? d.image : "no disc", cdrom[i].blocks());
         } else if (drive_dev[i]) {
-            bus.attach(i % 2, drive_dev[i]);
+            bus.attach(i % 2, dev(i));
             std::printf("[probe] %s: disk %s (%zu sectors%s)\n", MachineConfig::drive_name(i), d.image,
                         drive_bytes[i].size() / 512, d.read_only ? ", read-only" : "");
         }
@@ -301,7 +321,7 @@ int main(int argc, char** argv)
             has_image[i] = drive_dev[i] != nullptr;
         const u32 bd = choose_boot_drive(mc, has_image);
         char bp[256];
-        if (bd < MachineConfig::kDrives && fw.set_boot_device(bd, *drive_dev[bd], bp, sizeof bp)) {
+        if (bd < MachineConfig::kDrives && fw.set_boot_device(bd, *dev(bd), bp, sizeof bp)) {
             fw.place_file(file.data(), static_cast<u32>(file.size()), bp);
             std::printf("[probe] start-up disk: %s\n", bp);
         }

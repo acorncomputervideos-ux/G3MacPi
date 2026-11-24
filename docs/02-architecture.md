@@ -140,7 +140,7 @@ Now (2026-11-24):
 | 0 | Circle kernel (interrupts, USB, SD, menu) and the **guest**: CPU, devices, scheduler |
 | 1 | Display: the Mac's video memory → HDMI, converted and scaled, changed rows only (`platform/common/screen_presenter`) |
 | 2 | JIT: compiles blocks to AArch64 code (`core/cpu/ppc750/jit_worker.h`); sleeps in `wfe` when idle |
-| 3 | idle (planned: disk-image I/O, then sound and networking when emulated) |
+| 3 | Disk-image I/O: reads, read-ahead and writes for every drive's image (`platform/common/disk_cache.h`); sleeps in `wfe` when idle. Sound and networking will go here when they are emulated |
 
 The display hand-off: core 0 publishes a snapshot of the display (mode,
 video memory, palette) under a sequence lock and never waits; core 1
