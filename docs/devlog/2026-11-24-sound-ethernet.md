@@ -73,3 +73,17 @@ sabotage, curl, Chromium); not yet run on a Pi.
   I/O, GPIO 6 for power, as Circle assumes). Now tried three times, with a
   clear message if it still fails. The SD package now carries the
   `g3macpi/rom`, `cd`, `hdd`, `disks` and `logs` folders.
+
+## Ethernet working in Mac OS
+
+Mac OS's Ethernet driver (lanLib, decompressed from the ROM file's
+"bmac+" parcel) was followed call by call with a new g3_host option,
+`G3_LANTRACE=sec:codefile` (it finds the code in RAM and logs every call
+through its import glue: arguments, a text argument, the result, and a
+property's value). It reads `AAPL,address` (one word: the mac-io base, set
+by Mac OS), switches the cell on through the feature control register
+(mac-io + 0x38, bits 29-31) and reads it back: our PIC window read 0 there,
+so the driver gave up. With FCR/MBCR/aux kept as registers it went on to
+`cell-id`, which our node lacked (nrNotFoundErr); its code compares the
+value with 0xA1/0xB1/0xC1/0xC2/0xC3/0xC7, and 0xC7 is Paddington's cell.
+With both, AppleTalk activates and the Mac sends its address probes.

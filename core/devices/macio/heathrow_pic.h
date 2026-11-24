@@ -63,6 +63,16 @@ public:
     // them as DMA interrupts, DMA_ETHERNET_Tx/Rx); acked in the IRQ 32-63 bank.
     static constexpr u64 kDmaSources = 0x7FFull | (3ull << 32);
 
+    // The chip's other registers in this window (Heathrow/Paddington, per
+    // DingusPPC's macio.h and Linux's feature.c): 0x34 MBCR / ID, 0x38 the
+    // feature control register (FCR), 0x3C auxiliary control. They are kept
+    // as written: Mac OS's Ethernet driver (lanLib) switches the BMAC cell
+    // on through FCR bits 29-31 (enable, transceiver enable, reset; DingusPPC
+    // MIO_OH_FC_ETH_*) and reads them back, giving up when they read 0 (seen
+    // in a trace). No side effects are modelled.
+    static constexpr u32 kFcrOffset = 0x38;
+    u32 fcr() const { return misc_[(kFcrOffset - 0x30) >> 2]; }
+
     // MmioDevice
     u32 mmio_read(u32 offset, u32 size) override;
     void mmio_write(u32 offset, u32 size, u32 value) override;
@@ -73,6 +83,7 @@ private:
     u32 bank_bits(u64 v, int bank) const { return static_cast<u32>(v >> (32 * bank)); }
     void update_output();
 
+    u32 misc_[4] = {};  // 0x30, 0x34, 0x38 (FCR), 0x3C
     u64 events_ = 0;
     u64 enable_ = 0;
     u64 levels_ = 0;

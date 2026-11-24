@@ -467,6 +467,9 @@ TEST_CASE("firmware/bw-tree/sound_and_ethernet")
     CHECK_EQ(load_be32(p), 42u);
     CHECK_EQ(load_be32(p + 4), 32u);
     CHECK_EQ(load_be32(p + 8), 33u);
+    REQUIRE(t.get_property(b.n.ethernet, "cell-id", p, len));  // Mac OS's lanLib needs it
+    REQUIRE(len == 4u);
+    CHECK_EQ(load_be32(p), 0xC7u);
     const BwMachine m;
     for (const char* prop : {"local-mac-address", "mac-address"}) {
         REQUIRE(t.get_property(b.n.ethernet, prop, p, len));

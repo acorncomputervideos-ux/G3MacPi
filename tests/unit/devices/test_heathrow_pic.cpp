@@ -228,3 +228,20 @@ TEST_CASE("devices/heathrow_pic/ethernet_dma_lines_in_the_second_bank")
     out_le32(f.bus, kAck1, 1u << 10);
     CHECK_EQ(in_le32(f.bus, kLevel1) & (1u << 10), 1u << 10);
 }
+
+TEST_CASE("devices/heathrow_pic/feature_control_register_kept")
+{
+    // FCR at window + 0x38 (and 0x30-0x3F around it) reads back what was
+    // written; Mac OS's Ethernet driver checks its BMAC bits that way.
+    Fixture f;
+    CHECK_EQ(in_le32(f.bus, kBase + 0x38), 0u);
+    out_le32(f.bus, kBase + 0x38, 0xE0000000u);
+    CHECK_EQ(in_le32(f.bus, kBase + 0x38), 0xE0000000u);
+    CHECK_EQ(f.pic.fcr(), 0xE0000000u);
+    out_le32(f.bus, kBase + 0x3C, 0x12345678u);
+    CHECK_EQ(in_le32(f.bus, kBase + 0x3C), 0x12345678u);
+    CHECK_EQ(in_le32(f.bus, kBase + 0x38), 0xE0000000u);
+    // Not an interrupt register: nothing raised, the banks untouched.
+    CHECK(!f.cpu_irq);
+    CHECK_EQ(in_le32(f.bus, kEnable0), 0u);
+}

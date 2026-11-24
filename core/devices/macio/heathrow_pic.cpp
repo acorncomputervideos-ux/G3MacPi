@@ -65,6 +65,8 @@ int HeathrowPic::bank_for_offset(u32 offset)
 
 u32 HeathrowPic::mmio_read(u32 offset, u32 size)
 {
+    if (offset >= 0x30 && offset < 0x40)
+        return le_reg_read(misc_[(offset - 0x30) >> 2], offset & 3, size);
     const int bank = bank_for_offset(offset);
     if (bank < 0)
         return 0;  // unused part of the window reads as 0
@@ -84,6 +86,11 @@ u32 HeathrowPic::mmio_read(u32 offset, u32 size)
 
 void HeathrowPic::mmio_write(u32 offset, u32 size, u32 value)
 {
+    if (offset >= 0x30 && offset < 0x40) {
+        u32& r = misc_[(offset - 0x30) >> 2];
+        r = le_reg_write(r, offset & 3, size, value);
+        return;
+    }
     const int bank = bank_for_offset(offset);
     if (bank < 0)
         return;

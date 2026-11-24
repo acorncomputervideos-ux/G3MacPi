@@ -20,8 +20,10 @@
 #include "platform/common/cpu_selftest.h"
 #include "tools/a64sim/a64_sim.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
+#include "core/machine/bw_firmware.h"
 #include "core/machine/yosemite.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/machine_state.h"
@@ -357,6 +359,55 @@ int main(int argc, char** argv)
         }
     }
     size_t next_key = 0;
+    // G3_LANTRACE=sec:codefile: from guest second sec, find the code in
+    // codefile (a PEF code section, e.g. a driver taken from the ROM file)
+    // in RAM and log its calls through import glue (lwz r12,d(r2) ...
+    // bctr): r3-r6, a text argument and the result. Experiments.
+    struct LanTrace {
+        u32 start = 0;
+        std::vector<u8> code;
+        u32 base = 0;  // physical, 0 = not found yet
+        std::vector<u32> bases;  // every copy found
+        std::vector<bool> stub;
+        ppc::Ppc750* cpu = nullptr;
+        u8* ram = nullptr;
+        u32 ram_size = 0;
+        u32 pending_lr_pa = 0, pending_stub = 0, pending_buf = 0;
+        u32 shown = 0;
+        std::string text(u32 ea) const
+        {
+            u32 pa;
+            std::string t;
+            for (u32 i = 0; i < 40; ++i) {
+                if (!cpu->probe_translate(ea + i, false, pa) || pa >= ram_size)
+                    return "";
+                const u8 c = ram[pa];
+                if (c == 0)
+                    break;
+                if (c < 32 || c > 126)
+                    return "";
+                t += static_cast<char>(c);
+            }
+            return t.size() >= 3 ? t : "";
+        }
+    };
+    static LanTrace lan;
+    bool lan_armed = false;
+    if (const char* lt = std::getenv("G3_LANTRACE")) {
+        char* end = nullptr;
+        lan.start = static_cast<u32>(std::strtoul(lt, &end, 10));
+        if (end && *end == ':')
+            read_file(end + 1, lan.code);
+        lan.stub.assign(lan.code.size() / 4, false);
+        for (size_t k = 0; k + 4 <= lan.code.size(); k += 4) {
+            const u32 w = (lan.code[k] << 24) | (lan.code[k + 1] << 16) | (lan.code[k + 2] << 8) | lan.code[k + 3];
+            if ((w & 0xFFFF0000u) == 0x81820000u && (w & 0x8000))  // lwz r12, -d(r2)
+                lan.stub[k / 4] = true;
+        }
+        lan.cpu = &session.machine()->cpu();
+        lan.ram = ram.data();
+        lan.ram_size = static_cast<u32>(ram.size());
+    }
     size_t next_step = 0;
     s32 move_x = 0, move_y = 0;
     u32 button = 0;
@@ -399,6 +450,68 @@ int main(int argc, char** argv)
                     session.key(k.keys[i], false);
                 std::printf("[g3_host] keys pressed at %u s\n", s);
             }
+            if (!lan.code.empty() && !lan_armed && s >= lan.start && slice == 0) {
+                lan_armed = true;
+                lan.cpu->set_step_hook([](void* c, const ppc::CpuState& st) {
+                    auto* l = static_cast<LanTrace*>(c);
+                    // Look for copies of the code now and then (one may be
+                    // loaded later).
+                    static u32 tries = 0;
+                    if ((++tries & 0x3FFFFF) == 1) {
+                        for (u32 a = 0; a + l->code.size() <= l->ram_size; a += 4)
+                            if (std::memcmp(l->ram + a, l->code.data(), 64) == 0 &&
+                                std::find(l->bases.begin(), l->bases.end(), a) == l->bases.end()) {
+                                l->bases.push_back(a);
+                                std::printf("[lan] code found at physical %#x\n", a);
+                            }
+                    }
+                    u32 pa;
+                    if (!l->cpu->probe_translate(st.pc, false, pa))
+                        return;
+                    for (u32 b : l->bases)
+                        if (pa >= b && pa < b + l->code.size())
+                            l->base = b;
+                    if (l->pending_lr_pa && pa == l->pending_lr_pa) {
+                        if (l->shown < 4000)
+                            std::printf("[lan]   -> r3 = %#x (%d)\n", st.gpr[3], static_cast<s32>(st.gpr[3]));
+                        if (l->pending_buf) {  // a property was read: its value
+                            std::printf("[lan]      value:");
+                            for (u32 i = 0; i < 8; ++i) {
+                                u32 bpa;
+                                if (!l->cpu->probe_translate(l->pending_buf + 4 * i, false, bpa) || bpa + 4 > l->ram_size)
+                                    break;
+                                std::printf(" %08x", load_be32(l->ram + bpa));
+                            }
+                            std::printf("\n");
+                            l->pending_buf = 0;
+                        }
+                        l->pending_lr_pa = 0;
+                    }
+                    if (pa < l->base || pa >= l->base + l->code.size())
+                        return;
+                    const u32 off = pa - l->base;
+                    static bool entered = false;
+                    if (!entered) {
+                        entered = true;
+                        std::printf("[lan] first instruction run: code+%#x (pc %#x)\n", off, st.pc);
+                    }
+                    if (!l->stub[off / 4] || l->shown >= 4000 || off == 0x3994 || off == 0x379c || off == 0x3a24 || off == 0x3a3c)
+                        return;
+                    ++l->shown;
+                    u32 lr_pa = 0;
+                    l->cpu->probe_translate(st.lr(), false, lr_pa);
+                    std::string args;
+                    for (u32 r = 3; r <= 6; ++r) {
+                        const std::string t = l->text(st.gpr[r]);
+                        if (!t.empty())
+                            args += " r" + std::to_string(r) + "=\"" + t + "\"";
+                    }
+                    std::printf("[lan] stub %#x from %#x: r3=%#x r4=%#x r5=%#x r6=%#x%s\n", off,
+                                lr_pa - l->base, st.gpr[3], st.gpr[4], st.gpr[5], st.gpr[6], args.c_str());
+                    l->pending_lr_pa = lr_pa;
+                    l->pending_buf = !l->text(st.gpr[4]).empty() ? st.gpr[5] : 0;
+                }, &lan);
+            }
             session.run(10000000000ull);  // 10 ms of guest time
             if (video && slice % 4 == 3) {     // every 40 ms
                 video_frame(session, frame);
@@ -416,6 +529,25 @@ int main(int argc, char** argv)
     }
     if (session.halted())
         std::printf("[g3_host] the CPU halted (checkstop)\n");
+    // G3_TREEDUMP=1: the device tree's mac-io nodes and their properties after
+    // the run (Mac OS's ROM file adds driver properties to the nodes it knows).
+    if (std::getenv("G3_TREEDUMP") && session.firmware()) {
+        of::DeviceTree& t = session.firmware()->tree();
+        const of::BwNodes& n = session.firmware()->nodes();
+        const of::Phandle list[] = {n.macio, n.ata[0], n.scsi, n.davbus, n.sound, n.ethernet, n.escc_a, n.cuda};
+        for (of::Phandle h : list) {
+            if (h == of::kNone)
+                continue;
+            std::printf("[tree] node %s:", t.name(h));
+            for (const char* p = t.next_property(h, nullptr); p; p = t.next_property(h, p)) {
+                const u8* v = nullptr;
+                u32 len = 0;
+                t.get_property(h, p, v, len);
+                std::printf(" %s(%u)", p, len);
+            }
+            std::printf("\n");
+        }
+    }
     {
         MacioDavbus& snd = session.machine()->macio().sound();
         MacioBmac& eth = session.machine()->macio().ethernet();

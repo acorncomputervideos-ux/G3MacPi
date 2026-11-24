@@ -421,6 +421,13 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_string(n.ethernet, "compatible", "bmac+");
         t.set_property(n.ethernet, "local-mac-address", m.mac_address, 6);
         t.set_property(n.ethernet, "mac-address", m.mac_address, 6);
+        // cell-id: which Ethernet cell this is. Mac OS's Ethernet driver
+        // (lanLib, from the ROM file's "bmac+" parcel) reads it, gives up
+        // without it (nrNotFoundErr, seen in a trace), and compares its low
+        // 16 bits with 0xA1, 0xB1, 0xC1, 0xC2, 0xC3 and 0xC7 (its code);
+        // 0xC7 is Paddington's BMAC+ (DingusPPC's EthernetCellId, also what
+        // the cell's CHIPID register reads).
+        t.set_int(n.ethernet, "cell-id", MacioBmac::kChipId);
     }
     const u32 nvram_reg[2] = {0x60000, 0x20000};
     n.nvram = cell(t, n.macio, n.pic, "nvram", "nvram", nvram_reg, 2, nullptr, 0);

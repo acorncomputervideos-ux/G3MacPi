@@ -15,6 +15,8 @@
 | DMA | transmit at mac-io + 0x8200, receive + 0x8300 | DingusPPC |
 | Interrupts | 42 (cell), 32 (tx DMA), 33 (rx DMA); the DMA ones are latched like the other DMA lines | a real B&W's Linux log; DingusPPC |
 | Device tree | `ethernet`, type `network`, compatible `bmac+`, three reg and three interrupts, `mac-address`/`local-mac-address` | Linux bmac.c |
+| `cell-id` | 0xC7 (4-byte integer) | Mac OS's lanLib reads it and compares its low 16 bits with 0xA1, 0xB1, 0xC1, 0xC2, 0xC3, 0xC7 (its code); 0xC7 = Paddington (DingusPPC EthernetCellId) |
+| Cell enable | FCR (mac-io + 0x38) bits 29-31: enable, transceiver enable, reset | DingusPPC MIO_OH_FC_ETH_*; lanLib sets them and reads them back |
 | Receive | INPUT_LAST descriptors; the length is taken from the residual count; the 4-byte CRC stays when RXCFG 0x100 is set | Linux bmac.c |
 
 ## Model
@@ -46,9 +48,13 @@ traffic without promiscuous mode.
 - Unit tests: registers and PHY as Linux's driver drives them, transmit
   ring, receive ring with lengths from the residual and CRC, waiting for
   descriptors, filters; PIC handling of IRQs 32/33; sabotage runs fail them.
-- Mac OS 9.2.1: at start-up it writes the PHY's control register twice
-  (MII). Turning AppleTalk on (AppleTalk control panel, from the CD) gives
-  "An error occurred attempting to use Ethernet" **without any access to
-  the cell's registers, its DMA channels or its interrupt enables** — the
-  failure is in Mac OS's software before the hardware; to be found.
+- Mac OS 9.2.1 (from the CD): turning AppleTalk on in the AppleTalk
+  control panel **works**: no error, and the Mac sends AppleTalk address
+  probes (802.3 frames to 09:00:07:FF:FF:FF) through the cell. Found by
+  tracing Mac OS's Ethernet driver (lanLib, the ROM file's "bmac+" parcel)
+  call by call (`g3_host` `G3_LANTRACE`): it first gave up because the
+  feature control register read back 0 (now kept, see heathrow-pic), then
+  because the node had no `cell-id`.
+- Not yet seen: Mac OS receiving frames (nothing answers on the host
+  here; the receive path has unit tests).
 - The Pi side is built but not yet run on hardware.
