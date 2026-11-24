@@ -3,6 +3,7 @@
 // app/circle/settings.cpp — see settings.h.
 
 #include "settings.h"
+#include "platform/common/frame_copy.h"
 #include "platform/common/menu_painter.h"
 
 #include <circle/string.h>
@@ -228,22 +229,63 @@ static boolean ScreenSurfaceOf (CScreenDevice *pScreen, g3::ScreenSurface &Surfa
 	return TRUE;
 }
 
+// Painting straight into the frame buffer flickers: each repaint shows the
+// bare desktop for a moment before the window is drawn over it. So paint
+// into a back buffer the size of the screen, then copy the rows that
+// changed (platform/common/frame_copy.h).
+static g3::ScreenSurface BackBufferFor (const g3::ScreenSurface &Screen)
+{
+	static u8 *s_pBuffer = 0;
+	static unsigned s_nSize = 0;
+	unsigned nSize = Screen.pitch * Screen.height;
+	if (nSize > s_nSize)
+	{
+		delete [] s_pBuffer;
+		s_pBuffer = new u8[nSize];
+		s_nSize = s_pBuffer != 0 ? nSize : 0;
+	}
+	g3::ScreenSurface Back = Screen;
+	Back.base = s_pBuffer;
+	return Back;
+}
+
+static void Present (const g3::ScreenSurface &Back, const g3::ScreenSurface &Screen)
+{
+	g3::copy_changed_rows (Back.base, Back.pitch, Screen.base, Screen.pitch,
+			       Screen.width * (Screen.depth / 8), Screen.height);
+}
+
 void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
 {
-	// The menu as a classic Mac desktop (platform/common/menu_painter.h),
-	// drawn straight into the frame buffer.
+	// The menu as a classic Mac desktop (platform/common/menu_painter.h).
 	g3::ScreenSurface Surface;
-	if (ScreenSurfaceOf (pScreen, Surface))
+	if (!ScreenSurfaceOf (pScreen, Surface))
 	{
-		g3::MenuPainter::paint (Screen, Surface);
+		return;
 	}
+	g3::ScreenSurface Back = BackBufferFor (Surface);
+	if (Back.base == 0)
+	{
+		g3::MenuPainter::paint (Screen, Surface);	// no memory: draw directly
+		return;
+	}
+	g3::MenuPainter::paint (Screen, Back);
+	Present (Back, Surface);
 }
 
 void DrawSplash (CScreenDevice *pScreen, const char *pMessage, const char *pHint)
 {
 	g3::ScreenSurface Surface;
-	if (ScreenSurfaceOf (pScreen, Surface))
+	if (!ScreenSurfaceOf (pScreen, Surface))
+	{
+		return;
+	}
+	g3::ScreenSurface Back = BackBufferFor (Surface);
+	if (Back.base == 0)
 	{
 		g3::MenuPainter::paint_splash (Surface, pMessage, pHint);
+		return;
 	}
+	g3::MenuPainter::paint_splash (Back, pMessage, pHint);
+	Present (Back, Surface);
 }
