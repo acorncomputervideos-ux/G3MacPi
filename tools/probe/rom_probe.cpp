@@ -919,8 +919,9 @@ int main(int argc, char** argv)
             for (u64 t = 0; slice && t < ms && !fw.client_exited(); t += slice) {
                 m.run_for(slice * 1000000000ull);
                 const auto& st = m.cpu().state();
-                std::printf("[sample] %6llu ms  pc=%08X lr=%08X msr=%08X r1=%08X r3=%08X r24=%08X r25=%08X  %llu insns\n",
-                            static_cast<unsigned long long>(t + slice), st.pc, st.lr(), st.msr, st.gpr[1], st.gpr[3],
+                std::printf("[sample] %6llu ms  pc=%08X lr=%08X msr=%08X hid0=%08X r1=%08X r3=%08X r24=%08X r25=%08X  %llu insns\n",
+                            static_cast<unsigned long long>(t + slice), st.pc, st.lr(), st.msr,
+                            st.spr[ppc::spr::HID0], st.gpr[1], st.gpr[3],
                             st.gpr[24], st.gpr[25], static_cast<unsigned long long>(m.cpu().instructions_executed()));
                 std::fflush(stdout);
             }

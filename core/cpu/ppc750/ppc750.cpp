@@ -141,7 +141,7 @@ void Ppc750::run(u64 count)
     ram_ = mem_.direct_window(ram_base_, ram_size_);
     fetch_host_ = nullptr;
     if (step_hook_) {
-        for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i) {
+        for (u64 i = 0; i < count && !checkstop_ && !break_run_ && !dozing(); ++i) {
             step();
             step_hook_(step_ctx_, s_);
         }
@@ -149,7 +149,7 @@ void Ppc750::run(u64 count)
         (static_cast<u64>(cache_->pages()) << BlockCache::kPageShift) >= ram_size_) {
         run_blocks(count);
     } else {
-        for (u64 i = 0; i < count && !checkstop_ && !break_run_; ++i)
+        for (u64 i = 0; i < count && !checkstop_ && !break_run_ && !dozing(); ++i)
             step();
     }
     break_run_ = false;

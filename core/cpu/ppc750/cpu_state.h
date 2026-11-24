@@ -15,6 +15,14 @@
 
 namespace g3::ppc {
 
+// --- HID0 power-saving modes (750 UM 2.1.2.1, table 2-4; 10.2) -------------------
+namespace hid0 {
+constexpr u32 DOZE  = 1u << 23;  // bit 8
+constexpr u32 NAP   = 1u << 22;  // bit 9
+constexpr u32 SLEEP = 1u << 21;  // bit 10
+constexpr u32 DPM   = 1u << 20;  // bit 11: dynamic power management
+} // namespace hid0
+
 // --- Machine State Register (PEM 2.3.1; 750 UM 2.1.3.1) ---------------------
 namespace msr {
 constexpr u32 POW = 1u << 18;  // bit 13: power management enable

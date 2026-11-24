@@ -164,6 +164,16 @@ public:
     // compiles here again. Only while the CPU isn't running.
     void set_jit_worker(JitWorker* w);
     const JitStats& jit_stats() const { return jit_stats_; }
+    // Power saving (750 UM 10.2): with MSR[POW] set and a mode selected in
+    // HID0 (doze, nap or sleep) the processor stops until an interrupt
+    // wakes it. Mac OS's idle loop does this. run() executes nothing while
+    // the CPU dozes and no interrupt can be taken (MSR[EE] and an external
+    // or decrementer interrupt pending); taking one clears MSR[POW].
+    bool dozing() const
+    {
+        return (s_.msr & msr::POW) && (s_.spr[spr::HID0] & (hid0::DOZE | hid0::NAP | hid0::SLEEP)) &&
+               !((s_.msr & msr::EE) && (external_pending_ || dec_pending_));
+    }
     // Ends the current run() after the instruction executing now (e.g. after a
     // decrementer write, so the next expiry is planned again).
     void break_run()

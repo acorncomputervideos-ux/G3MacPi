@@ -21,7 +21,7 @@
 //
 // Chaining: at its end a block looks up the next one itself, with the
 // checks run_blocks makes between blocks (exit_, a pending interrupt with
-// MSR[EE], the fetch page and MSR[IR|PR] unchanged, a valid block with
+// MSR[EE], MSR[POW], the fetch page and MSR[IR|PR] unchanged, a valid block with
 // code, the run budget), and jumps into it past its prologue (word
 // kChainEntry), keeping the first block's frame. Any check failing returns
 // to run_blocks, which does the same thing the slow way.
@@ -539,6 +539,8 @@ struct JitCompiler {
         a.orr(false, X10, X10, X11);
         a.cbnz(false, X10, out);
         a.bind(no_irq);
+        // MSR[POW]: perhaps dozing (Ppc750::dozing); run_blocks decides.
+        a.tbnz(X9, bit_of(msr::POW), out);
         // The fetch page: still valid, same effective page, same MSR[IR|PR].
         a.ldr(false, X8, X20, pc_off());              // w8 = the next PC
         load_field(true, X10, fetch_host_off, 8);

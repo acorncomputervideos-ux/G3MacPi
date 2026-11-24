@@ -1082,3 +1082,42 @@ TEST_CASE("platform/jitreport/top_list_order")
     CHECK_EQ(format_jit_report(empty, line, sizeof line), 0u);
     CHECK_EQ(line[0], 0);
 }
+
+BOTH(dozing_stops_until_an_interrupt)
+{
+    // The idle loop sets MSR[POW] with HID0[DOZE]: run() then executes
+    // nothing (in every mode, chained code included) until an interrupt
+    // MSR[EE] lets in is pending; taking it clears POW.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, mtmsr(10)},          // POW | EE | ME: doze
+            {0x5008, isync()},
+            {0x500C, b(-0xC)},            // back to the top
+            {0x500, addi(4, 4, 1)},       // external interrupt handler
+            {0x504, rfi()},               // back (SRR1 has no POW)
+        });
+        CpuState& s = m->cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[10] = msr::POW | msr::EE | msr::ME;
+        s.spr[spr::HID0] = hid0::DOZE;
+    }
+    for (int round = 0; round < 6; ++round) {
+        for (Machine* m : {&a, &c}) {
+            m->cpu.run(500);
+            CHECK(m->cpu.dozing());
+            const u64 n = m->cpu.instructions_executed();
+            m->cpu.run(500);                 // asleep: nothing runs
+            CHECK_EQ(m->cpu.instructions_executed(), n);
+            m->cpu.set_external_interrupt(true);
+            CHECK(!m->cpu.dozing());         // an interrupt can be taken
+            m->cpu.run(2);                   // taken, then the handler's addi
+            m->cpu.set_external_interrupt(false);
+        }
+        CHECK(same(a, c, "doze", round, 0));
+    }
+    CHECK_EQ(c.cpu.state().gpr[4], 6u);      // woken six times
+    CHECK(c.cpu.state().gpr[3] >= 6u);
+}

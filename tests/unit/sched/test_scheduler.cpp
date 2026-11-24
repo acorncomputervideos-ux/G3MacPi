@@ -223,3 +223,33 @@ TEST_CASE("machine/loop/decrementer_written_mid_slice")
     // Taken ~51 ticks (~714 instructions) after the write, not at the end of the run.
     CHECK(at.n >= 700u && at.n <= 760u);
 }
+
+TEST_CASE("machine/loop/dozing_cpu_lets_time_pass")
+{
+    // Mac OS's idle loop: mtmsr with MSR[POW] and EE, HID0[DOZE] set. The
+    // CPU stops (750 UM 10.2) and guest time goes straight to the
+    // decrementer interrupt that wakes it, without instructions.
+    for (int doze = 0; doze < 2; ++doze) {
+        LoopMachine m;
+        m.mem.write32(0x1000, asm_ppc::mtmsr(10));
+        m.mem.write32(0x1004, asm_ppc::b(-4));
+        m.cpu.state().gpr[10] = ppc::msr::POW | ppc::msr::EE;
+        m.cpu.state().spr[ppc::spr::HID0] = doze ? ppc::hid0::DOZE : 0;
+        m.cpu.state().spr[ppc::spr::DEC] = 100;
+        m.loop.run_for(101 * kTickPs - 1);
+        CHECK(m.cpu.state().pc == 0x1000u || m.cpu.state().pc == 0x1004u);  // not woken yet
+        CHECK_EQ(m.cpu.state().tb, 100u);  // time went on all the same
+        if (doze) {
+            CHECK(m.cpu.dozing());
+            CHECK(m.cpu.instructions_executed() <= 2u);  // one mtmsr: then asleep
+        } else {
+            // Without a power-saving mode in HID0, MSR[POW] does nothing: it spins.
+            CHECK(!m.cpu.dozing());
+            CHECK(m.cpu.instructions_executed() >= 1400u);
+        }
+        m.loop.run_for(2 * kTickPs);
+        CHECK_EQ(m.cpu.state().pc, 0x900u);      // the decrementer woke it
+        CHECK_EQ(m.cpu.state().msr & ppc::msr::POW, 0u);
+        CHECK(!m.cpu.dozing());
+    }
+}

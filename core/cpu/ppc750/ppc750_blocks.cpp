@@ -285,7 +285,7 @@ BlockCache::Block* Ppc750::build_block(u32 pa, const u8* host_page)
 void Ppc750::run_blocks(u64 count)
 {
     u64 done = 0;
-    while (done < count && !checkstop_ && !break_run_) {
+    while (done < count && !checkstop_ && !break_run_ && !dozing()) {
         // Pending interrupts, the fetch from outside RAM and the fetch
         // faults: one step() each, exactly as the interpreter.
         if ((s_.msr & msr::EE) && (external_pending_ || dec_pending_)) {

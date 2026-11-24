@@ -97,14 +97,19 @@ void ExecutionLoop::run_for(u64 duration_ps)
         if (n > max_slice_)
             n = max_slice_;
 
-        if (cpu_.checkstopped()) {
-            time_q32_ = static_cast<u128>(target) << 32;  // a stopped CPU just lets time pass
+        if (cpu_.checkstopped() || cpu_.dozing()) {
+            // A stopped or dozing CPU just lets time pass, up to the next
+            // event or decrementer expiry (which may wake it).
+            const u128 t = static_cast<u128>(target) << 32;
+            if (t > time_q32_)
+                time_q32_ = t;
         } else {
             slice_first_insn_ = cpu_.instructions_executed();
             in_slice_ = true;
             cpu_.run(n);
             in_slice_ = false;
-            // run() may end early (a decrementer write): count what ran.
+            // run() may end early (a decrementer write, the CPU dozing):
+            // count what ran.
             time_q32_ += ps_per_instruction_q32_ * (cpu_.instructions_executed() - slice_first_insn_);
         }
         sync_timebase(now_ps());
