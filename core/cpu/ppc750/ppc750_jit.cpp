@@ -93,6 +93,9 @@ bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
     jit_fast_ptr_ = jit_fast_;
     fast_used_ = 0xF;
     jit_fast_drop(false);
+    jit_jump_ptr_ = jit_jump_;
+    jump_used_ = 1;
+    jit_jump_drop();
     cache_->set_hooks(&Ppc750::jit_cache_invalidated, &Ppc750::jit_cache_flushed, &Ppc750::jit_cache_marked,
                       this);
     if (!jit_emit_stubs()) {
@@ -124,6 +127,8 @@ struct JitCompiler {
     static constexpr u32 fast_addend_off = __builtin_offsetof(Ppc750::FastEntry, addend);
     static_assert(sizeof(Ppc750::FastEntry) == 16 && Ppc750::kFastSize == 256,
                   "the generated lookup assumes 16-byte entries, 4096-byte tables");
+    static_assert(sizeof(Ppc750::JumpEntry) == 16 && Ppc750::kJumpSize == 1024,
+                  "dispatch's jump cache lookup assumes 16-byte entries, 10 index bits");
     static_assert(Ppc750::kTlbSize == 256, "the generated TLB lookup assumes 256 entries");
     u32 ram_off, ram_size_off, dtlb_off, tlb_on_off, slow_off;
     Ppc750::JitStats* st;  // compile-time counts (the worker keeps its own)
@@ -139,7 +144,7 @@ struct JitCompiler {
     const u32* stub_dispatch_link = nullptr;
     u32 far_slot_off = 0;
     u32 entry_off = 0, code_pages_off = 0, dtlb_ptr_off = 0, link_block_off = 0, link_slot_off = 0;
-    u32 fast_ptr_off = 0;
+    u32 fast_ptr_off = 0, jump_ptr_off = 0, jump_used_off = 0;
     u8* kinds = nullptr;  // Ppc750::jit_word_kinds_ (diagnostics)
     void tag_one(u32 w, u8 kind)
     {
@@ -1094,10 +1099,29 @@ struct JitCompiler {
             a.str(true, ZR, base, off);               // no far link to make
         }
         a.bind(body);
-        // The fetch page: still valid, same effective page, same MSR[IR|PR].
-        Assembler::Label miss, have_fetch;
+        Assembler::Label miss, have_fetch, lookup;
         a.mov_imm32(X12, msr::IR | msr::PR);
         a.and_(false, X11, X9, X12);                  // w11 = MSR[IR|PR]
+        // The jump cache (Ppc750::JumpEntry): this PC in this mode found
+        // before, and its block's page not dropped since.
+        a.orr(true, X12, X8, X11, 32);                // the key (x8: zero-extended)
+        a.ubfx(X13, X8, 2, 10);
+        load_field(true, X10, jump_ptr_off, 8);
+        a.add(true, X13, X10, X13, 4);                // * 16: the entry
+        a.ldr(true, X10, X13, 0);
+        a.cmp(true, X10, X12);
+        a.b_cond(Assembler::NE, lookup);
+        a.ldr(true, X14, X13, 8);                     // x14 = the block
+        a.ldr(false, X15, X14, blk_pa);
+        a.lsr_imm(X15, X15, 12);
+        load_field(true, X12, gen_off, 8);
+        a.add(true, X12, X12, X15, 2);
+        a.ldr(false, X12, X12, 0);
+        a.ldr(false, X13, X14, blk_gen);
+        a.cmp(false, X12, X13);
+        a.b_cond(Assembler::EQ, enter);
+        a.bind(lookup);                               // (w11 still the mode)
+        // The fetch page: still valid, same effective page, same MSR[IR|PR].
         load_field(true, X10, fetch_host_off, 8);
         a.cbz(true, X10, miss);
         load_field(false, X10, fetch_page_off, 4);
@@ -1196,6 +1220,25 @@ struct JitCompiler {
         a.ldr(false, X13, X14, blk_gen);
         a.cmp(false, X12, X13);
         a.b_cond(Assembler::NE, out);                 // built under an older generation: dropped
+        {   // Into the jump cache (w8, w9 as dispatch got them), unless a
+            // code watch is set.
+            Assembler::Label no_fill;
+            load_field(true, X10, watch_off, 8);
+            a.cbnz(true, X10, no_fill);
+            a.mov_imm32(X12, msr::IR | msr::PR);
+            a.and_(false, X11, X9, X12);
+            a.orr(true, X12, X8, X11, 32);
+            a.ubfx(X13, X8, 2, 10);
+            load_field(true, X10, jump_ptr_off, 8);
+            a.add(true, X13, X10, X13, 4);
+            a.str(true, X12, X13, 0);
+            a.str(true, X14, X13, 8);
+            a.movz(false, X10, 1, 0);
+            u32 off = jump_used_off;
+            const Reg base = far(X19, off, 1);
+            a.strb(X10, base, off);
+            a.bind(no_fill);
+        }
         // --- x14: the next block, valid: code, budget, then into it.
         a.bind(enter);
         enter_at = a.size();
@@ -1320,6 +1363,8 @@ struct JitCompiler {
         jc.code_pages_off = off(&c.jit_code_pages_);
         jc.dtlb_ptr_off = off(&c.jit_dtlb_);
         jc.fast_ptr_off = off(&c.jit_fast_ptr_);
+        jc.jump_ptr_off = off(&c.jit_jump_ptr_);
+        jc.jump_used_off = off(&c.jump_used_);
         jc.kinds = c.jit_word_kinds_;
         jc.link_block_off = off(&c.jit_link_block_);
         jc.link_slot_off = off(&c.jit_link_slot_);
@@ -1481,8 +1526,8 @@ void Ppc750::jit_far_link(void* cpu, u32)
     auto& c = *static_cast<Ppc750*>(cpu);
     u32* mode = c.jit_far_slot_;
     c.jit_far_slot_ = nullptr;
-    if (!mode || c.jit_far_count_ >= kMaxFarLinks)
-        return;
+    if (!mode || c.jit_far_count_ >= kMaxFarLinks || c.watch_cb_)
+        return;  // (a code watch: page changes go through dispatch)
     BlockCache::Block* b = c.jit_link_block_;
     const u32 bits = c.s_.msr & (msr::IR | msr::PR);
     // Two layouts: a far b/bc (the branch at mode[3]); a computed bclr/bcctr
@@ -1524,7 +1569,21 @@ void Ppc750::jit_unlink_far(u32 page)
 }
 
 void Ppc750::jit_cache_invalidated(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->jit_unlink_far(page); }
-void Ppc750::jit_cache_flushed(void* cpu) { static_cast<Ppc750*>(cpu)->jit_far_count_ = 0; }  // the code is dead
+void Ppc750::jit_cache_flushed(void* cpu)
+{
+    Ppc750& c = *static_cast<Ppc750*>(cpu);
+    c.jit_far_count_ = 0;  // the code is dead
+    c.jit_jump_drop();     // and the blocks
+}
+
+void Ppc750::jit_jump_drop()
+{
+    if (!jump_used_)
+        return;
+    for (JumpEntry& e : jit_jump_)
+        e = JumpEntry{};
+    jump_used_ = 0;
+}
 void Ppc750::jit_cache_marked(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->jit_fast_drop_writes(page); }
 
 void Ppc750::jit_fast_drop(bool translated_only)

@@ -1655,3 +1655,49 @@ BOTH(fast_entries_kept_apart_by_privilege)
     CHECK_EQ(c.cpu.state().gpr[5], 3u);
     CHECK_EQ(c.cpu.state().gpr[6], 100u);
 }
+
+BOTH(code_watch_sees_entries_through_the_jump_cache)
+{
+    // The calls run once with no watch (links and remembered jumps are
+    // made), then again with the watch set. Inside the watched page a
+    // computed jump (6028 -> 6030) goes through dispatch while the watch
+    // is set; later a call from outside lands on 6030 directly. Every
+    // entry into the page must be reported, as without the cache.
+    struct Log {
+        u32 pcs[64] = {};
+        u32 n = 0;
+    };
+    Log logs[2];
+    Machine a(0), c(4u << 20);
+    Machine* ms[2] = {&a, &c};
+    for (u32 k = 0; k < 2; ++k) {
+        Machine& m = *ms[k];
+        place(m, {
+            {0x5000, li(8, 0x6020)}, {0x5004, mtspr(8, 8)}, {0x5008, blrl()},   // call 6020
+            {0x500C, li(8, 0x6030)}, {0x5010, mtspr(8, 8)}, {0x5014, blrl()},   // call 6030
+            {0x5018, addi(7, 7, -1)}, {0x501C, cmpwi(0, 7, 0)}, {0x5020, bne(0x5000 - 0x5020)},
+            {0x5024, b(0)},
+            {0x6020, li(10, 0x6030)}, {0x6024, mtspr(9, 10)}, {0x6028, bctr()},  // -> 6030, same page
+            {0x6030, addi(3, 3, 1)}, {0x6034, blr()},
+        });
+        CpuState& s = m.cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[7] = 3;
+        m.cpu.run(200);                         // no watch yet
+        CHECK_EQ(s.pc, 0x5024u);
+        s.pc = 0x5000;
+        s.gpr[7] = 3;
+        m.cpu.set_code_watch(0x6000, 0x6FFF, [](void* ctx, u32 pc) {
+            Log* l = static_cast<Log*>(ctx);
+            if (l->n < 64)
+                l->pcs[l->n++] = pc;
+        }, &logs[k]);
+        m.cpu.run(200);
+    }
+    CHECK(same(a, c, "watch through jumps", 0, 0));
+    CHECK_EQ(a.cpu.state().gpr[3], 12u);
+    CHECK_EQ(logs[0].n, 6u);
+    CHECK_EQ(logs[1].n, logs[0].n);
+    CHECK(std::memcmp(logs[0].pcs, logs[1].pcs, sizeof logs[0].pcs) == 0);
+}

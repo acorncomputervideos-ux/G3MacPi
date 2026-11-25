@@ -229,6 +229,7 @@ void Ppc750::flush_tlb()
     if (jit_far_count_)
         jit_unlink_far(~0u);  // links to other pages were made under the old translation
     jit_fast_drop(true);  // the translated entries came from the TLB
+    jit_jump_drop();      // EA -> block was found under the old translation
     for (u32 i = 0; i < kTlbSize; ++i) {
         itlb_[i].tag = 0;
         dtlb_[i].tag = 0;

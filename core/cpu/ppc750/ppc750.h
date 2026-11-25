@@ -120,6 +120,12 @@ public:
         watch_cb_ = cb;
         watch_ctx_ = ctx;
         fetch_host_ = nullptr;
+        // Every page change must reach dispatch's page-miss path, which
+        // checks the watch: no links to other pages (none are made while
+        // it is set, jit_far_link), no remembered jumps.
+        if (jit_far_count_)
+            jit_unlink_far(~0u);
+        jit_jump_drop();
     }
     // Decoded-block cache (JIT stage 1; docs/cpu/block-cache.md). With one
     // set (and ready), run() replays decoded blocks instead of fetching and
@@ -464,6 +470,20 @@ private:
     void jit_fast_drop(bool translated_only);
     void jit_fast_drop_writes(u32 page);
     static void jit_cache_marked(void* cpu, u32 page);
+    // The jump cache: dispatch's memory of where a jump landed. Entry
+    // (EA >> 2) & (kJumpSize - 1) holds key = EA | MSR[IR|PR] << 32 and
+    // the block found for it then. Taken again while that block's page
+    // keeps its generation; emptied when the translation changes
+    // (flush_tlb), the cache is flushed and a code watch is set. Not
+    // filled while a code watch is set (dispatch's page change checks it).
+    struct JumpEntry {
+        u64 key = 1;    // 1: no PC (they are word aligned)
+        u64 block = 0;  // BlockCache::Block*
+    };
+    static constexpr u32 kJumpSize = 1024;
+    void* jit_jump_ptr_ = nullptr;  // &jit_jump_[0]
+    u8 jump_used_ = 0;              // set by dispatch when it fills one
+    void jit_jump_drop();
     // Generates b's code at `at` (room words); words used in `size`. Reads
     // nothing of the CPU that changes while it runs (callable from the worker).
     bool jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st);
@@ -521,6 +541,7 @@ private:
     TlbEntry itlb_[kTlbSize];
     TlbEntry dtlb_[kTlbSize];
     FarLink jit_far_links_[kMaxFarLinks] = {};
+    JumpEntry jit_jump_[kJumpSize];
     FastEntry jit_fast_[4 * kFastSize];  // [MSR[PR] * 2 + MSR[DR]][page & 255]
     u8* fast_ram_ = nullptr;             // the RAM window jit_fast_ was filled for
     u32 fast_ram_size_ = 0;
