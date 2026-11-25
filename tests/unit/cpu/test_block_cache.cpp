@@ -1271,3 +1271,32 @@ BOTH(condition_register_moves)
     CHECK(same(a, c, "cr moves", 0, 0));
     CHECK(c.cpu.state().gpr[7] != 0u);
 }
+
+BOTH(supervisor_spr_read_in_user_mode)
+{
+    // mfspr SRR0 is privileged: in user mode it raises a program exception
+    // (and leaves rD alone); in supervisor mode it reads the register.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, mfspr(3, 26)},       // supervisor: r3 = SRR0
+            {0x5004, mtmsr(9)},           // to user mode
+            {0x5008, isync()},
+            {0x500C, mfspr(4, 272)},      // user: privileged -> 0x700
+            {0x5010, b(0)},
+            {0x700, addi(5, 5, 1)},
+            {0x704, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().spr[spr::SRR0] = 0x1234;
+        m->cpu.state().spr[spr::SPRG0] = 0x5678;
+        m->cpu.state().gpr[4] = 0xAAAA;
+        m->cpu.state().gpr[9] = msr::ME | msr::PR;
+        m->cpu.run(20);  // one slice: the user-mode mfspr runs in generated code
+    }
+    CHECK(same(a, c, "user mfspr", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 0x1234u);
+    CHECK_EQ(c.cpu.state().gpr[4], 0xAAAAu);   // not read
+    CHECK_EQ(c.cpu.state().gpr[5], 1u);        // the program exception handler ran
+}

@@ -542,9 +542,9 @@ struct JitCompiler {
                     cr0_from(d);
                 return true;
             }
-            case 339: {  // mfspr LR / CTR (user-readable: no exception)
+            case 339: {  // mfspr XER / LR / CTR (user-readable: no exception)
                 const u32 n = ((insn >> 16) & 31) | ((insn >> 6) & 0x3E0);
-                if (field::rc(insn) || (n != spr::LR && n != spr::CTR))
+                if (field::rc(insn) || (n != spr::LR && n != spr::CTR && n != spr::XER))
                     return false;
                 a.ldr(false, X8, X20, spr_off(n));
                 store_gpr(X8, rd);
@@ -836,6 +836,56 @@ struct JitCompiler {
             dirty_[r] = dirty1[r];  // (at most stores one value again)
         }
         tag(slow_from, Ppc750::kWordMemSlow);
+        a.bind(done);
+    }
+
+    // --- mfspr of a supervisor SPR with no side effects on read: the
+    // value in supervisor mode; in user mode (MSR[PR]) the handler, which
+    // raises the program exception (op_mfspr). As a memory access: the
+    // register cache written back before, reloaded after the handler.
+    static bool supervisor_spr_read(u32 insn)
+    {
+        if (field::opcd(insn) != 31 || field::xo10(insn) != 339 || field::rc(insn))
+            return false;
+        switch (((insn >> 16) & 31) | ((insn >> 6) & 0x3E0)) {
+        case spr::SRR0: case spr::SRR1: case spr::SPRG0: case spr::SPRG1: case spr::SPRG2: case spr::SPRG3:
+        case spr::DAR: case spr::DSISR: case spr::SDR1: case spr::HID0: case spr::HID1:
+            return true;
+        default:
+            return false;
+        }
+    }
+    void spr_read(u32 i, u32 count, const BlockOp& op, Assembler::Label& out)
+    {
+        const u32 insn = op.insn, rd = field::rd(insn);
+        const u32 n = ((insn >> 16) & 31) | ((insn >> 6) & 0x3E0);
+        Assembler::Label slow, done;
+        bool dirty0[32];
+        for (u32 r = 0; r < 32; ++r)
+            dirty0[r] = dirty_[r];
+        a.ldr(false, X9, X20, msr_off());
+        a.tbnz(X9, bit_of(msr::PR), slow);
+        a.ldr(false, X10, X20, spr_off(n));
+        store_gpr(X10, rd);
+        u32 one = 1;
+        sync(i + 1, one);
+        bool valid1[32], dirty1[32];
+        for (u32 r = 0; r < 32; ++r) {
+            valid1[r] = valid_[r];
+            dirty1[r] = dirty_[r];
+        }
+        a.b(done);
+        a.bind(slow);
+        for (u32 r = 0; r < 32; ++r)
+            dirty_[r] = dirty0[r];
+        flush();
+        call_handler(i, count, op, out);
+        for (u32 r = 0; r < 32; ++r) {
+            if (cached(r) && valid1[r])
+                a.ldr(false, host(r), X20, gpr_off(r));
+            valid_[r] = valid1[r];
+            dirty_[r] = dirty1[r];
+        }
         a.bind(done);
     }
 
@@ -1228,6 +1278,12 @@ struct JitCompiler {
             if (memory_op(op.insn, m)) {
                 memory(i, b.count, op, m, out);  // tags its own words
                 ++st->native_ops;
+                continue;
+            }
+            if (supervisor_spr_read(op.insn)) {
+                spr_read(i, b.count, op, out);
+                ++st->native_ops;
+                tag(at, Ppc750::kWordNative);
                 continue;
             }
             flush();   // the handler reads (and may change) the CpuState
