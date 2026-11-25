@@ -339,8 +339,11 @@ void Ppc750::execute_op31(u32 insn)
     case 146:  // mtmsr
         if (in_user_mode())
             privileged();
-        else
+        else {
             s_.msr = s_.gpr[field::rd(insn)];
+            if (s_.msr & msr::POW)
+                exit_ = 1;  // perhaps dozing: run_blocks decides (Ppc750::dozing)
+        }
         break;
     case 339:
         op_mfspr(insn);

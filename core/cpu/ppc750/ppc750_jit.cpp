@@ -73,6 +73,10 @@ bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
 #endif
     if (!cache_ || !code || words < 1024)
         return false;
+    // A block's end reads exit_ and the interrupt inputs as one word.
+    if (reinterpret_cast<uintptr_t>(&exit_) % 4 != 0 || reinterpret_cast<u8*>(&external_pending_) != &exit_ + 1 ||
+        reinterpret_cast<u8*>(&dec_pending_) != &exit_ + 2 || &stop_pad_ != &exit_ + 3)
+        return false;
     jit_code_ = code;
     jit_words_ = words;
     jit_used_ = 0;
@@ -900,23 +904,17 @@ struct JitCompiler {
         bool far;   // in another page: linked at run time (Ppc750::jit_far_link)
     };
     u8 dispatch_kind = 0;  // diagnostics: what kind of block end jumps to dispatch
-    void chain(Assembler::Label& out, const Static* statics, u32 nstatics, u32 own_gen, bool computed)
+    void chain(Assembler::Label& out, const Static* statics, u32 nstatics, u32 own_gen, bool computed,
+               bool cnt_in_x9)
     {
-        Assembler::Label no_irq;
-        // exit_: an exception, break_run_ (mtspr DEC), a checkstop, blocks
-        // dropped ... (everything that sets those sets exit_ too).
-        load_field(false, X8, exit_off, 1);
-        a.cbnz(false, X8, out);
-        // A pending interrupt that MSR[EE] lets in: run_blocks takes it.
-        a.ldr(false, X9, X20, msr_off());
-        a.tbz(X9, bit_of(msr::EE), no_irq);
-        load_field(false, X10, ext_off, 1);
-        load_field(false, X11, dec_off, 1);
-        a.orr(false, X10, X10, X11);
-        a.cbnz(false, X10, out);
-        a.bind(no_irq);
-        // MSR[POW]: perhaps dozing (Ppc750::dozing); run_blocks decides.
-        a.tbnz(X9, bit_of(msr::POW), out);
+        Assembler::Label stop_word, stop_checked;
+        // exit_ (an exception, break_run_ (mtspr DEC), a checkstop, blocks
+        // dropped, MSR[POW] set ...: everything that sets those sets exit_
+        // too) and the interrupt inputs, in one word: all zero is the
+        // common case; otherwise stop_word, after the rest.
+        load_field(false, X10, exit_off, 4);
+        a.cbnz(false, X10, stop_word);
+        a.bind(stop_checked);
         a.ldr(false, X8, X20, pc_off());              // w8 = the next PC
         // Targets known now (b, bc and its fall-through within the page):
         // the fetch page, MSR[IR|PR] and the page's generation are this
@@ -931,12 +929,21 @@ struct JitCompiler {
         // instructions; run_blocks and the "enter" stub do it exactly.
         Assembler::Label generic;
         if (nstatics || computed) {
-            load_field(true, X11, cnt_off, 8);
-            a.add_imm(true, X11, X11, BlockCache::kMaxOps);
+            if (cnt_in_x9) {
+                a.add_imm(true, X11, X9, BlockCache::kMaxOps);  // sync just wrote it
+            } else {
+                load_field(true, X11, cnt_off, 8);
+                a.add_imm(true, X11, X11, BlockCache::kMaxOps);
+            }
             load_field(true, X12, limit_off, 8);
             a.cmp(true, X11, X12);
             a.b_cond(Assembler::HI, generic);
         }
+        bool any_far = computed;
+        for (u32 k = 0; k < nstatics; ++k)
+            any_far = any_far || statics[k].far;
+        if (any_far)
+            a.ldr(false, X9, X20, msr_off());         // w9 = the MSR (the links' mode)
         for (u32 k = 0; k < nstatics; ++k) {
             Assembler::Label other;
             add_const(X10, X21, static_cast<u32>(statics[k].delta));
@@ -991,8 +998,18 @@ struct JitCompiler {
         }
         a.bind(generic);
         const u32 to_dispatch = a.size();
+        a.ldr(false, X9, X20, msr_off());
         a.b_abs(stub_dispatch);                       // w8: the PC, w9: the MSR
         tag(to_dispatch, dispatch_kind);
+        // Something in the stop word: exit_ stops; an interrupt input only
+        // if MSR[EE] lets it in (run_blocks takes it), else go on. (w9 may
+        // hold the instruction count: kept.)
+        a.bind(stop_word);
+        a.ubfx(X11, X10, 0, 8);
+        a.cbnz(false, X11, out);
+        a.ldr(false, X11, X20, msr_off());
+        a.tbz(X11, bit_of(msr::EE), stop_checked);
+        a.b(out);
     }
 
     // --- the shared code (once, at the start of the code buffer; see
@@ -1365,6 +1382,7 @@ struct JitCompiler {
             tag(at, Ppc750::kWordHandler);
         }
         u32 at = a.size();
+        const bool cnt_in_x9 = pending != 0;  // sync leaves the count in x9 (flush keeps it)
         sync(b.count, pending);
         flush();       // the next block, or run_blocks, reads the CpuState
         tag(at, Ppc750::kWordSync);
@@ -1378,7 +1396,7 @@ struct JitCompiler {
                             : field::xo10(last) == 16 ? Ppc750::kWordToDispatchReturn : Ppc750::kWordToDispatchCtr;
         }
         const u32 last = b.ops[b.count - 1].insn;
-        chain(out, statics, nstatics, b.gen, field::opcd(last) == 19 && is_branch(last));
+        chain(out, statics, nstatics, b.gen, field::opcd(last) == 19 && is_branch(last), cnt_in_x9);
         a.bind(out);
         a.b_abs(stub_epilogue);
         // (the branch to dispatch keeps its own tag)

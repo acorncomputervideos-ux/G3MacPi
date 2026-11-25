@@ -394,8 +394,14 @@ private:
     friend struct BlockOps;  // the specialised operations (ppc750_blocks.cpp)
     // Set by everything after which a block must not go on with its next
     // operation: exceptions, a checkstop, break_run(), an interrupt input
-    // becoming pending, blocks being dropped. Cleared at each block start.
-    u8 exit_ = 0;
+    // becoming pending, blocks being dropped, MSR[POW] set. Cleared at each
+    // block start.
+    // With the interrupt inputs after it, in one aligned word that a
+    // block's end reads at once (zero: none of them; JitCompiler::chain).
+    alignas(4) u8 exit_ = 0;
+    bool external_pending_ = false;
+    bool dec_pending_ = false;
+    u8 stop_pad_ = 0;  // always 0
     u32 fetch_pa_page_ = 0;  // physical page of fetch_host_
     void note_store(u32 pa, u32 len)
     {
@@ -497,8 +503,6 @@ private:
     void* watch_ctx_ = nullptr;
     u32 pvr_;
     u32 next_pc_ = 0;        // set by execute(); exceptions/branches overwrite
-    bool external_pending_ = false;
-    bool dec_pending_ = false;
     bool checkstop_ = false;
     fp::Tininess fp_tininess_ = fp::Tininess::BeforeRounding;
     u64 instr_count_ = 0;
