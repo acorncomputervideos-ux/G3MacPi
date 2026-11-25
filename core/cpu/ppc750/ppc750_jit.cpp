@@ -89,8 +89,7 @@ bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
     jit_gen_ = lay.gen;
     jit_code_pages_ = cache_->code_pages();
     jit_dtlb_ = dtlb_;
-    jit_far_count_ = 0;
-    far_index_rebuild();
+    far_reset();
     jit_fast_ptr_ = jit_fast_;
     fast_used_ = 0xF;
     jit_fast_drop(false);
@@ -1547,17 +1546,29 @@ void Ppc750::jit_far_link(void* cpu, u32)
     const u32 made = (mode[0] >> 5 & 0xFFFFu) | (mode[1] >> 5 & 0xFFFFu) << 16;
     if (made == key)
         return;  // linked under this key already (a computed one: to another target): keep it
-    u32 record = made != 0xFFFFFFFFu ? c.far_find(mode) : ~0u;  // linked under another key
-    if (record == ~0u) {
-        if (c.jit_far_count_ >= kMaxFarLinks)
+    BlockCache::Block* b = c.jit_link_block_;
+    const u32 page = b->pa >> BlockCache::kPageShift;
+    u32 record = made != 0xFFFFFFFFu ? c.far_find(mode) : kFarNone;  // linked under another key
+    if (record == kFarNone) {
+        record = c.far_alloc();
+        if (record == kFarNone) {
             c.jit_unlink_far(~0u);  // full: start again
-        record = c.jit_far_count_++;
-        c.jit_far_links_[record].mode = mode;
+            record = c.far_alloc();
+        }
+        FarLink& l = c.jit_far_links_[record];
+        l.mode = mode;
+        l.page = page;
+        c.far_attach(record);
         c.far_index_add(record);
+        ++c.jit_far_count_;
+    } else if (c.jit_far_links_[record].page != page) {
+        c.far_detach(record);
+        c.jit_far_links_[record].page = page;
+        c.far_attach(record);
     }
     const bool computed = (mode[4] & 0xFFE0001Fu) == (0x52800000u | 12);
     const u32 at = computed ? 8 : 4;
-    BlockCache::Block* b = c.jit_link_block_;
+    c.jit_far_links_[record].branch = at;
     u32* slot = mode + at;
     const u32* target = c.jit_code_ + (b->code - 1);
     if (computed) {
@@ -1569,30 +1580,84 @@ void Ppc750::jit_far_link(void* cpu, u32)
     mode[1] = 0x72A00000u | ((key >> 16) << 5) | 12;       // movk w12, #key hi, lsl 16
     slot[0] = 0x14000000u | (static_cast<u32>(target - slot) & 0x03FFFFFFu);
     sync_icache(mode, slot + 1);
-    c.jit_far_links_[record] = FarLink{mode, b->pa >> BlockCache::kPageShift, at};
     ++c.jit_stats_.linked_far;
 }
 
 // Undoes the far links into `page` (all of them with page = ~0u).
 void Ppc750::jit_unlink_far(u32 page)
 {
-    u32 kept = 0;
-    for (u32 i = 0; i < jit_far_count_; ++i) {
-        FarLink& l = jit_far_links_[i];
-        if (page != ~0u && l.page != page) {
-            jit_far_links_[kept++] = l;
-            continue;
+    if (page != ~0u) {
+        for (u32 r = far_bucket_[page & (kFarBuckets - 1)]; r != kFarNone;) {
+            const u32 next = jit_far_links_[r].next;
+            if (jit_far_links_[r].page == page)
+                far_release(r);
+            r = next;
         }
-        l.mode[0] = 0x52800000u | (0xFFFFu << 5) | 12;  // key 0xFFFFFFFF: matches none
-        l.mode[1] = 0x72A00000u | (0xFFFFu << 5) | 12;
-        l.mode[l.branch] = 0xD503201Fu;                  // nop
-        sync_icache(l.mode, l.mode + l.branch + 1);
-        ++jit_stats_.unlinked_far;
+        return;
     }
-    const bool removed = kept != jit_far_count_;
-    jit_far_count_ = kept;
-    if (removed)
-        far_index_rebuild();
+    for (u32 r = 0; r < far_top_; ++r)
+        if (jit_far_links_[r].mode)
+            far_release(r);
+    far_reset();
+}
+
+void Ppc750::far_release(u32 r)
+{
+    FarLink& l = jit_far_links_[r];
+    l.mode[0] = 0x52800000u | (0xFFFFu << 5) | 12;  // key 0xFFFFFFFF: matches none
+    l.mode[1] = 0x72A00000u | (0xFFFFu << 5) | 12;
+    l.mode[l.branch] = 0xD503201Fu;                  // nop
+    sync_icache(l.mode, l.mode + l.branch + 1);
+    ++jit_stats_.unlinked_far;
+    far_detach(r);
+    l.mode = nullptr;
+    l.next = far_free_;
+    far_free_ = r;
+    --jit_far_count_;
+}
+
+u32 Ppc750::far_alloc()
+{
+    if (far_free_ != kFarNone) {
+        const u32 r = far_free_;
+        far_free_ = jit_far_links_[r].next;
+        return r;
+    }
+    return far_top_ < kMaxFarLinks ? far_top_++ : kFarNone;
+}
+
+void Ppc750::far_attach(u32 r)
+{
+    FarLink& l = jit_far_links_[r];
+    u32& head = far_bucket_[l.page & (kFarBuckets - 1)];
+    l.prev = kFarNone;
+    l.next = head;
+    if (head != kFarNone)
+        jit_far_links_[head].prev = r;
+    head = r;
+}
+
+void Ppc750::far_detach(u32 r)
+{
+    FarLink& l = jit_far_links_[r];
+    if (l.prev != kFarNone)
+        jit_far_links_[l.prev].next = l.next;
+    else
+        far_bucket_[l.page & (kFarBuckets - 1)] = l.next;
+    if (l.next != kFarNone)
+        jit_far_links_[l.next].prev = l.prev;
+}
+
+void Ppc750::far_reset()
+{
+    jit_far_count_ = 0;
+    far_top_ = 0;
+    far_free_ = kFarNone;
+    for (u32& h : far_bucket_)
+        h = kFarNone;
+    for (u16& v : jit_far_index_)
+        v = 0;
+    far_index_used_ = 0;
 }
 
 namespace {
@@ -1609,37 +1674,44 @@ u32 Ppc750::far_find(const u32* mode) const
     for (u32 h = far_hash(mode);; h = (h + 1) & (kFarIndex - 1)) {
         const u32 v = jit_far_index_[h];
         if (v == 0)
-            return ~0u;
-        // (Only an active record counts: if the index were ever stale, a
-        // slot would get a second record, which undoes it on either page:
-        // too early, never too late.)
-        if (v - 1 < jit_far_count_ && jit_far_links_[v - 1].mode == mode)
+            return kFarNone;
+        if (v - 1 < far_top_ && jit_far_links_[v - 1].mode == mode)
             return v - 1;
     }
 }
 
 void Ppc750::far_index_add(u32 record)
 {
+    if (far_index_used_ >= kFarIndex / 4 * 3)
+        far_index_rebuild();  // (live records are at most half of it)
     u32 h = far_hash(jit_far_links_[record].mode);
     while (jit_far_index_[h])
         h = (h + 1) & (kFarIndex - 1);
     jit_far_index_[h] = static_cast<u16>(record + 1);
+    ++far_index_used_;
 }
 
 void Ppc750::far_index_rebuild()
 {
     for (u16& v : jit_far_index_)
         v = 0;
-    for (u32 i = 0; i < jit_far_count_; ++i)
-        far_index_add(i);
+    far_index_used_ = 0;
+    for (u32 r = 0; r < far_top_; ++r) {
+        if (!jit_far_links_[r].mode)
+            continue;
+        u32 h = far_hash(jit_far_links_[r].mode);
+        while (jit_far_index_[h])
+            h = (h + 1) & (kFarIndex - 1);
+        jit_far_index_[h] = static_cast<u16>(r + 1);
+        ++far_index_used_;
+    }
 }
 
 void Ppc750::jit_cache_invalidated(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->jit_unlink_far(page); }
 void Ppc750::jit_cache_flushed(void* cpu)
 {
     Ppc750& c = *static_cast<Ppc750*>(cpu);
-    c.jit_far_count_ = 0;  // the code is dead
-    c.far_index_rebuild();
+    c.far_reset();  // the code is dead
     c.jit_jump_drop();     // and the blocks
 }
 

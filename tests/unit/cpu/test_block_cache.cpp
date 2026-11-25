@@ -1843,3 +1843,47 @@ BOTH(fast_entries_past_the_list_are_dropped_too)
     CHECK_EQ(c.cpu.state().gpr[5], 60u + 60u + 60u * 100u);
     CHECK_EQ(c.cpu.state().pc, 0x503Cu);
 }
+
+BOTH(far_link_relinked_then_target_rewritten)
+{
+    // The far jump at 0x502C is linked under IBAT1 -> PA 0x60000, then
+    // under IBAT1 -> PA 0x80000 (the same slot, now into another page);
+    // then the code at PA 0x80000 is rewritten: the link must be undone
+    // with that page's blocks, so the new instruction runs.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, addi(3, 3, 1)},
+            {0x25004, cmpwi(0, 3, 5)},
+            {0x25008, bne(0xC)},                // -> 0x5014
+            {0x2500C, mtspr(531, 12)},          // IBAT1L: -> PA 0x80000
+            {0x25010, isync()},
+            {0x25014, cmpwi(0, 3, 10)},
+            {0x25018, bne(0xC)},                // -> 0x5024
+            {0x2501C, stw(13, 0, 14)},          // rewrites PA 0x80000
+            {0x25020, isync()},
+            {0x25024, cmpwi(0, 3, 15)},
+            {0x25028, beq(0xC)},                // -> 0x5034: done
+            {0x2502C, b(0x40000 - 0x502C)},     // far: EA 0x40000
+            {0x25034, b(0)},
+            {0x60000, addi(4, 4, 1)},
+            {0x60004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // IBAT1U: EA 0x40000, 128 KB, Vs
+        s.spr[spr::IBAT0U + 3] = 0x00060002u;   // IBAT1L: -> PA 0x60000
+        s.gpr[12] = 0x00080002u;
+        s.gpr[13] = addi(4, 4, 1000);
+        s.gpr[14] = 0x80000u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "relinked, rewritten", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 4u * 1u + 5u * 100u + 5u * 1000u);
+}

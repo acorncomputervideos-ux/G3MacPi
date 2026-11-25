@@ -449,9 +449,10 @@ private:
     // Links to blocks in other pages (ppc750_jit.cpp).
     static constexpr u32 kMaxFarLinks = 16384;
     struct FarLink {
-        u32* mode;   // the slot's movz
+        u32* mode;   // the slot's movz (nullptr: a free record)
         u32 page;    // the target's physical page
         u32 branch;  // the branch is mode[branch] (4: far b/bc; 8: bclr/bcctr)
+        u32 prev, next;  // the chain of the page's bucket; next: also the free list
     };
     // Translation IDs (docs/cpu/jit-a64.md): one per layout of the segment
     // registers and BATs seen since the last flush_tlb, so that switching
@@ -476,13 +477,26 @@ private:
     u32 jit_stub_dispatch_link_ = 0;
     static void jit_far_link(void* cpu, u32 unused);
     void jit_unlink_far(u32 page);
-    // Which record holds a slot (open addressing on the slot's address;
-    // value record + 1, 0 empty; at most half full). A slot that is linked
-    // has exactly one record: a relink under another key updates it.
+    // The records stay where they are (free ones on a list) and are
+    // chained per bucket of target pages, so undoing the links into one
+    // page (a store into code) walks that page's few, not all of them.
+    // Which record holds a slot: open addressing on the slot's address
+    // (value record + 1, 0 empty), rebuilt when three quarters full; an
+    // entry is good only if its record still holds that slot. A slot that
+    // is linked has exactly one record: a relink under another key
+    // updates it.
+    static constexpr u32 kFarNone = ~0u;
+    static constexpr u32 kFarBuckets = 4096;
     static constexpr u32 kFarIndex = 2 * kMaxFarLinks;
+    u32 far_top_ = 0, far_free_ = kFarNone, far_index_used_ = 0;
     u32 far_find(const u32* mode) const;
     void far_index_add(u32 record);
     void far_index_rebuild();
+    u32 far_alloc();
+    void far_attach(u32 record);
+    void far_detach(u32 record);
+    void far_release(u32 record);  // undoes its link, frees it
+    void far_reset();              // no records, no index
     static void jit_cache_invalidated(void* cpu, u32 page);
     static void jit_cache_flushed(void* cpu);
     // The fast data table (ppc750_jit.cpp, docs/cpu/jit-a64.md): what
@@ -578,6 +592,7 @@ private:
     TlbEntry dtlb_[kTlbSize];
     FarLink jit_far_links_[kMaxFarLinks] = {};
     u16 jit_far_index_[kFarIndex] = {};
+    u32 far_bucket_[kFarBuckets] = {};
     XlatLayout xlat_layouts_[kXlatLayouts];
     JumpEntry jit_jump_[kJumpSize];
     FastEntry jit_fast_[4 * kFastSize];  // [MSR[PR] * 2 + MSR[DR]][page & 255]
