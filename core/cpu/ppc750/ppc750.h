@@ -437,6 +437,27 @@ private:
     void jit_unlink_far(u32 page);
     static void jit_cache_invalidated(void* cpu, u32 page);
     static void jit_cache_flushed(void* cpu);
+    // The fast data table (ppc750_jit.cpp, docs/cpu/jit-a64.md): what
+    // generated loads and stores look up. One table of kFastSize entries per
+    // MSR[DR, PR] combination, indexed by the effective page's low bits. A
+    // hit means the whole access lies in that page and in the RAM window;
+    // for stores also that the page may be written (real mode, or a TLB
+    // entry with write permission and its C bit set) and holds no blocks.
+    // Filled by jit_fill from what the soft TLB already knows; emptied with
+    // it (flush_tlb), when a page gets blocks (writes only) and when the RAM
+    // window moves.
+    struct FastEntry {
+        u32 read = kFastNone;   // the effective page number, or kFastNone
+        u32 write = kFastNone;
+        u64 addend = 0;         // host address = addend + effective address
+    };
+    static constexpr u32 kFastNone = 0xFFFFFFFFu;  // no page number (they have 20 bits)
+    static constexpr u32 kFastSize = 256;
+    void* jit_fast_ptr_ = nullptr;  // &jit_fast_[0]
+    static void jit_fill(void* cpu, u32 ea);
+    void jit_fast_drop(bool translated_only);
+    void jit_fast_drop_writes(u32 page);
+    static void jit_cache_marked(void* cpu, u32 page);
     // Generates b's code at `at` (room words); words used in `size`. Reads
     // nothing of the CPU that changes while it runs (callable from the worker).
     bool jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st);
@@ -496,6 +517,10 @@ private:
     TlbEntry itlb_[kTlbSize];
     TlbEntry dtlb_[kTlbSize];
     FarLink jit_far_links_[kMaxFarLinks] = {};
+    FastEntry jit_fast_[4 * kFastSize];  // [MSR[PR] * 2 + MSR[DR]][page & 255]
+    u8* fast_ram_ = nullptr;             // the RAM window jit_fast_ was filled for
+    u32 fast_ram_size_ = 0;
+    u32 fast_used_ = 0;                  // bit t: table t may hold entries
     // The JIT profile.
     u64 jit_profile_[kJitOpIds] = {};
     u32 jit_sample_[kJitOpIds] = {};  // written by whoever compiles (relaxed atomics)

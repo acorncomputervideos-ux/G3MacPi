@@ -100,12 +100,15 @@ public:
     void invalidate_page(u32 page);
     void flush();
 
-    // Told of a page's blocks being dropped, and of a flush (the JIT's
-    // links into them must go); nullptr: none.
-    void set_hooks(void (*invalidated)(void*, u32 page), void (*flushed)(void*), void* ctx)
+    // Told of a page's blocks being dropped, of a flush (the JIT's links
+    // into them must go) and of a page getting its first block (stores to
+    // it must be seen again); nullptr: none.
+    void set_hooks(void (*invalidated)(void*, u32 page), void (*flushed)(void*), void (*marked)(void*, u32 page),
+                   void* ctx)
     {
         on_invalidated_ = invalidated;
         on_flushed_ = flushed;
+        on_marked_ = marked;
         hook_ctx_ = ctx;
     }
     // Set to 1 when blocks are dropped (the code the CPU is running may
@@ -142,6 +145,7 @@ private:
     u8 own_signal_ = 0;
     void (*on_invalidated_)(void*, u32) = nullptr;
     void (*on_flushed_)(void*) = nullptr;
+    void (*on_marked_)(void*, u32) = nullptr;
     void* hook_ctx_ = nullptr;
     u8* signal_ = &own_signal_;
     Stats stats_;

@@ -83,7 +83,11 @@ void BlockCache::commit(Block* b)
 {
     const u32 page = b->pa >> kPageShift;
     b->gen = gen_[page];
-    code_[page] = 1;
+    if (!code_[page]) {
+        code_[page] = 1;
+        if (on_marked_)
+            on_marked_(hook_ctx_, page);
+    }
     table_[(b->pa >> 2) & table_mask_] =
         static_cast<u32>((reinterpret_cast<u8*>(b) - pool_) / kAlign) + 1;
     ++stats_.built;

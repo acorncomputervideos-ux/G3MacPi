@@ -1518,3 +1518,140 @@ BOTH(computed_branch_links)
     if (g_jit && !g_jit_bg)
         CHECK(c.cpu.jit_stats().linked_far >= 2);
 }
+
+BOTH(fast_store_to_a_page_that_becomes_code)
+{
+    // Stores to page 0x6000 while it holds no code (the fast table may
+    // then let them through), a call into it (it gets a block), and a
+    // store that rewrites it: that store must be seen, so the second call
+    // runs the new instruction.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lis(5, 0x3863)},
+            {0x5004, ori(5, 5, 0x0001)},        // r5 = addi r3,r3,1
+            {0x5008, lis(6, 0x4E80)},
+            {0x500C, ori(6, 6, 0x0020)},        // r6 = blr
+            {0x5010, stw(5, 0, 4)},
+            {0x5014, stw(6, 4, 4)},
+            {0x5018, stw(5, 0, 4)},             // again: a hit, if the first filled the entry
+            {0x501C, mtspr(9, 4)},
+            {0x5020, 0x4E800421u},              // bctrl: r3 += 1, page 0x6000 gets a block
+            {0x5024, ori(5, 5, 0x0064)},        // r5 = addi r3,r3,101
+            {0x5028, stw(5, 0, 4)},             // rewrites the code
+            {0x502C, 0x4E800421u},              // bctrl: r3 += 101
+            {0x5030, b(0)},
+        });
+        CpuState& s = m->cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[4] = 0x6000;
+        m->cpu.run(40);
+    }
+    CHECK(same(a, c, "store into new code", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 102u);
+}
+
+BOTH(fast_load_after_data_translation_changes)
+{
+    // Loads through DBAT0 (EA 0x10000000 -> PA 0x40000); after 10 passes
+    // the loop remaps it to PA 0x60000: the loads must follow.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lwz(3, 0, 4)},
+            {0x5004, add(5, 5, 3)},
+            {0x5008, addi(7, 7, 1)},
+            {0x500C, cmpwi(0, 7, 10)},
+            {0x5010, bne(0xC)},                 // -> 0x501C
+            {0x5014, mtspr(537, 12)},           // DBAT0L: -> PA 0x60000
+            {0x5018, isync()},
+            {0x501C, cmpwi(0, 7, 20)},
+            {0x5020, bne(0x5000 - 0x5020)},
+            {0x5024, b(0)},
+        });
+        store_be32(m->ram.data() + 0x40000, 1);
+        store_be32(m->ram.data() + 0x60000, 100);
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000002u;       // BEPI 0x10000000, 128 KB, Vs
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000, read/write
+        s.gpr[4] = 0x10000000u;
+        s.gpr[12] = 0x00060002u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR;
+        m->cpu.flush_tlb();
+        m->cpu.run(300);
+    }
+    CHECK(same(a, c, "data remap", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 10u * 1u + 10u * 100u);
+}
+
+BOTH(fast_load_crossing_into_an_unmapped_page)
+{
+    // DBAT0 maps 128 KB at EA 0x10000000; a word load at its last word
+    // fills the fast entry for that page, then a load 2 bytes further
+    // crosses into EA 0x10020000, which nothing maps: a DSI, though the
+    // physical RAM behind it would be there.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x0300, b(0)},                     // DSI
+            {0x5000, lwz(3, 0xFFC, 4)},
+            {0x5004, addi(7, 7, 1)},
+            {0x5008, cmpwi(0, 7, 3)},
+            {0x500C, bne(0x5000 - 0x500C)},
+            {0x5010, lwz(3, 0xFFE, 4)},
+            {0x5014, b(0)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000002u;       // BEPI 0x10000000, 128 KB, Vs
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000, read/write
+        s.gpr[4] = 0x1001F000u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR;
+        m->cpu.flush_tlb();
+        m->cpu.run(60);
+    }
+    CHECK(same(a, c, "crossing into unmapped", 0, 0));
+    CHECK_EQ(c.cpu.state().pc, 0x300u);
+}
+
+BOTH(fast_entries_kept_apart_by_privilege)
+{
+    // EA 0x10000000 is PA 0x40000 in user mode (DBAT0, Vp only) and PA
+    // 0x60000 in supervisor mode (DBAT1, Vs only). User code loads it
+    // (filling its entry), then sc: the supervisor's load must not use
+    // the user's entry.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x0C00, mfmsr(9)},
+            {0x0C04, ori(9, 9, 0x10)},          // MSR[DR]
+            {0x0C08, mtmsr(9)},
+            {0x0C0C, isync()},
+            {0x0C10, lwz(6, 0, 4)},
+            {0x0C14, b(0)},
+            {0x5000, lwz(3, 0, 4)},
+            {0x5004, add(5, 5, 3)},
+            {0x5008, addi(7, 7, 1)},
+            {0x500C, cmpwi(0, 7, 3)},
+            {0x5010, bne(0x5000 - 0x5010)},
+            {0x5014, sc()},
+        });
+        store_be32(m->ram.data() + 0x40000, 1);
+        store_be32(m->ram.data() + 0x60000, 100);
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000001u;       // BEPI 0x10000000, 128 KB, Vp
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000
+        s.spr[spr::DBAT0U + 2] = 0x10000002u;   // DBAT1: the same, Vs
+        s.spr[spr::DBAT0U + 3] = 0x00060002u;   // -> PA 0x60000
+        s.gpr[4] = 0x10000000u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR | msr::PR;
+        m->cpu.flush_tlb();
+        m->cpu.run(60);
+    }
+    CHECK(same(a, c, "privilege", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 3u);
+    CHECK_EQ(c.cpu.state().gpr[6], 100u);
+}

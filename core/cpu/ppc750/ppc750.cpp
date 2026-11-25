@@ -140,6 +140,11 @@ void Ppc750::run(u64 count)
     break_run_ = false;
     ram_ = mem_.direct_window(ram_base_, ram_size_);
     fetch_host_ = nullptr;
+    if (ram_ != fast_ram_ || ram_size_ != fast_ram_size_) {
+        jit_fast_drop(false);  // its host addresses point into the old window
+        fast_ram_ = ram_;
+        fast_ram_size_ = ram_size_;
+    }
     if (step_hook_) {
         for (u64 i = 0; i < count && !checkstop_ && !break_run_ && !dozing(); ++i) {
             step();

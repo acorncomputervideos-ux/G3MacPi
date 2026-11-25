@@ -86,7 +86,11 @@ bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
     jit_code_pages_ = cache_->code_pages();
     jit_dtlb_ = dtlb_;
     jit_far_count_ = 0;
-    cache_->set_hooks(&Ppc750::jit_cache_invalidated, &Ppc750::jit_cache_flushed, this);
+    jit_fast_ptr_ = jit_fast_;
+    fast_used_ = 0xF;
+    jit_fast_drop(false);
+    cache_->set_hooks(&Ppc750::jit_cache_invalidated, &Ppc750::jit_cache_flushed, &Ppc750::jit_cache_marked,
+                      this);
     if (!jit_emit_stubs()) {
         jit_code_ = nullptr;
         return false;
@@ -111,6 +115,11 @@ struct JitCompiler {
     static constexpr u32 tlb_changed_off = __builtin_offsetof(Ppc750::TlbEntry, changed);
     static constexpr u32 tlb_valid = Ppc750::kTlbValid;
     static_assert(sizeof(Ppc750::TlbEntry) == 12, "the generated TLB lookup assumes 12-byte entries");
+    static constexpr u32 fast_read_off = __builtin_offsetof(Ppc750::FastEntry, read);
+    static constexpr u32 fast_write_off = __builtin_offsetof(Ppc750::FastEntry, write);
+    static constexpr u32 fast_addend_off = __builtin_offsetof(Ppc750::FastEntry, addend);
+    static_assert(sizeof(Ppc750::FastEntry) == 16 && Ppc750::kFastSize == 256,
+                  "the generated lookup assumes 16-byte entries, 4096-byte tables");
     static_assert(Ppc750::kTlbSize == 256, "the generated TLB lookup assumes 256 entries");
     u32 ram_off, ram_size_off, dtlb_off, tlb_on_off, slow_off;
     Ppc750::JitStats* st;  // compile-time counts (the worker keeps its own)
@@ -126,6 +135,7 @@ struct JitCompiler {
     const u32* stub_dispatch_link = nullptr;
     u32 far_slot_off = 0;
     u32 entry_off = 0, code_pages_off = 0, dtlb_ptr_off = 0, link_block_off = 0, link_slot_off = 0;
+    u32 fast_ptr_off = 0;
     u8* kinds = nullptr;  // Ppc750::jit_word_kinds_ (diagnostics)
     void tag_one(u32 w, u8 kind)
     {
@@ -175,7 +185,7 @@ struct JitCompiler {
             host_[r] = -1;
             valid_[r] = dirty_[r] = false;
         }
-        const u32 slots = memory ? 4 : 7;
+        const u32 slots = memory ? 6 : 7;  // memory: x24 holds the fast table
         for (u32 k = 0; k < slots; ++k) {
             u32 best = 32;
             for (u32 r = 0; r < 32; ++r)
@@ -660,12 +670,13 @@ struct JitCompiler {
         }
     }
 
-    // --- D-form integer loads and stores ------------------------------------------
-    // The fast path is mem_fast's: the access stays in its page; real mode
-    // or a data-TLB hit (stores: writable, C bit set); inside the RAM
-    // window; stores: not to a page holding blocks. Then the access itself,
-    // big-endian. Anything else runs the instruction's handler, which does
-    // it all over (nothing has been changed before the decision).
+    // --- D- and X-form integer loads and stores ------------------------------------
+    // The fast path is one lookup in the fast table (Ppc750::FastEntry):
+    // a hit has made mem_fast's checks already (one page; real mode or a
+    // data-TLB hit, for stores writable with C set; the RAM window; stores:
+    // no blocks in the page). Then the access itself, big-endian. A miss
+    // fills the entry from the TLB (jit_fill) and runs the instruction's
+    // handler, which does it all over (nothing has been changed before).
     struct MemOp {
         u32 size;
         bool store, update;
@@ -728,7 +739,7 @@ struct JitCompiler {
     void memory(u32 i, u32 count, const BlockOp& op, const MemOp& m, Assembler::Label& out)
     {
         const u32 insn = op.insn, rd = field::rd(insn), ra = field::ra(insn);
-        Assembler::Label slow, have_pa, done;
+        Assembler::Label slow, done;
         const u32 tag_from = a.size();
         // The register cache as the slow path finds it: what is dirty now
         // (the fast path changes no guest register before its last check).
@@ -747,60 +758,29 @@ struct JitCompiler {
         } else {
             add_const(X8, base_reg, field::simm(insn));
         }
+        // The fast table (x24: the one for this block's MSR[DR, PR]). The
+        // key is the page of the access's last byte, the index that of its
+        // first: an access crossing into the next page never hits (that
+        // page's entry sits at the next index).
         if (m.size > 1) {
-            a.ubfx(X9, X8, 0, 12);
-            a.cmp_imm(false, X9, 0x1000 - m.size);
-            a.b_cond(Assembler::HI, slow);  // crosses into the next page
+            a.add_imm(false, X13, X8, m.size - 1);
+            a.lsr_imm(X13, X13, 12);
+        } else {
+            a.lsr_imm(X13, X8, 12);
         }
-        // w9 = PA
-        a.ldr(false, X10, X20, msr_off());
-        a.mov(false, X9, X8);
-        a.tbz(X10, bit_of(msr::DR), have_pa);
-        {
-            u32 off = tlb_on_off;
-            const Reg base = far(X19, off, 1);
-            a.ldrb(X11, base, off);
-            a.cbz(false, X11, slow);
-        }
-        a.lsr_imm(X11, X8, 12);                         // page
-        a.ubfx(X12, X11, 0, 8);                         // index (256 entries)
-        a.add(true, X12, X12, X12, 1);                  // * 3
-        a.add(true, X12, X24, X12, 2);                  // * 4: the entry (12 bytes)
-        a.ldr(false, X13, X12, tlb_tag_off);
-        a.ubfx(X14, X10, bit_of(msr::PR), 1);
-        a.orr(false, X14, X14, X11, 1);
-        a.mov_imm32(X15, tlb_valid);
-        a.orr(false, X14, X14, X15);                    // the tag a hit has
-        a.cmp(false, X13, X14);
+        a.ubfx(X14, X8, 12, 8);
+        a.add(true, X14, X24, X14, 4);                  // * 16: the entry
+        a.ldr(false, X15, X14, m.store ? fast_write_off : fast_read_off);
+        a.cmp(false, X13, X15);
         a.b_cond(Assembler::NE, slow);
+        a.ldr(true, X15, X14, fast_addend_off);         // host = addend + EA (x8: zero-extended)
         if (m.store) {
-            a.ldrb(X13, X12, tlb_writable_off);
-            a.cbz(false, X13, slow);
-            a.ldrb(X13, X12, tlb_changed_off);
-            a.cbz(false, X13, slow);
-        }
-        a.ldr(false, X13, X12, tlb_pa_off);
-        a.ubfx(X9, X8, 0, 12);
-        a.orr(false, X9, X13, X9);
-        a.bind(have_pa);
-        {   // inside the RAM window (which starts at 0): PA <= size - access
-            u32 off = ram_size_off;
-            const Reg base = far(X19, off, 4);
-            a.ldr(false, X13, base, off);
-        }
-        a.sub_imm(false, X13, X13, m.size);
-        a.cmp(false, X9, X13);
-        a.b_cond(Assembler::HI, slow);
-        if (m.store) {
-            a.lsr_imm(X13, X9, 12);
-            a.ldr_reg(1, X13, X23, X13);
-            a.cbnz(false, X13, slow);                   // page holds blocks: note_write's business
             Reg v = use(rd, X10);
             if (m.size == 4) { a.rev(X10, v); v = X10; }
             else if (m.size == 2) { a.rev16(X10, v); v = X10; }
-            a.str_reg(m.size, v, X22, X9);
+            a.str_reg(m.size, v, X15, X8);
         } else {
-            a.ldr_reg(m.size, X10, X22, X9);
+            a.ldr_reg(m.size, X10, X15, X8);
             if (m.size == 4) a.rev(X10, X10);
             else if (m.size == 2) a.rev16(X10, X10);
             if (m.sign)
@@ -832,6 +812,10 @@ struct JitCompiler {
         for (u32 r = 0; r < 32; ++r)
             dirty_[r] = dirty0[r];
         flush();
+        a.mov(true, X0, X19);                           // jit_fill(cpu, EA): for the next time
+        a.mov(false, X1, X8);
+        a.mov_imm64(X16, reinterpret_cast<u64>(&Ppc750::jit_fill));
+        a.blr(X16);
         call_handler(i, count, op, out);
         for (u32 r = 0; r < 32; ++r) {
             if (cached(r) && valid1[r])
@@ -883,6 +867,10 @@ struct JitCompiler {
         for (u32 r = 0; r < 32; ++r)
             dirty_[r] = dirty0[r];
         flush();
+        a.mov(true, X0, X19);                           // jit_fill(cpu, EA): for the next time
+        a.mov(false, X1, X8);
+        a.mov_imm64(X16, reinterpret_cast<u64>(&Ppc750::jit_fill));
+        a.blr(X16);
         call_handler(i, count, op, out);
         for (u32 r = 0; r < 32; ++r) {
             if (cached(r) && valid1[r])
@@ -1313,6 +1301,7 @@ struct JitCompiler {
         jc.entry_off = off(&c.jit_entry_);
         jc.code_pages_off = off(&c.jit_code_pages_);
         jc.dtlb_ptr_off = off(&c.jit_dtlb_);
+        jc.fast_ptr_off = off(&c.jit_fast_ptr_);
         jc.kinds = c.jit_word_kinds_;
         jc.link_block_off = off(&c.jit_link_block_);
         jc.link_slot_off = off(&c.jit_link_slot_);
@@ -1327,12 +1316,14 @@ struct JitCompiler {
         plan_cache(b, has_memory_ops(b));
         a.ldr(false, X21, X20, pc_off());
         if (has_memory_ops(b)) {
-            // x22 = RAM, x23 = the cache's per-page code flags, x24 = DTLB.
-            u32 off = ram_off;
-            const Reg base = far(X19, off, 8);
-            a.ldr(true, X22, base, off);
-            load_field(true, X23, code_pages_off, 8);
-            load_field(true, X24, dtlb_ptr_off, 8);
+            // x24 = the fast table for MSR[DR, PR] (constant in a block: what
+            // changes them ends it or leaves it, ends_block).
+            a.ldr(false, X9, X20, msr_off());
+            a.ubfx(X10, X9, bit_of(msr::DR), 1);
+            a.ubfx(X11, X9, bit_of(msr::PR), 1);
+            a.add(false, X10, X10, X11, 1);
+            load_field(true, X24, fast_ptr_off, 8);
+            a.add(true, X24, X24, X10, 12);             // * 4096: a table
         }
 
         tag(0, Ppc750::kWordSetup);
@@ -1510,6 +1501,66 @@ void Ppc750::jit_unlink_far(u32 page)
 
 void Ppc750::jit_cache_invalidated(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->jit_unlink_far(page); }
 void Ppc750::jit_cache_flushed(void* cpu) { static_cast<Ppc750*>(cpu)->jit_far_count_ = 0; }  // the code is dead
+void Ppc750::jit_cache_marked(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->jit_fast_drop_writes(page); }
+
+void Ppc750::jit_fast_drop(bool translated_only)
+{
+    for (u32 t = 0; t < 4; ++t) {
+        if ((translated_only && !(t & 1)) || !(fast_used_ & (1u << t)))
+            continue;  // real mode: pa = ea, whatever the MMU holds; or nothing filled
+        for (u32 i = 0; i < kFastSize; ++i)
+            jit_fast_[t * kFastSize + i] = FastEntry{};
+        fast_used_ &= ~(1u << t);
+    }
+}
+
+// Stores to the physical page `page` must take the handler again (it
+// tells the block cache). The tables are indexed by effective page, so
+// every entry that may write is checked.
+void Ppc750::jit_fast_drop_writes(u32 page)
+{
+    if (!ram_)
+        return;
+    for (FastEntry& e : jit_fast_) {
+        if (e.write == kFastNone)
+            continue;
+        const u64 host = e.addend + (static_cast<u64>(e.write) << 12);
+        if (host - reinterpret_cast<u64>(ram_) == static_cast<u64>(page - (ram_base_ >> 12)) << 12)
+            e.write = kFastNone;
+    }
+}
+
+// Called by a generated load or store's slow path, before the handler,
+// with the effective address: copies what the soft TLB already says about
+// the page into the fast table (nothing is translated or changed here; a
+// page the TLB does not hold yet is filled on a later miss, after the
+// handler has translated it).
+void Ppc750::jit_fill(void* cpu, u32 ea)
+{
+    Ppc750& c = *static_cast<Ppc750*>(cpu);
+    const u32 page = ea >> 12;
+    u32 pa_page = ea & ~0xFFFu;
+    bool may_write = true;
+    if (c.s_.msr & msr::DR) {
+        const u32 tag = kTlbValid | (page << 1) | ((c.s_.msr & msr::PR) ? 1u : 0u);
+        const TlbEntry& t = c.dtlb_[page & (kTlbSize - 1)];
+        if (!c.tlb_enabled_ || t.tag != tag)
+            return;
+        pa_page = t.pa_page;
+        may_write = t.writable && t.changed;
+    }
+    u8* host = c.ram_at(pa_page, 0x1000);
+    if (!host)
+        return;
+    if (c.cache_ && (pa_page >> 12) < c.cache_->pages() && c.cache_->code_pages()[pa_page >> 12])
+        may_write = false;
+    const u32 table = ((c.s_.msr & msr::PR) ? 2u : 0u) | ((c.s_.msr & msr::DR) ? 1u : 0u);
+    FastEntry& e = c.jit_fast_[table * kFastSize + (page & (kFastSize - 1))];
+    e.read = page;
+    e.write = may_write ? page : kFastNone;
+    e.addend = reinterpret_cast<u64>(host) - (static_cast<u64>(page) << 12);
+    c.fast_used_ |= 1u << table;
+}
 
 void Ppc750::set_jit_word_kinds(u8* kinds)
 {
