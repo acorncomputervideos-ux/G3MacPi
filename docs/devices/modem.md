@@ -13,7 +13,8 @@ reproduced is what the Mac sees.
 | Serial port (SCC receive, DCD/CTS, DTR/RTS, interrupts) | `core/devices/macio/escc.*` | done (docs/hardware/escc.md) |
 | Hayes AT modem | `core/devices/modem/hayes_modem.*` | done |
 | PPP framing (RFC 1662) | `platform/common/ppp_framer.*` | done |
-| PPP provider (LCP, PAP, IPCP), bridged to the network | | next |
+| PPP provider end (LCP, PAP, IPCP, IP) | `platform/common/ppp_server.*` | done |
+| The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | | next |
 | Dial-up sounds, generated | | |
 | Wiring on the Pi and in g3_host, menu options | | |
 
@@ -40,3 +41,18 @@ DTR and remote hang-ups. Sabotage runs (escape without the leading
 silence, DCD ignoring &C, DTR drop ignored, line data passed in command
 mode, no DTMF gap, V0 ignored, a key not aborting the dial, four pluses
 accepted) each fail a test.
+
+## The PPP end (ppp_server.h)
+
+Started when the modem connects. It asks for PAP (any name and password
+are accepted: the "Welcome to G3MacPi" message), ACCM 0, a magic number
+and both header compressions; it acknowledges the Mac's MRU, ACCM, magic
+number and compressions and rejects anything else (asking us to
+authenticate to it, call-back, ...). IPCP starts once the provider knows
+the Mac's address: the Mac's request for address and DNS 0.0.0.0 gets a
+Nak with them, VJ compression and NBNS are rejected. After that, IP
+packets pass both ways; other protocols (ATCP for AppleTalk, CCP ...)
+get a Protocol-Reject. Restart timer 3 s, at most 10 requests, then the
+call is ended. Tests: `tests/unit/platform/test_ppp_server.cpp` (the
+test plays the Mac's side); 10 sabotage runs, two of which needed the
+last two tests.
