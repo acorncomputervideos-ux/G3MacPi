@@ -12,7 +12,8 @@ reproduced is what the Mac sees.
 |---|---|---|
 | Serial port (SCC receive, DCD/CTS, DTR/RTS, interrupts) | `core/devices/macio/escc.*` | done (docs/hardware/escc.md) |
 | Hayes AT modem | `core/devices/modem/hayes_modem.*` | done |
-| PPP provider, bridged to the network | | next |
+| PPP framing (RFC 1662) | `platform/common/ppp_framer.*` | done |
+| PPP provider (LCP, PAP, IPCP), bridged to the network | | next |
 | Dial-up sounds, generated | | |
 | Wiring on the Pi and in g3_host, menu options | | |
 
