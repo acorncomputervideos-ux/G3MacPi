@@ -22,12 +22,38 @@ but no model, it took thousands of machine checks reading 0x80812000.
   arrangement, B control +0, A control +2, B data +4, A data +6 (to
   verify for Paddington).
 
-## Model: nothing connected
+## Model
 
-- Transmit is immediate, to an optional sink, and sets Tx-interrupt
-  pending when WR1 enables it.
-- Nothing is ever received.
+- Transmit is immediate, to an optional sink (a device attached to the
+  channel), and sets Tx-interrupt pending when WR1 enables it.
+- Receive: a 3-character FIFO (the Z85C30's), filled by the attached
+  device while WR3's receiver enable is set; a character arriving with it
+  full is lost and sets RR1's overrun bit (cleared by WR0's error reset).
+  WR1's receive interrupt modes: every character (0x10), the first one
+  (0x08: after the mode is selected or WR0 command 4), special conditions
+  only (0x18; here only overrun).
+- Modem lines: the Mac drives DTR (WR5 0x80) and RTS (WR5 0x02); the
+  attached device is told when they change. It drives DCD and CTS, read in
+  RR0 (0x08, 0x20); a change raises the external/status interrupt when WR1
+  bit 0 and the line's WR15 enable (0x08 DCD, 0x20 CTS) are set; WR0
+  command 2 clears it.
+- RR3 on channel A: 0x01/0x02/0x04 channel B ext/Tx/Rx pending,
+  0x08/0x10/0x20 channel A (pmac_zilog.h).
+- Baud rate from WR12/13, WR4's clock mode and WR14's generator enable:
+  3 686 400 / (2 × mode × (TC + 2)) (clock from QEMU's mac-io, ESCC_CLOCK).
 - An interrupt is asserted while a channel has one pending and WR9's MIE
   is set. Channel A is on input 15, B on 16.
-- Not modelled: baud timing, receive, DMA, modem lines (DCD and CTS read
-  0), and the vector modified by status.
+- Not modelled: baud timing on the Mac's side (transmit is instant), DMA,
+  sync/SDLC, parity and framing errors, the status in RR2's vector, the
+  IUS daisy chain.
+
+## The internal modem (to verify)
+
+The Blue & White offered an optional internal 56K modem in a modem slot
+(Apple's specifications; third-party serial cards such as Griffin's gPort
+used the same slot). Linux treats an SCC channel whose device-tree node
+has `slot-names` "Modem" (or `compatible` "cobalt") as an internal modem
+and resets it through Heathrow's modem-reset GPIO (`heathrow_modem_enable`;
+on Yosemite, the B&W, it leaves HRW_SCC_TRANS_EN_N alone). Which channel
+the B&W's slot used, and its real `slot-names`, are not yet confirmed; the
+virtual modem goes on channel A, the traditional modem port.
