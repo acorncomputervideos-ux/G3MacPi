@@ -395,9 +395,20 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         // the SCC and waited for ever for the frame to go out; a real B&W
         // has no external serial port. To verify against a B&W tree.
         // docs/firmware/bw-device-tree.md.
+        //
+        // With the internal modem, channel A's slot-names names it: a 32-bit
+        // slot mask, then the name, "Modem" (Linux pmac_zilog.c treats a
+        // channel whose slot-names string at offset 4 is "Modem" as the
+        // internal modem). With only the 0 count, Mac OS 9.2.1's Modem
+        // control panel shows "no serial ports available".
         const Phandle channels[4] = {la, lb, n.escc_a, n.escc_b};
         for (const Phandle ch : channels)
             t.set_int(ch, "slot-names", 0);
+        if (m.modem) {
+            const u8 modem[10] = {0, 0, 0, 1, 'M', 'o', 'd', 'e', 'm', 0};
+            t.set_property(la, "slot-names", modem, sizeof modem);
+            t.set_property(n.escc_a, "slot-names", modem, sizeof modem);
+        }
     }
     // Sound: a "davbus" node with a "sound" child, which is how Linux's
     // snd-powermac finds the codec on G3 models ("powermac G3 models have a

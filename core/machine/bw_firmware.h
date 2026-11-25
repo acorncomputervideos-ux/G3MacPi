@@ -52,6 +52,7 @@ public:
         // Built-in sound and Ethernet in the device tree, and the address.
         bool sound = true;
         bool ethernet = true;
+        bool modem = false;   // the internal modem on SCC channel A
         u8 mac_address[6] = {0x02, 0x47, 0x33, 0x4D, 0x50, 0x01};
     };
     // Firmware memory at the top of RAM.

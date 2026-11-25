@@ -434,6 +434,32 @@ TEST_CASE("firmware/bw-tree/serial_channels_have_slot_names")
     CHECK_EQ(cell_or(t, b.n.escc_b, "slot-names", 0xFFFFFFFFu), 0u);
 }
 
+TEST_CASE("firmware/bw-tree/internal_modem_names_channel_a")
+{
+    // With the modem: channel A (both views) is "Modem" after the 32-bit
+    // mask, as Linux pmac_zilog reads it; channel B stays unnamed.
+    auto t = std::make_unique<DeviceTree>();
+    BwMachine m;
+    m.ram_size = 128u << 20;
+    m.pvr = 0x00083214u;
+    m.modem = true;
+    BwNodes n;
+    REQUIRE(build_bw_device_tree(*t, m, n));
+    const u8* p = nullptr;
+    u32 len = 0;
+    REQUIRE(t->get_property(n.escc_a, "slot-names", p, len));
+    REQUIRE(len >= 10);
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p + 4), "Modem") == 0);
+    Phandle legacy = t->child(n.macio);
+    while (legacy != kNone && std::strcmp(t->name(legacy), "escc-legacy") != 0)
+        legacy = t->peer(legacy);
+    REQUIRE(legacy != kNone);
+    REQUIRE(t->get_property(t->child(legacy), "slot-names", p, len));   // its ch-a
+    REQUIRE(len >= 10);
+    CHECK(std::strcmp(reinterpret_cast<const char*>(p + 4), "Modem") == 0);
+    CHECK_EQ(cell_or(*t, n.escc_b, "slot-names", 0xFFFFFFFFu), 0u);
+}
+
 TEST_CASE("firmware/bw-tree/sound_and_ethernet")
 {
     Built b;

@@ -182,6 +182,7 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     // Sound and Ethernet: in the device tree when on, connected to the host.
     fc.sound = config.sound;
     fc.ethernet = config.network;
+    fc.modem = config.modem;
     host.mac_address(fc.mac_address);
     m_->macio().sound().set_sink(config.sound ? host.audio_sink() : nullptr);
     tee_ = config.network ? new NetTee(host.net_link()) : nullptr;

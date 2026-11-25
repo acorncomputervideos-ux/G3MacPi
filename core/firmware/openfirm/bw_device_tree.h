@@ -61,6 +61,8 @@ struct BwMachine {
     // Built-in sound and Ethernet (davbus/sound and ethernet nodes).
     bool sound = true;
     bool ethernet = true;
+    // An internal modem on the SCC's channel A (slot-names "Modem").
+    bool modem = false;
     u8 mac_address[6] = {0x02, 0x47, 0x33, 0x4D, 0x50, 0x01};  // locally administered
 };
 
