@@ -34,7 +34,8 @@ but no model, it took thousands of machine checks reading 0x80812000.
   only (0x18; here only overrun).
 - Modem lines: the Mac drives DTR (WR5 0x80) and RTS (WR5 0x02); the
   attached device is told when they change. It drives DCD and CTS, read in
-  RR0 (0x08, 0x20); a change raises the external/status interrupt when WR1
+  RR0 (0x08, 0x20; on Macs the CTS bit reads inverted, 0 = asserted, as
+  Linux pmac_zilog.c reads it); a change raises the external/status interrupt when WR1
   bit 0 and the line's WR15 enable (0x08 DCD, 0x20 CTS) are set; WR0
   command 2 clears it.
 - RR3 on channel A: 0x01/0x02/0x04 channel B ext/Tx/Rx pending,

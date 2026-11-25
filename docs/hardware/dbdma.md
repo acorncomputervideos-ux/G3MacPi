@@ -49,12 +49,16 @@ no code was copied.
   (false) and the channel waits for more data.
 - FLUSH is acknowledged at once, since nothing is buffered; first, if the
   channel is active on a transfer descriptor, that descriptor's res_count
-  (bytes not yet transferred) and xfer_status (status with ACTIVE and FLUSH)
-  are written. Mac OS 9.2.1's SerialDMA does exactly this to find how many
+  (bytes not yet transferred) and xfer_status (status with ACTIVE, FLUSH
+  clear) are written. Mac OS 9.2.1's SerialDMA does exactly this to find how many
   serial bytes have arrived: it writes FLUSH, waits for the bit to clear,
   then polls the receive descriptor's xfer_status for ACTIVE (seen in its
-  code, disassembled from RAM). QEMU's mac_dbdma.c sets FLUSH during a
-  device flush and clears it when the transfer ends.
+  code, disassembled from RAM). It recycles a receive buffer only when its
+  xfer_status has ACTIVE and not FLUSH, and partly filled (flushed) buffers
+  must be recycled, so the written status has FLUSH clear; with FLUSH set
+  the four buffers ran out after four flushes and the driver hung. (QEMU's
+  mac_dbdma.c sets FLUSH in the status register while a device flush runs.)
+  Not confirmed on hardware.
 - At most 4096 descriptors run per call, so a NOP that branches to itself
   can't hang the emulator.
 - Channel interrupts go to a per-channel callback. The interrupt controller

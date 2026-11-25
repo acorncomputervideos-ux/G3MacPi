@@ -113,7 +113,7 @@ u8 MacioEscc::rr(u32 ch, u32 n) const
     switch (n & 15) {
     case 0: case 4:
         return static_cast<u8>(kRr0TxEmpty | kRr0TxEom | (c.fifo_n ? kRr0RxAvail : 0) | (c.dcd ? kRr0Dcd : 0) |
-                               (c.cts ? kRr0Cts : 0));
+                               (c.cts ? 0 : kRr0Cts));
     case 1: case 5: return static_cast<u8>(kRr1AllSent | (c.overrun ? kRr1Overrun : 0));
     case 2: return chan_[A].wr[2];                     // the vector (shared)
     case 3:

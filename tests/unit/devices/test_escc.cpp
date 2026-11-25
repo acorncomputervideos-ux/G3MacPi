@@ -216,7 +216,7 @@ TEST_CASE("devices/escc/modem_lines")
     wreg(e, kACtl, 5, 0x6A);                                 // no change: not reported
     CHECK_EQ(seen.calls, 2);
     // DCD and CTS in RR0; a DCD change interrupts with WR1 ext + WR15 DCDIE.
-    CHECK_EQ(rd(e, kACtl) & 0x28, 0u);
+    CHECK_EQ(rd(e, kACtl) & 0x28, 0x20u);                    // no DCD; CTS not asserted (inverted bit set)
     e.set_dcd(MacioEscc::A, true);
     CHECK_EQ(rd(e, kACtl) & 0x08, 0x08u);
     CHECK(!line[0]);                                         // not enabled
@@ -230,13 +230,14 @@ TEST_CASE("devices/escc/modem_lines")
     CHECK(!line[0]);
     e.set_cts(MacioEscc::A, true);                           // CTSIE not set
     CHECK(!line[0]);
-    CHECK_EQ(rd(e, kACtl) & 0x20, 0x20u);
+    CHECK_EQ(rd(e, kACtl) & 0x20, 0u);                       // asserted reads 0 on Macs (inverted)
     // Each source has its own enable: with only CTSIE, DCD changes are quiet.
     wreg(e, kACtl, 15, 0x20);
     e.set_dcd(MacioEscc::A, true);
     CHECK(!line[0]);
     e.set_cts(MacioEscc::A, false);
     CHECK(line[0]);
+    CHECK_EQ(rd(e, kACtl) & 0x20, 0x20u);                    // not asserted: the bit is set
     wr(e, kACtl, 0x10);
     // A hardware reset drops DTR and RTS (reported).
     wreg(e, kACtl, 5, 0x82);
@@ -306,7 +307,7 @@ TEST_CASE("devices/escc/dma_receive_and_transmit")
     CHECK_EQ(load_le16(&ram[0x120E]), 0u);                   // nothing written yet
     bus.write32(kDma + 10 * DbdmaController::kChannelStride, byteswap32(0x20002000u));  // FLUSH
     CHECK_EQ(load_le16(&ram[0x120C]), 766u);
-    CHECK_EQ(load_le16(&ram[0x120E]) & dbdma::ACTIVE, dbdma::ACTIVE);
+    CHECK_EQ(load_le16(&ram[0x120E]) & (dbdma::ACTIVE | dbdma::FLUSH), dbdma::ACTIVE);  // SerialDMA reuses it
     CHECK_EQ(dma.channel(10).status() & (dbdma::FLUSH | dbdma::ACTIVE), dbdma::ACTIVE);
     CHECK(std::memcmp(&ram[0x4000], "hi", 2) == 0);
     // Transmit: "OK\r\n" from 0x3000.

@@ -27,6 +27,9 @@
 //  - S registers: S0 0, S2 43 ('+', escape character), S3 13, S4 10, S5 8,
 //    S6 2, S7 50 (seconds to wait for carrier), S8 2 (comma pause, s),
 //    S11 95 (DTMF tone length, ms), S12 50 (escape guard time, 1/50 s).
+//    S0-S255 can be set and read: modems kept vendor settings in the high
+//    numbers, and init strings set them (Apple's "PowerMac G3 Internal
+//    56K" script sends S95=1); those have no effect here.
 //  - Dial string: digits, * # A-D; T/P tone or pulse; W and spaces
 //    ignored; ',' pauses S8 seconds; ';' returns to command mode after
 //    dialling; L redials the last number. A character from the Mac while
@@ -98,7 +101,7 @@ private:
     enum class State : u8 { Command, Dialing, Online, OnlineCommand };
     enum Result : u8 { kOk = 0, kConnect = 1, kRing = 2, kNoCarrier = 3, kError = 4, kNoDialtone = 6,
                        kBusy = 7, kNoAnswer = 8 };
-    static constexpr u32 kSRegs = 32, kLine = 64, kNumber = 48;
+    static constexpr u32 kSRegs = 256, kLine = 64, kNumber = 48;
 
     void command_char(u8 c, u64 now_us);
     void execute(const char* line, u32 len, u64 now_us);

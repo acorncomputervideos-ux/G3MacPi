@@ -99,7 +99,7 @@ TEST_CASE("platform/dialup_modem/through_the_scc")
     s = r.run(12000000);
     CHECK(s.find("CONNECT 53333") != std::string::npos);
     CHECK_EQ(r.rr0() & 0x08, 0x08u);                        // DCD on
-    CHECK_EQ(r.rr0() & 0x20, 0x20u);                        // CTS on
+    CHECK_EQ(r.rr0() & 0x20, 0u);                           // CTS on (the bit reads inverted on Macs)
     // The provider speaks first: an LCP Configure-Request, fully escaped.
     const size_t at = s.find('\x7E');
     REQUIRE(at != std::string::npos);

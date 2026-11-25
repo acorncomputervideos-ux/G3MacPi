@@ -92,8 +92,16 @@ TEST_CASE("devices/modem/commands_and_results")
     CHECK(r.out() == "\r\nOK\r\n");
     r.type("ATS0?\r");
     CHECK(r.out() == "\r\n002\r\n\r\nOK\r\n");
-    r.type("ATS99=1\r");
+    r.type("ATS256=1\r");                          // S0-S255 only
     CHECK(r.out() == "\r\nERROR\r\n");
+    // Apple's "PowerMac G3 Internal 56K" script's init string (S95: a
+    // vendor register).
+    r.type("AT&FE0W1Q0V1X4&C1&K3S95=1&D3S7=75S0=0+MS=11,1,300,33600\r");
+    CHECK(r.out() == "\r\nOK\r\n");
+    CHECK_EQ(r.m.s(95), 1u);
+    CHECK_EQ(r.m.s(7), 75u);
+    r.type("ATE0\r");
+    r.out();
     // A vendor init string: the unknown parts are accepted.
     r.type("AT&FE0V1&C1&D2\\N3%C1+MS=V90;S7=60\r");
     CHECK(r.out() == "\r\nOK\r\n");

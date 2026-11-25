@@ -30,7 +30,10 @@
 //    character, 0x18 special conditions only. The Z85C30 holds 3 received
 //    characters.
 //  - Modem lines: WR5 DTR 0x80, RTS 0x02 (outputs); RR0 DCD 0x08, CTS 0x20
-//    (inputs). A change of DCD or CTS raises the external/status interrupt
+//    (inputs). On Macs the CTS bit reads inverted: 0 when CTS is asserted
+//    (Linux pmac_zilog.c: "The CTS input is inverted for some reason",
+//    TIOCM_CTS when !(status & CTS)). Mac OS 9's serial driver holds its
+//    output while it reads 1. A change of DCD or CTS raises the external/status interrupt
 //    if WR1 EXT_INT_ENAB 0x01 and its WR15 enable (DCDIE 0x08, CTSIE 0x20)
 //    are set; WR0 command RES_EXT_INT (0x10) clears it.
 //  - RR3 (channel A): CHBEXT 0x01, CHBTxIP 0x02, CHBRxIP 0x04, CHAEXT 0x08,

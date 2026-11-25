@@ -36,6 +36,10 @@ public:
     ~DialupModem();
     void set_network(NetTee* tee);   // nullptr: no network (calls connect, DHCP never answers)
     void set_sound(ModemSound* s) { sound_ = s; }
+    // Debugging: every byte between the Mac and the modem (to_mac: the
+    // modem's output), and DTR changes (byte 0x100 | on).
+    using TraceFn = void (*)(void* context, bool to_mac, u32 byte);
+    void set_trace(TraceFn fn, void* ctx) { trace_ = fn; trace_ctx_ = ctx; }
 
     HayesModem& modem() { return modem_; }
     const PppServer& ppp() const { return ppp_; }
@@ -53,6 +57,8 @@ private:
     DialupLink link_;
     NetTee* tee_ = nullptr;
     ModemSound* sound_ = nullptr;
+    TraceFn trace_ = nullptr;
+    void* trace_ctx_ = nullptr;
     Scheduler::Handle event_ = 0;
     bool scheduled_ = false;
 };

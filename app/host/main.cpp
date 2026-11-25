@@ -23,6 +23,7 @@
 // adds generated code on the A64 simulator (slow), and every 10 guest
 // seconds a line of the JIT's profile (platform/common/jit_report.h).
 
+#include "platform/common/dialup_modem.h"
 #include "platform/common/cpu_selftest.h"
 #include "tools/a64sim/a64_sim.h"
 
@@ -312,6 +313,33 @@ int main(int argc, char** argv)
                      session.detail());
         return 1;
     }
+    // G3_MODEMLOG=1: the bytes between the Mac and the virtual modem, a line
+    // per direction change ("mac>" what the Mac sent, "<mdm" the modem's).
+    if (std::getenv("G3_MODEMLOG") && session.dialup()) {
+        struct Log { MacSession* s; int dir; std::string text; };
+        static Log log{&session, -1, {}};
+        session.dialup()->set_trace([](void* c, bool to_mac, u32 b) {
+            auto* l = static_cast<Log*>(c);
+            const double t = static_cast<double>(l->s->machine()->scheduler().now()) / 1e12;
+            if (b >= 0x100) {
+                std::printf("[modem] %.2f s: DTR %s\n", t, (b & 1) ? "on" : "off");
+                return;
+            }
+            if (l->dir != (to_mac ? 1 : 0) || b == '\n' || l->text.size() > 60) {
+                if (!l->text.empty())
+                    std::printf("[modem] %.2f s: %s %s\n", t, l->dir ? "<mdm" : "mac>", l->text.c_str());
+                l->text.clear();
+                l->dir = to_mac ? 1 : 0;
+            }
+            char buf[8];
+            if (b >= 32 && b < 127)
+                l->text.push_back(static_cast<char>(b));
+            else {
+                std::snprintf(buf, sizeof buf, "<%02x>", b);
+                l->text += buf;
+            }
+        }, &log);
+    }
     if (std::getenv("G3_ILLEGAL"))
         session.cpu()->set_exception_hook([](void* c, u32 vector, u32 srr0, u32 srr1) {
             auto* l = static_cast<IllegalLog*>(c);
@@ -367,18 +395,29 @@ int main(int argc, char** argv)
         nvr.load(nv.data(), MacioNvram::kSize);
     }
     // G3_MMIO_RANGE=lo,hi[,max]: device-register accesses in [lo, hi).
+    // G3_MMIO_FROM=s: only from guest second s; G3_MMIO_SKIP=lo,hi: not
+    // those in [lo, hi).
     if (const char* r = std::getenv("G3_MMIO_RANGE")) {
-        struct Range { u32 lo, hi, max, shown, last_addr, last_value; bool last_read; u64 repeats; PhysicalBus* bus; ppc::Ppc750* cpu; };
+        struct Range { u32 lo, hi, max, shown, last_addr, last_value; bool last_read; u64 repeats; PhysicalBus* bus; ppc::Ppc750* cpu; Scheduler* sched; u64 from_ps; u32 skip_lo, skip_hi; };
         static Range range{};
         range.bus = &session.machine()->bus();
         range.cpu = &session.machine()->cpu();
+        range.sched = &session.machine()->scheduler();
+        if (const char* f = std::getenv("G3_MMIO_FROM"))
+            range.from_ps = std::strtoull(f, nullptr, 10) * 1000000000000ull;
+        if (const char* k = std::getenv("G3_MMIO_SKIP")) {
+            char* e2 = nullptr;
+            range.skip_lo = static_cast<u32>(std::strtoul(k, &e2, 0));
+            range.skip_hi = e2 && *e2 == ',' ? static_cast<u32>(std::strtoul(e2 + 1, nullptr, 0)) : 0;
+        }
         char* end = nullptr;
         range.lo = static_cast<u32>(std::strtoul(r, &end, 0));
         range.hi = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, &end, 0)) : ~0u;
         range.max = end && *end == ',' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 0)) : 2000;
         session.machine()->bus().set_mmio_trace([](void* c, u32 addr, u32 size, bool write, u32 value) {
             auto* g = static_cast<Range*>(c);
-            if (addr < g->lo || addr >= g->hi || g->shown >= g->max)
+            if (addr < g->lo || addr >= g->hi || g->shown >= g->max || (addr >= g->skip_lo && addr < g->skip_hi) ||
+                g->sched->now() < g->from_ps)
                 return;
             if (!write && g->last_read && addr == g->last_addr && value == g->last_value) {
                 ++g->repeats;  // a polling loop: counted, not printed
@@ -394,7 +433,8 @@ int main(int argc, char** argv)
             u32 pc_pa = 0;
             const u32 pc = g->cpu->state().pc;
             g->cpu->probe_translate(pc, false, pc_pa);
-            std::printf("[mmio] %s%u %08x = %08x  pc %08x (pa %08x)\n", write ? "W" : "R", size, addr, value, pc, pc_pa);
+            std::printf("[mmio] %.3f %s%u %08x = %08x  pc %08x (pa %08x)\n",
+                        static_cast<double>(g->sched->now()) / 1e12, write ? "W" : "R", size, addr, value, pc, pc_pa);
             // A DBDMA command pointer written: show the descriptors there.
             if (write && size == 4 && (addr & 0xFFFF8000u) == 0x80808000u && (addr & 0x7F) == 0x0C) {
                 const u32 cp = __builtin_bswap32(value);

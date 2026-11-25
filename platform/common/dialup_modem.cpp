@@ -17,13 +17,19 @@ DialupModem::DialupModem(MacioEscc& escc, Scheduler& sched, const u8 mac_address
 {
     escc_.set_tx_sink([](void* c, u32 ch, u8 b) {
         auto* d = static_cast<DialupModem*>(c);
-        if (ch == kChannel)
-            d->modem_.from_mac(b, d->now_us());
+        if (ch != kChannel)
+            return;
+        if (d->trace_)
+            d->trace_(d->trace_ctx_, false, b);
+        d->modem_.from_mac(b, d->now_us());
     }, this);
     escc_.set_lines_callback([](void* c, u32 ch, bool dtr, bool) {
         auto* d = static_cast<DialupModem*>(c);
-        if (ch == kChannel)
-            d->modem_.set_dtr(dtr, d->now_us());
+        if (ch != kChannel)
+            return;
+        if (d->trace_)
+            d->trace_(d->trace_ctx_, false, 0x100u | (dtr ? 1u : 0u));
+        d->modem_.set_dtr(dtr, d->now_us());
     }, this);
     escc_.set_cts(kChannel, true);
     modem_.set_line([](void* c, const u8* data, u32 n) {
@@ -108,8 +114,11 @@ void DialupModem::on_tick(void* ctx, u64 now_ps)
     d->link_.tick(us);
     if (d->modem_.waiting_for_mac() && d->escc_.rx_ready(kChannel)) {
         u8 b;
-        if (d->modem_.to_mac(&b, 1))
+        if (d->modem_.to_mac(&b, 1)) {
+            if (d->trace_)
+                d->trace_(d->trace_ctx_, true, b);
             d->escc_.rx_push(kChannel, b);
+        }
     }
     d->escc_.set_dcd(kChannel, d->modem_.dcd());
     d->schedule_next(now_ps);
