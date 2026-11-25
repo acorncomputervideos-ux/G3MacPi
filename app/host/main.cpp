@@ -300,6 +300,8 @@ int main(int argc, char** argv)
     }
     if (std::getenv("G3_SIMLAN"))
         host.net.lan = &host.lan;
+    // G3_ILLEGAL=1: program exceptions for illegal instructions, with the word.
+    struct IllegalLog { MacSession* s; u32 shown; } illegal_log{&session, 0};
     static HostFiles::Wav modem_wav;
     size_t lan_shown = 0;
     const MacSession::Error e = session.start(config, host, mem, driver.empty() ? nullptr : driver.data(),
@@ -310,6 +312,22 @@ int main(int argc, char** argv)
                      session.detail());
         return 1;
     }
+    if (std::getenv("G3_ILLEGAL"))
+        session.cpu()->set_exception_hook([](void* c, u32 vector, u32 srr0, u32 srr1) {
+            auto* l = static_cast<IllegalLog*>(c);
+            if (vector != 0x700 || !(srr1 & ppc::srr1::ILLEGAL) || l->shown >= 40)
+                return;
+            ++l->shown;
+            u32 pa = 0, word = 0;
+            if (l->s->cpu()->probe_translate(srr0, true, pa))
+                l->s->machine()->bus().read32(pa, word);
+            const auto& st = l->s->cpu()->state();
+            u32 lpa = 0, before = 0;
+            if (l->s->cpu()->probe_translate(st.lr() - 4, true, lpa))
+                l->s->machine()->bus().read32(lpa, before);
+            std::printf("[illegal] pc %08x (pa %08x): %08x  lr %08x (insn before it %08x, pa %08x) ctr %08x r1 %08x "
+                        "msr %08x\n", srr0, pa, word, st.lr(), before, lpa, st.ctr(), st.gpr[1], srr1);
+        }, &illegal_log);
     std::printf("[g3_host] started: %u MB, %ux%u\n", config.ram_mb, config.width, config.height);
     // G3_JITHIST=1 (with G3_JITSIM): where the generated code's instructions
     // go, by what they are for (Ppc750::JitWordKind), printed at the end.
