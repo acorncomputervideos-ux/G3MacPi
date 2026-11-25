@@ -333,8 +333,12 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                 else if (word_is(val, vn, "disk")) dr.type = MachineConfig::DriveType::Disk;
                 else if (word_is(val, vn, "cdrom")) dr.type = MachineConfig::DriveType::CdRom;
                 else reject(r, line_no, "type: none, disk or cdrom");
+                // A CD is always read-only; a disk is writable unless "readonly"
+                // says otherwise (ata0.master starts as the read-only CD position).
                 if (dr.type == MachineConfig::DriveType::CdRom)
                     dr.read_only = true;
+                else if (dr.type == MachineConfig::DriveType::Disk)
+                    dr.read_only = false;
             } else if (word_is(key, kn, "image")) {
                 if (!copy(dr.image, MachineConfig::kPathMax, val, vn))
                     reject(r, line_no, "image: path too long");

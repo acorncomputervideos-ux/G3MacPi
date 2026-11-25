@@ -296,3 +296,21 @@ TEST_CASE("machine/config/choose_boot_drive")
     img[0] = false;
     CHECK_EQ(choose_boot_drive(c, img), MachineConfig::kDrives);
 }
+
+TEST_CASE("machine/config/disk_in_the_cd_position_is_writable")
+{
+    // ata0.master starts as the B&W's (read-only) CD position; a disk put
+    // there must be writable, or Mac OS cannot start up from it (it retries
+    // its writes for ever).
+    MachineConfig c;
+    ConfigParseReport r;
+    parse("[ata0.master]\ntype = disk\nimage = /hd.img\n", c, r);
+    CHECK(c.drive[0].type == MachineConfig::DriveType::Disk);
+    CHECK(!c.drive[0].read_only);
+    MachineConfig d;
+    parse("[ata0.master]\ntype = disk\nreadonly = yes\n", d, r);
+    CHECK(d.drive[0].read_only);
+    MachineConfig e;
+    parse("[ata0.master]\nreadonly = no\ntype = cdrom\n", e, r);
+    CHECK(e.drive[0].read_only);
+}
