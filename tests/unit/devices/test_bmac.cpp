@@ -155,10 +155,10 @@ struct Rig {
         w16(MacioBmac::RXCFG, static_cast<u16>(rxcfg | MacioBmac::RxMACEnable));
     }
     // A receive ring of n INPUT_LAST + INTR_ALWAYS, then NOP + BR_ALWAYS.
-    void rx_ring(u32 cmds, u32 bufs, u32 n)
+    void rx_ring(u32 cmds, u32 bufs, u32 n, u16 input = INPUT_LAST, u16 buf_len = kRxBuf)
     {
         for (u32 i = 0; i < n; ++i)
-            desc(cmds + 16 * i, cmd(INPUT_LAST, 3), kRxBuf, bufs + i * 2048);
+            desc(cmds + 16 * i, cmd(input, 3), buf_len, bufs + i * 2048);
         desc(cmds + 16 * n, cmd(NOP, 0, 3), 0, 0, cmds);
         out_le32(chan(kRx) + 0x0C, cmds);
         out_le32(chan(kRx), ((RUN | WAKE) << 16) | RUN | WAKE);
@@ -259,8 +259,10 @@ TEST_CASE("devices/bmac/receive_ring_length_from_residual")
         const u32 d = 0x2000 + 16 * slot;
         const u16 res = load_le16(&r.ram[d + 12]), st = load_le16(&r.ram[d + 14]);
         CHECK(st & ACTIVE);
-        const u32 nb = kRxBuf - res;  // bmac_rxdma_intr: length from the residual
+        const u32 nb = kRxBuf - res - 2;  // bmac_rxdma_intr: length from the residual, minus 2
         REQUIRE(nb == wire_len + 4);
+        // The status word after the frame (Mac OS reads it): the length.
+        CHECK_EQ(static_cast<u32>(r.ram[0x20000 + slot * 2048 + nb] << 8 | r.ram[0x20000 + slot * 2048 + nb + 1]), nb);
         const u8* got = &r.ram[0x20000 + slot * 2048];
         CHECK(std::memcmp(got, f.data(), f.size()) == 0);
         for (u32 i = static_cast<u32>(f.size()); i < wire_len; ++i)
@@ -273,6 +275,33 @@ TEST_CASE("devices/bmac/receive_ring_length_from_residual")
     check(2, big, 1514);
     CHECK_EQ(load_le16(&r.ram[0x2000 + 3 * 16 + 14]), 0u);  // the next slot is untouched
     CHECK(r.r16(MacioBmac::STATUS) & MacioBmac::FrameReceived);
+}
+
+// Mac OS 9.2.1's driver receives into 1536-byte INPUT_MORE descriptors
+// (seen in a trace): each still ends with its frame.
+TEST_CASE("devices/bmac/receive_into_input_more_descriptors")
+{
+    Rig r;
+    r.init();
+    r.rx_ring(0x2000, 0x20000, 4, INPUT_MORE, 1536);
+    const u8 bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    const u8 other[6] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+    const std::vector<u8> a = frame(bc, other, 300, 1), b = frame(kMe, other, 100, 2);
+    r.wire.incoming.push_back(a);
+    r.wire.incoming.push_back(b);
+    r.sched.advance_to(5 * kMs);
+    CHECK_EQ(r.eth.frames_received(), 2u);
+    CHECK_EQ(r.rx_irqs, 2);
+    // As Mac OS reads it: the status word in the last two bytes written,
+    // its low 14 bits the length with the CRC, bit 15 clear.
+    const auto status = [&](u32 slot, u32 desc) {
+        const u32 got = 1536u - load_le16(&r.ram[desc + 12]);
+        const u8* p = &r.ram[0x20000 + slot * 2048 + got - 2];
+        return static_cast<u32>(p[0] << 8 | p[1]);
+    };
+    CHECK_EQ(status(0, 0x2000), 314u + 4);
+    CHECK_EQ(status(1, 0x2010), 114u + 4);
+    CHECK(std::memcmp(&r.ram[0x20000 + 2048], b.data(), b.size()) == 0);
 }
 
 TEST_CASE("devices/bmac/receive_waits_for_descriptors_and_filters")

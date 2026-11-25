@@ -39,7 +39,8 @@ public:
     virtual u32 dma_output(const u8* data, u32 len, bool last) = 0;
     // Device -> memory. Returns the number of bytes delivered (0..len).
     virtual u32 dma_input(u8* data, u32 len) = 0;
-    // Packet devices (Ethernet): an INPUT_LAST descriptor that ran out of
+    // Packet devices (Ethernet): an input descriptor (INPUT_LAST or
+    // INPUT_MORE: Mac OS 9 receives Ethernet with INPUT_MORE) that ran out of
     // data, or is full, asks whether the device's packet has ended. true
     // completes the descriptor with the bytes not filled as its residual
     // count (a packet shorter than the buffer); the device then starts its

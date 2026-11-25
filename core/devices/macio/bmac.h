@@ -24,7 +24,14 @@
 //    interrupts 42 (BMAC), 32 (tx DMA), 33 (rx DMA) — a real B&W's Linux log
 //    lists 42, 32, 33 and DingusPPC has the same.
 //  - Linux receives into INPUT_LAST descriptors and takes the length from
-//    the residual count, with the 4-byte CRC kept (RXCFG 0x0100).
+//    the residual count, with the 4-byte CRC kept (RXCFG 0x0100): "nb =
+//    RX_BUFLEN - residual - 2", then minus the CRC.
+//  - After each received frame the chip writes a 2-byte status word (the
+//    "- 2" above). Mac OS 9.2.1's driver reads it, big-endian, from the
+//    last two bytes the DMA wrote: bits 13-0 the frame's length (it takes
+//    64-1518, so the CRC is counted), bit 15 an error (the frame is
+//    dropped). Seen in its code; without the word it dropped every frame.
+//    Written here as the length of the bytes before it, other bits 0.
 //
 // Not modelled: the serial EEPROM (SROMCSR reads 0; the address comes from
 // the device tree's local-mac-address), collisions and counters, and the

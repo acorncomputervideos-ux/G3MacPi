@@ -305,6 +305,9 @@ void MacioBmac::poll()
                 for (u32 i = 0; i < 4; ++i)
                     rxbuf_[len++] = static_cast<u8>(c >> (8 * i));
             }
+            const u32 frame_len = len;  // the status word: length, no error
+            rxbuf_[len++] = static_cast<u8>(frame_len >> 8);
+            rxbuf_[len++] = static_cast<u8>(frame_len);
             rx_len_ = len;
             rx_pos_ = 0;
         }

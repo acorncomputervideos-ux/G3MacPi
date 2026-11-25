@@ -41,11 +41,15 @@ no code was copied.
   descriptor; it calls `DbdmaChannel::kick()` when ready, and the transfer
   resumes where it stopped.
 - A descriptor normally finishes only after the whole transfer (residual
-  0). Packet devices end an INPUT_LAST descriptor early: when the device
+  0). Packet devices end an input descriptor (INPUT_LAST or INPUT_MORE)
+  early: when the device
   delivers less than asked, the channel asks
   `DbdmaStream::dma_input_packet_end()`; true finishes the descriptor with
   the unfilled bytes as the residual count (BMAC+ Ethernet: Linux takes a
-  received frame's length from it). Stream devices keep the default
+  received frame's length from it). INPUT_MORE too: Mac OS 9.2.1's
+  Ethernet driver receives into a ring of 1536-byte INPUT_MORE
+  descriptors, each interrupting, which only works if each ends with its
+  frame (inferred from that program; not confirmed on hardware). Stream devices keep the default
   (false) and the channel waits for more data.
 - FLUSH is acknowledged at once, since nothing is buffered; first, if the
   channel is active on a transfer descriptor, that descriptor's res_count

@@ -240,14 +240,20 @@ bool DbdmaChannel::step()
             }
             progress_ += done;
             if (done < chunk) {
-                if (!output && last && stream_->dma_input_packet_end()) {
+                // A packet device's packet ended: INPUT_LAST and INPUT_MORE
+                // both complete with the rest as the residual count. Mac OS
+                // 9's Ethernet driver receives into a ring of 1536-byte
+                // INPUT_MORE descriptors, one frame each (Linux's bmac.c
+                // uses INPUT_LAST); with only INPUT_LAST ending early, the
+                // first frame never completed and nothing more came in.
+                if (!output && stream_->dma_input_packet_end()) {
                     finish(desc, cmdword, cmd_dep, static_cast<u16>(req_count - progress_), true);
                     return true;
                 }
                 return false;  // device not ready: resume on kick()
             }
         }
-        if (!output && last)
+        if (!output)
             stream_->dma_input_packet_end();  // full: a longer packet's rest is dropped
         finish(desc, cmdword, cmd_dep, 0, true);
         return true;
