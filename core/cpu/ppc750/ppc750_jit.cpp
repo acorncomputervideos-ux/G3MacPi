@@ -905,7 +905,7 @@ struct JitCompiler {
     };
     u8 dispatch_kind = 0;  // diagnostics: what kind of block end jumps to dispatch
     void chain(Assembler::Label& out, const Static* statics, u32 nstatics, u32 own_gen, bool computed,
-               bool cnt_in_x9)
+               bool fresh)
     {
         Assembler::Label stop_word, stop_checked;
         // exit_ (an exception, break_run_ (mtspr DEC), a checkstop, blocks
@@ -915,7 +915,8 @@ struct JitCompiler {
         load_field(false, X10, exit_off, 4);
         a.cbnz(false, X10, stop_word);
         a.bind(stop_checked);
-        a.ldr(false, X8, X20, pc_off());              // w8 = the next PC
+        if (!fresh)
+            a.ldr(false, X8, X20, pc_off());          // w8 = the next PC
         // Targets known now (b, bc and its fall-through within the page):
         // the fetch page, MSR[IR|PR] and the page's generation are this
         // block's (it changes none of them; anything that does sets exit_),
@@ -929,8 +930,8 @@ struct JitCompiler {
         // instructions; run_blocks and the "enter" stub do it exactly.
         Assembler::Label generic;
         if (nstatics || computed) {
-            if (cnt_in_x9) {
-                a.add_imm(true, X11, X9, BlockCache::kMaxOps);  // sync just wrote it
+            if (fresh) {
+                a.add_imm(true, X11, X9, BlockCache::kMaxOps);  // just written
             } else {
                 load_field(true, X11, cnt_off, 8);
                 a.add_imm(true, X11, X11, BlockCache::kMaxOps);
@@ -997,13 +998,13 @@ struct JitCompiler {
             a.b_abs(stub_dispatch_link);
         }
         a.bind(generic);
-        const u32 to_dispatch = a.size();
         a.ldr(false, X9, X20, msr_off());
+        const u32 to_dispatch = a.size();             // (one word: G3_JITHIST counts hops by it)
         a.b_abs(stub_dispatch);                       // w8: the PC, w9: the MSR
         tag(to_dispatch, dispatch_kind);
         // Something in the stop word: exit_ stops; an interrupt input only
-        // if MSR[EE] lets it in (run_blocks takes it), else go on. (w9 may
-        // hold the instruction count: kept.)
+        // if MSR[EE] lets it in (run_blocks takes it), else go on. (w8 and
+        // x9 may hold the next PC and the count: kept.)
         a.bind(stop_word);
         a.ubfx(X11, X10, 0, 8);
         a.cbnz(false, X11, out);
@@ -1345,6 +1346,7 @@ struct JitCompiler {
 
         tag(0, Ppc750::kWordSetup);
         u32 pending = 0;
+        bool ended_with_branch = false;  // branch() leaves w8 = the next PC, x9 = the count
         for (u32 i = 0; i < b.count; ++i) {
             const BlockOp& op = b.ops[i];
             u32 at = a.size();
@@ -1356,6 +1358,7 @@ struct JitCompiler {
             }
             if (i + 1 == b.count && is_branch(op.insn)) {
                 branch(i, op.insn, pending);
+                ended_with_branch = true;
                 ++st->native_ops;
                 tag(at, Ppc750::kWordBranch);
                 continue;
@@ -1382,7 +1385,10 @@ struct JitCompiler {
             tag(at, Ppc750::kWordHandler);
         }
         u32 at = a.size();
-        const bool cnt_in_x9 = pending != 0;  // sync leaves the count in x9 (flush keeps it)
+        // w8 = the next PC and x9 = the count, as the block's last code
+        // left them: branch(), or sync() after a native last instruction
+        // (the next PC then is the one after it). flush only stores.
+        const bool fresh = pending != 0 || ended_with_branch;
         sync(b.count, pending);
         flush();       // the next block, or run_blocks, reads the CpuState
         tag(at, Ppc750::kWordSync);
@@ -1396,7 +1402,7 @@ struct JitCompiler {
                             : field::xo10(last) == 16 ? Ppc750::kWordToDispatchReturn : Ppc750::kWordToDispatchCtr;
         }
         const u32 last = b.ops[b.count - 1].insn;
-        chain(out, statics, nstatics, b.gen, field::opcd(last) == 19 && is_branch(last), cnt_in_x9);
+        chain(out, statics, nstatics, b.gen, field::opcd(last) == 19 && is_branch(last), fresh);
         a.bind(out);
         a.b_abs(stub_epilogue);
         // (the branch to dispatch keeps its own tag)
