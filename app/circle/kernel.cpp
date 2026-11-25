@@ -35,12 +35,14 @@ static const char FromKernel[] = "g3macpi";
 // read/write, so this buffer is put into a section of its own, .text_g3jit (its
 // linker script places all .text* before _etext): it is both. Defined in
 // assembly so the section gets the right flags. It adds its size to the
-// kernel image.
-static const unsigned JitCodeWords = 1024 * 1024;	// 4 MB
+// kernel image. 16 MB: with 4 MB, Mac OS's start-up filled it about every
+// 0.7 guest seconds, and each reset sends all code back through the
+// handlers until the worker has compiled it again.
+static const unsigned JitCodeWords = 4 * 1024 * 1024;	// 16 MB
 asm (".section .text_g3jit, \"awx\", %progbits\n"
      ".balign 65536\n"
      "g3_jit_code:\n"
-     ".zero 4194304\n"
+     ".zero 16777216\n"
      ".previous\n");
 extern "C" u32 g3_jit_code[];
 #define s_JitCode g3_jit_code

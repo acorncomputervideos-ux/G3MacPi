@@ -248,7 +248,7 @@ int main(int argc, char** argv)
         mem.blocks = blocks.data();
         mem.blocks_size = static_cast<u32>(blocks.size());
         if (std::getenv("G3_JITSIM")) {
-            code.resize(std::getenv("G3_JITWORDS") ? std::strtoul(std::getenv("G3_JITWORDS"), nullptr, 0) : 1024 * 1024);  // 4 MB, as on the Pi
+            code.resize(std::getenv("G3_JITWORDS") ? std::strtoul(std::getenv("G3_JITWORDS"), nullptr, 0) : 4 * 1024 * 1024);  // 16 MB, as on the Pi
             code_range[0] = code.data();
             code_range[1] = code.data() + code.size();
             mem.code = code.data();

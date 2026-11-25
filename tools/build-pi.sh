@@ -50,10 +50,21 @@ command -v "${PREFIX}g++" >/dev/null || {
 # docs/cpu/jit-a64.md), so it is bigger than Circle's default limit of
 # 2 MB. A bigger image overlaps the boot stack and dies before anything
 # shows (only the firmware's rainbow screen).
-KERNEL_MAX_MB=8
+KERNEL_MAX_MB=24  # the image holds the 16 MB code buffer (app/circle/kernel.cpp)
 
 echo "==> Configuring Circle (AArch64, Raspberry Pi 4/400, multi-core, kernel up to ${KERNEL_MAX_MB} MB)"
+OLD_CONFIG="$(cat "$CIRCLE/Config.mk" 2>/dev/null || true)"
 (cd "$CIRCLE" && ./configure -r 4 -p "$PREFIX" --kernel-max-size "$KERNEL_MAX_MB" --multicore -f >/dev/null)
+# Circle's makefiles do not depend on Config.mk: after a change (e.g. the
+# kernel size limit, which sysinit checks at start-up and halts on) its
+# objects must be rebuilt, or they keep the old values.
+if [[ -n "$OLD_CONFIG" && "$OLD_CONFIG" != "$(cat "$CIRCLE/Config.mk")" ]]; then
+    echo "==> Circle's configuration changed: rebuilding it from clean"
+    (cd "$CIRCLE" && ./makeall clean >/dev/null) || true
+    for addon in SDCard fatfs wlan; do make -s -C "$CIRCLE/addon/$addon" clean || true; done
+    make -s -C "$CIRCLE/addon/wlan/hostap/wpa_supplicant" -f Makefile.circle clean || true
+    make -s -C "$APP" clean || true
+fi
 
 echo "==> Building Circle libraries"
 (cd "$CIRCLE" && MAKE="make -j$JOBS" ./makeall --nosample >/dev/null)
