@@ -51,7 +51,10 @@ float ModemSound::sine(float phase) const
     phase -= static_cast<float>(static_cast<long long>(phase));
     if (phase < 0)
         phase += 1;
-    return table_[static_cast<u32>(phase * 1024.0f) & 1023];
+    const float x = phase * 1024.0f;  // linear interpolation between table entries
+    const u32 i = static_cast<u32>(x) & 1023;
+    const float f = x - static_cast<float>(static_cast<u32>(x));
+    return table_[i] + f * (table_[(i + 1) & 1023] - table_[i]);
 }
 
 void ModemSound::post(Event e, char digit, bool pulse, u8 speaker_mode, u8 volume)
