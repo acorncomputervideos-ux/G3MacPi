@@ -251,8 +251,20 @@ TEST_CASE("firmware/bw-tree/macio_addresses_match_the_emulated_hardware")
     CHECK_EQ(t.parent(b.n.escc_a), b.n.escc);
     CHECK_EQ(cell_addr(b.n.escc_a, 0), base + 0x13020u);
     CHECK_EQ(cell_addr(b.n.escc_b, 0), base + 0x13000u);
-    CHECK(cells(t, b.n.escc_a, "interrupts") == std::vector<u32>({15}));
-    CHECK(cells(t, b.n.escc_b, "interrupts") == std::vector<u32>({16}));
+    // Then data, the enhancement register and the transmit/receive DBDMA
+    // blocks; interrupts: the SCC's, then the two DMA ones (OpenBIOS
+    // drivers/escc.c; Mac OS's SerialDMA reads them all).
+    CHECK_EQ(cell_addr(b.n.escc_a, 1), base + 0x13030u);
+    CHECK_EQ(cell_addr(b.n.escc_a, 3), base + 0x8400u);
+    CHECK_EQ(cell_addr(b.n.escc_a, 4), base + 0x8500u);
+    CHECK_EQ(cell_addr(b.n.escc_b, 3), base + 0x8600u);
+    CHECK_EQ(cell_addr(b.n.escc_b, 4), base + 0x8700u);
+    CHECK_EQ(base + Paddington::kDbdmaOffset + Paddington::kEsccDmaChannel[0][0] * DbdmaController::kChannelStride,
+             base + 0x8400u);
+    CHECK_EQ(base + Paddington::kDbdmaOffset + Paddington::kEsccDmaChannel[1][1] * DbdmaController::kChannelStride,
+             base + 0x8700u);
+    CHECK(cells(t, b.n.escc_a, "interrupts") == std::vector<u32>({15, 4, 5}));
+    CHECK(cells(t, b.n.escc_b, "interrupts") == std::vector<u32>({16, 6, 7}));
     CHECK(compatible_with(t, b.n.escc_a, "chrp,es4") && compatible_with(t, b.n.escc_b, "chrp,es5"));
     CHECK(str(t, b.n.escc_a, "device_type") == "serial");
     const Phandle legacy = find_by_name(t, mio, "escc-legacy");

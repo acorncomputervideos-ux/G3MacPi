@@ -359,10 +359,21 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_ints(legacy, "reg", legacy_reg, 2);
         t.set_int(legacy, "#address-cells", 1);   // children's reg: one address, one size cell
         t.set_int(legacy, "#size-cells", 1);
-        const u32 la_reg[2] = {base + 2, 1}, lb_reg[2] = {base, 1};
-        const u32 irq_a[1] = {Paddington::kEsccIrq[0]}, irq_b[1] = {Paddington::kEsccIrq[1]};
-        const Phandle la = cell(t, legacy, n.pic, "ch-a", "serial", la_reg, 2, irq_a, 1);
-        const Phandle lb = cell(t, legacy, n.pic, "ch-b", "serial", lb_reg, 2, irq_b, 1);
+        // Each channel (OpenBIOS drivers/escc.c, which Mac OS 9 starts up
+        // with in QEMU; read for facts): reg = control, data, the
+        // enhancement register, then its transmit and receive DBDMA register
+        // blocks (mac-io + 0x8400/0x8500 for A, 0x8600/0x8700 for B);
+        // interrupts = the SCC's, then transmit and receive DMA (Heathrow's
+        // DMA interrupt n is the channel at mac-io + 0x8000 + n * 0x100, as
+        // sound's 8 and 9 at 0x8800/0x8900). Mac OS's SerialDMA driver reads
+        // all five ranges: with one, it called through garbage (a jump to
+        // 0x4000) when Mac OS 9.2.1 started up from a hard disk.
+        const u32 la_reg[10] = {base + 2, 1, base + 6, 1, base + 0xA, 1, 0x8400, 0x100, 0x8500, 0x100};
+        const u32 lb_reg[10] = {base + 0, 1, base + 4, 1, base + 8, 1, 0x8600, 0x100, 0x8700, 0x100};
+        const u32 irq_a[3] = {Paddington::kEsccIrq[0], Paddington::kEsccDmaIrq[0][0], Paddington::kEsccDmaIrq[0][1]};
+        const u32 irq_b[3] = {Paddington::kEsccIrq[1], Paddington::kEsccDmaIrq[1][0], Paddington::kEsccDmaIrq[1][1]};
+        const Phandle la = cell(t, legacy, n.pic, "ch-a", "serial", la_reg, 10, irq_a, 3);
+        const Phandle lb = cell(t, legacy, n.pic, "ch-b", "serial", lb_reg, 10, irq_b, 3);
         t.set_string(la, "compatible", "chrp,es2");
         t.set_string(lb, "compatible", "chrp,es3");
         const u32 escc_reg[2] = {base + 0x1000, 0x1000};
@@ -371,9 +382,10 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_ints(n.escc, "reg", escc_reg, 2);
         t.set_int(n.escc, "#address-cells", 1);
         t.set_int(n.escc, "#size-cells", 1);
-        const u32 a_reg[2] = {base + 0x1020, 0x20}, b_reg[2] = {base + 0x1000, 0x20};
-        n.escc_a = cell(t, n.escc, n.pic, "ch-a", "serial", a_reg, 2, irq_a, 1);
-        n.escc_b = cell(t, n.escc, n.pic, "ch-b", "serial", b_reg, 2, irq_b, 1);
+        const u32 a_reg[10] = {base + 0x1020, 1, base + 0x1030, 1, base + 0x1050, 1, 0x8400, 0x100, 0x8500, 0x100};
+        const u32 b_reg[10] = {base + 0x1000, 1, base + 0x1010, 1, base + 0x1040, 1, 0x8600, 0x100, 0x8700, 0x100};
+        n.escc_a = cell(t, n.escc, n.pic, "ch-a", "serial", a_reg, 10, irq_a, 3);
+        n.escc_b = cell(t, n.escc, n.pic, "ch-b", "serial", b_reg, 10, irq_b, 3);
         t.set_string(n.escc_a, "compatible", "chrp,es4");
         t.set_string(n.escc_b, "compatible", "chrp,es5");
         // slot-names (a count of 0: no named external connector), on every

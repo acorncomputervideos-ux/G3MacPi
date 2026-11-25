@@ -55,6 +55,11 @@ public:
     // channel A on input 15, B on 16 (a real B&W's Linux log).
     static constexpr u32 kEsccOffset = 0x12000;
     static constexpr u32 kEsccIrq[2] = {15, 16};
+    // The SCC's DBDMA: transmit/receive for A at + 0x8400/0x8500, for B at
+    // + 0x8600/0x8700 (OpenBIOS drivers/escc.c), i.e. our controller's
+    // channels 8/10 and 12/14 (0x80 apart); Heathrow DMA interrupts 4/5, 6/7.
+    static constexpr u32 kEsccDmaChannel[2][2] = {{8, 10}, {12, 14}};
+    static constexpr u32 kEsccDmaIrq[2][2] = {{4, 5}, {6, 7}};
     // Interrupt controller input used by the VIA/Cuda (QEMU Old World
     // OLDWORLD_CUDA_IRQ = 0x12; to verify for the B&W).
     static constexpr u32 kViaIrq = 18;
