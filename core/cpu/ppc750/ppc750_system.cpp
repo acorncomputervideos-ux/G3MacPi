@@ -158,8 +158,10 @@ void Ppc750::op_mtspr(u32 insn)
         // context switches).
         const bool changed = s_.spr[n] != v;
         s_.spr[n] = v;
-        if (changed && (n == spr::SDR1 || (n >= spr::IBAT0U && n <= spr::DBAT0U + 7)))
-            flush_tlb();
+        if (changed && n == spr::SDR1)
+            flush_tlb();  // another page table: nothing known about the old one holds
+        else if (changed && n >= spr::IBAT0U && n <= spr::DBAT0U + 7)
+            switch_translation();
         break;
     }
     }

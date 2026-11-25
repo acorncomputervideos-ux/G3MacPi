@@ -52,6 +52,10 @@ Each block of the block cache gets one function, `void(Ppc750*)`.
 
 ### Loads and stores
 
+(Since 2026-11-25 these checks are made once per page, when the fast data
+table is filled; see "Faster block ends, lookups and memory" below. The
+list is what a hit in that table stands for.)
+
 The generated fast path repeats `mem_fast`'s checks inline, in the same
 order:
 1. the access stays within its 4 KB page;
@@ -188,7 +192,8 @@ blocks were compiled over and over (CD boot at a 10 MHz effective clock,
   cache's memory (2^15 to 2^22 slots).
 - **Requests dropped** when the worker's queue was full are asked again
   (a block still without code 2^20 instructions after its request).
-- The Pi's block cache is 64 MB (of a ~2 GB heap) and its code buffer 4 MB.
+- The Pi's block cache is 64 MB (of a ~2 GB heap) and its code buffer 4 MB
+  (16 MB since 2026-11-25, below).
 
 ## Profile: what still goes to handlers
 
@@ -323,6 +328,56 @@ block and gives the block its code.
   `G3_DEFINES=-DG3_QEMU_DRAWTEST`), the CPU self-test ran the generated
   code natively on (emulated) Cortex-A72 cores for the first time: 20/20
   programs identical compiling on core 0, and 20/20 compiling on core 2.
+
+## Faster block ends, lookups and memory (2026-11-25)
+
+Measured with `G3_JITHIST=1 G3_MHZ=100 G3_JITSIM=1 g3_host` (CD boot, 8
+guest seconds, 786 936 865 guest instructions every time), AArch64
+instructions per guest instruction in generated code: 30.4 at the start
+of the day, then:
+
+| change | per guest instruction |
+|---|---|
+| far links and computed-jump links (inline cache) | 28.4 |
+| fast data table | 24.5 |
+| one word for the stop checks | 23.1 |
+| block ends reuse w8/x9 | 22.5 |
+| jump cache in front of dispatch | 21.1 |
+
+- **Fast data table** (`Ppc750::FastEntry`): per MSR[DR, PR], 256 entries
+  indexed by effective page; a hit means the access is in one page of RAM
+  (and, for stores, writable with C set and holding no blocks). The key is
+  the page of the access's last byte, the index that of its first, so a
+  page-crossing access never hits. The lookup is about 11 instructions
+  (it was about 30). It is filled on a miss from what the soft TLB holds
+  (`jit_fill`), emptied with the TLB and when the RAM window moves, and a
+  page's write entries go when it gets its first block (the block cache's
+  `marked` hook).
+- **Stop word**: `exit_`, the two interrupt inputs and a pad byte share an
+  aligned word, read once at a block's end; `mtmsr` sets `exit_` when it
+  sets MSR[POW].
+- **Jump cache** (`Ppc750::JumpEntry`): dispatch first looks up 1024
+  entries keyed by EA, MSR[IR|PR] and the translation ID; a hit whose
+  block's page kept its generation goes straight to "enter".
+- **Code buffer** 16 MB on the Pi (it was 4 MB, filled about every 0.7
+  guest seconds of the boot; each reset sent all code back through the
+  handlers). Circle's kernel limit is 24 MB (the buffer is in the image);
+  `build-pi.sh` rebuilds Circle when its configuration changes.
+
+### Translation IDs
+
+A per-core profile in QEMU (a TB-count plugin, kernel symbols) showed
+Mac OS changing an SR or BAT about once per 5000 instructions, and each
+change dropping the TLBs, the far links and the jump cache. Each distinct
+layout of the 16 SRs and 16 BAT registers now gets an ID (`xlat_id_`,
+`switch_translation`): a layout seen again since the last `flush_tlb`
+(tlbie, SDR1, reset ...) gets its old ID back; 64 are remembered. Far
+links and jump cache entries carry the key `ID << 16 | MSR[IR|PR]` they
+were made under and are only taken under the same key, so a switch no
+longer undoes them (the 750's own TLB is tagged with the VSID and keeps
+its entries across SR changes too). IDs are never reused until all 16
+bits are spent; then everything is undone and numbering restarts. A write
+of the value a register already holds changes nothing.
 
 ## Coverage, and what comes next
 

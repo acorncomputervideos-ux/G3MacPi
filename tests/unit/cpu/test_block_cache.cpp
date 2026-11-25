@@ -1391,7 +1391,7 @@ BOTH(far_link_translation_changed)
     CHECK(same(a, c, "far translation", 0, 0));
     CHECK_EQ(c.cpu.state().gpr[4], 19u + 20u * 100u);
     if (g_jit && !g_jit_bg)
-        CHECK(c.cpu.jit_stats().unlinked_far >= 1);
+        CHECK(c.cpu.jit_stats().linked_far >= 2);  // made again under the new layout's ID
 }
 
 BOTH(far_link_mode_changes)
@@ -1700,4 +1700,99 @@ BOTH(code_watch_sees_entries_through_the_jump_cache)
     CHECK_EQ(logs[0].n, 6u);
     CHECK_EQ(logs[1].n, logs[0].n);
     CHECK(std::memcmp(logs[0].pcs, logs[1].pcs, sizeof logs[0].pcs) == 0);
+}
+
+
+BOTH(far_link_layouts_alternate)
+{
+    // Each pass switches IBAT1 between two layouts (EA 0x40000 -> PA
+    // 0x60000 or 0x80000, different code) and jumps there: links made under
+    // one layout's translation ID must never be taken under the other's, and
+    // a layout seen before gets its ID back.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, D(28, 3, 5, 1)},             // andi. r5, r3, 1
+            {0x25004, bne(0xC)},                // odd pass -> 0x5010
+            {0x25008, mtspr(531, 12)},          // IBAT1L: -> PA 0x80000
+            {0x2500C, b(0x8)},                  // -> 0x5014
+            {0x25010, mtspr(531, 11)},          // IBAT1L: -> PA 0x60000
+            {0x25014, isync()},
+            {0x25018, addi(3, 3, 1)},
+            {0x2501C, cmpwi(0, 3, 21)},
+            {0x25020, beq(0x8)},                // -> 0x5028: done
+            {0x25024, b(0x40000 - 0x5024)},     // far: EA 0x40000
+            {0x25028, b(0)},
+            {0x60000, addi(4, 4, 1)},
+            {0x60004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // IBAT1U: EA 0x40000, 128 KB, Vs
+        s.spr[spr::IBAT0U + 3] = 0x00060002u;   // IBAT1L: -> PA 0x60000
+        s.gpr[11] = 0x00060002u;
+        s.gpr[12] = 0x00080002u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "alternating layouts", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 10u * 100u + 10u * 1u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().xlat_reused >= 10);
+}
+
+BOTH(far_link_page_table_changed)
+{
+    // A far jump to EA 0x403000, mapped by the page table (SDR1 0x10000,
+    // SR0 VSID 0x123: PTEG 0x14800, PTE word 0 0x80009181) to PA 0x60000.
+    // After 19 passes the loop points the PTE at PA 0x80000 and does tlbie,
+    // then switches DBAT3 away and back: the layout of SRs and BATs is as
+    // before, but the page table is not, so its old ID (and the links made
+    // under it) must not come back.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, addi(3, 3, 1)},
+            {0x25004, cmpwi(0, 3, 20)},
+            {0x25008, bne(0x1C)},               // -> 0x5024
+            {0x2500C, stw(12, 4, 14)},          // PTE word 1: -> PA 0x80000
+            {0x25010, X(31, 0, 0, 15, 306)},    // tlbie r15
+            {0x25014, mtspr(542, 16)},          // DBAT3U: another layout ...
+            {0x25018, mtspr(542, 17)},          // ... and back
+            {0x2501C, isync()},
+            {0x25020, b(0x4)},
+            {0x25024, cmpwi(0, 3, 40)},
+            {0x25028, beq(0xC)},                // -> 0x5034: done
+            {0x2502C, b(0x403000 - 0x502C)},    // far: EA 0x403000
+            {0x25030, b(0)},
+            {0x25034, b(0)},
+            {0x60000, addi(4, 4, 1)},
+            {0x60004, b(0x5000 - 0x403004)},
+            {0x80000, addi(4, 4, 100)},
+            {0x80004, b(0x5000 - 0x403004)},
+        });
+        store_be32(m->ram.data() + 0x14800, 0x80009181u);
+        store_be32(m->ram.data() + 0x14804, 0x00060002u);   // RPN 0x60000, PP = read/write
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::SDR1] = 0x00010000u;
+        s.sr[0] = 0x123u;
+        s.gpr[12] = 0x00080002u;
+        s.gpr[14] = 0x14800u;
+        s.gpr[15] = 0x403000u;
+        s.gpr[16] = 0x70000002u;
+        s.gpr[17] = 0;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "page table changed", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 19u + 20u * 100u);
 }

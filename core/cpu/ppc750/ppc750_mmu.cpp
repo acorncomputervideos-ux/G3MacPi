@@ -223,17 +223,83 @@ bool Ppc750::probe_translate(u32 ea, bool write, u32& pa)
     return page_translate(ea, access, pa, fault, writable, changed, true);
 }
 
-void Ppc750::flush_tlb()
+void Ppc750::drop_translations()
 {
     fetch_host_ = nullptr;
-    if (jit_far_count_)
-        jit_unlink_far(~0u);  // links to other pages were made under the old translation
     jit_fast_drop(true);  // the translated entries came from the TLB
-    jit_jump_drop();      // EA -> block was found under the old translation
     for (u32 i = 0; i < kTlbSize; ++i) {
         itlb_[i].tag = 0;
         dtlb_[i].tag = 0;
     }
+}
+
+void Ppc750::flush_tlb()
+{
+    drop_translations();
+    for (XlatLayout& l : xlat_layouts_)
+        l.id = 0;  // no layout gets an old ID back
+    new_translation_id();
+    remember_layout();  // the current one, under its new ID
+}
+
+// The current layout of SRs and BATs, and its hash (FNV-1a over the words).
+u32 Ppc750::current_layout(u32 (&regs)[32]) const
+{
+    u32 hash = 2166136261u;
+    for (u32 i = 0; i < 32; ++i) {
+        regs[i] = i < 16 ? s_.sr[i] : s_.spr[spr::IBAT0U + i - 16];
+        hash = (hash ^ regs[i]) * 16777619u;
+    }
+    return hash;
+}
+
+void Ppc750::remember_layout()
+{
+    XlatLayout& l = xlat_layouts_[xlat_victim_];
+    xlat_victim_ = (xlat_victim_ + 1) % kXlatLayouts;
+    l.hash = current_layout(l.regs);
+    l.id = xlat_id_;
+}
+
+// IDs are never given twice: links and remembered jumps keyed with an old
+// one cannot match again. Once all 16 bits are used, everything made
+// under any of them is undone and numbering starts again.
+void Ppc750::new_translation_id()
+{
+    if (xlat_next_ > 0xFFFFu) {
+        if (jit_far_count_)
+            jit_unlink_far(~0u);
+        jit_jump_drop();
+        for (XlatLayout& l : xlat_layouts_)
+            l.id = 0;
+        xlat_next_ = 1;
+    }
+    xlat_id_ = xlat_next_++;
+}
+
+// The page table and SDR1 are as before (anything else goes through
+// flush_tlb), so a layout of SRs and BATs seen before translates as it did
+// then: it gets its ID back.
+void Ppc750::switch_translation()
+{
+    drop_translations();
+    ++jit_stats_.xlat_switches;
+    u32 regs[32];
+    const u32 hash = current_layout(regs);
+    for (XlatLayout& l : xlat_layouts_) {
+        if (l.id == 0 || l.hash != hash)
+            continue;
+        bool same = true;
+        for (u32 i = 0; i < 32 && same; ++i)
+            same = l.regs[i] == regs[i];
+        if (same) {
+            xlat_id_ = l.id;
+            ++jit_stats_.xlat_reused;
+            return;
+        }
+    }
+    new_translation_id();
+    remember_layout();
 }
 
 bool Ppc750::translate_enabled(u32 ea, Access access, u32& pa)

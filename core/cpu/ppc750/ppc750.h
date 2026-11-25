@@ -84,6 +84,9 @@ public:
         tlb_enabled_ = enabled;
         flush_tlb();
     }
+    // Everything cached about translation goes (tlbie, SDR1, reset ...),
+    // and with it every translation ID (links and remembered jumps made
+    // under one are never taken again).
     void flush_tlb();
 
     CpuState& state() { return s_; }
@@ -155,6 +158,7 @@ public:
         u64 retried = 0;      // blocks asked again for code (a request or result was dropped)
         u64 linked = 0;       // direct links patched (block to block, same page)
         u64 linked_far = 0, unlinked_far = 0;  // links to another page made / undone
+        u64 xlat_switches = 0, xlat_reused = 0;  // SR/BAT changes; of them, back to a known layout
     };
     // Profile of the JIT's handler calls (docs/cpu/jit-a64.md): generated
     // code counts, per kind of instruction (jit_op_id), the instructions it
@@ -440,8 +444,26 @@ private:
     struct FarLink {
         u32* mode;   // the slot's movz
         u32 page;    // the target's physical page
-        u32 branch;  // the branch is mode[branch] (3: far b/bc; 7: bclr/bcctr)
+        u32 branch;  // the branch is mode[branch] (4: far b/bc; 8: bclr/bcctr)
     };
+    // Translation IDs (docs/cpu/jit-a64.md): one per layout of the segment
+    // registers and BATs seen since the last flush_tlb, so that switching
+    // back to a layout finds its far links and remembered jumps still
+    // good, as the 750's VSID-tagged TLB keeps its entries. Generated code
+    // compares xlat_id_ << 16 | MSR[IR|PR] with the key a link was made
+    // under.
+    u32 xlat_id_ = 1, xlat_next_ = 2;
+    struct XlatLayout {
+        u32 hash = 0, id = 0;  // id 0: empty
+        u32 regs[32] = {};     // SR0-15, IBAT0U-DBAT3L
+    };
+    static constexpr u32 kXlatLayouts = 64;
+    u32 xlat_victim_ = 0;
+    void drop_translations();   // the TLBs, the fetch page, translated fast entries
+    void switch_translation();  // an SR or BAT changed: the layout's ID
+    void new_translation_id();
+    u32 current_layout(u32 (&regs)[32]) const;
+    void remember_layout();
     u32* jit_far_slot_ = nullptr;  // asked for by dispatch_link, made by enter
     u32 jit_far_count_ = 0;
     u32 jit_stub_dispatch_link_ = 0;
@@ -541,6 +563,7 @@ private:
     TlbEntry itlb_[kTlbSize];
     TlbEntry dtlb_[kTlbSize];
     FarLink jit_far_links_[kMaxFarLinks] = {};
+    XlatLayout xlat_layouts_[kXlatLayouts];
     JumpEntry jit_jump_[kJumpSize];
     FastEntry jit_fast_[4 * kFastSize];  // [MSR[PR] * 2 + MSR[DR]][page & 255]
     u8* fast_ram_ = nullptr;             // the RAM window jit_fast_ was filled for

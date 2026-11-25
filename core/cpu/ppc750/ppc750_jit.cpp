@@ -144,7 +144,7 @@ struct JitCompiler {
     const u32* stub_dispatch_link = nullptr;
     u32 far_slot_off = 0;
     u32 entry_off = 0, code_pages_off = 0, dtlb_ptr_off = 0, link_block_off = 0, link_slot_off = 0;
-    u32 fast_ptr_off = 0, jump_ptr_off = 0, jump_used_off = 0;
+    u32 fast_ptr_off = 0, jump_ptr_off = 0, jump_used_off = 0, xlat_off = 0;
     u8* kinds = nullptr;  // Ppc750::jit_word_kinds_ (diagnostics)
     void tag_one(u32 w, u8 kind)
     {
@@ -948,25 +948,31 @@ struct JitCompiler {
         bool any_far = computed;
         for (u32 k = 0; k < nstatics; ++k)
             any_far = any_far || statics[k].far;
-        if (any_far)
-            a.ldr(false, X9, X20, msr_off());         // w9 = the MSR (the links' mode)
+        if (any_far) {
+            // w13 = the key links are made under: translation ID << 16 |
+            // MSR[IR|PR] (Ppc750::xlat_id_). w9 = the MSR (for dispatch).
+            a.ldr(false, X9, X20, msr_off());
+            a.mov_imm32(X12, msr::IR | msr::PR);
+            a.and_(false, X13, X9, X12);
+            load_field(false, X10, xlat_off, 4);
+            a.orr(false, X13, X13, X10, 16);
+        }
         for (u32 k = 0; k < nstatics; ++k) {
             Assembler::Label other;
             add_const(X10, X21, static_cast<u32>(statics[k].delta));
             a.cmp(false, X8, X10);
             a.b_cond(Assembler::NE, other);
             if (statics[k].far) {
-                // Another page: a link made under one MSR[IR|PR] (the movz,
-                // patched with it; 0xFFFF matches none) and undone when the
-                // translation or the target's page changes (jit_far_link).
+                // Another page: a link made under one key (the movz/movk,
+                // patched with it; 0xFFFFFFFF matches none), undone when the
+                // target's page changes (jit_far_link, jit_unlink_far).
                 Assembler::Label unlinked;
-                a.mov_imm32(X12, msr::IR | msr::PR);
-                a.and_(false, X11, X9, X12);
                 const u32* mode = a.start() + a.size();
-                a.movz(false, X12, 0xFFFF, 0);        // patched: the link's MSR[IR|PR]
-                a.cmp(false, X11, X12);
-                a.b_cond(Assembler::NE, unlinked);
-                a.nop();                              // patched: b to the target (mode + 3)
+                a.movz(false, X12, 0xFFFF, 0);        // 0: patched: the link's key, low half
+                a.movk(false, X12, 0xFFFF, 16);       // 1: ... high half
+                a.cmp(false, X13, X12);               // 2
+                a.b_cond(Assembler::NE, unlinked);    // 3
+                a.nop();                              // 4: patched: b to the target
                 a.bind(unlinked);
                 a.mov_imm64(X15, reinterpret_cast<u64>(mode));
                 a.b_abs(stub_dispatch_link);
@@ -983,21 +989,21 @@ struct JitCompiler {
             a.bind(other);
         }
         if (computed) {
-            // bclr/bcctr: the first target seen (its address and MSR[IR|PR],
-            // patched into the movz/movk) is linked like a far target;
-            // another target takes dispatch without relinking.
+            // bclr/bcctr: the first target seen under a key (its address
+            // and the key, patched into the movz/movk pairs) is linked like a
+            // far target; another target under the same key takes dispatch
+            // without relinking.
             Assembler::Label link_path;
-            a.mov_imm32(X12, msr::IR | msr::PR);
-            a.and_(false, X11, X9, X12);
             const u32* mode = a.start() + a.size();
-            a.movz(false, X12, 0xFFFF, 0);            // 0: patched: the link's MSR[IR|PR]
-            a.cmp(false, X11, X12);                   // 1
-            a.b_cond(Assembler::NE, link_path);       // 2: unlinked, or another mode
-            a.movz(false, X12, 0, 0);                 // 3: patched: target address, low half
-            a.movk(false, X12, 0, 16);                // 4: ... high half
-            a.cmp(false, X8, X12);                    // 5
-            a.b_cond(Assembler::NE, generic);         // 6: another target
-            a.nop();                                  // 7: patched: b to the target
+            a.movz(false, X12, 0xFFFF, 0);            // 0: patched: the link's key, low half
+            a.movk(false, X12, 0xFFFF, 16);           // 1: ... high half
+            a.cmp(false, X13, X12);                   // 2
+            a.b_cond(Assembler::NE, link_path);       // 3: unlinked, or another key
+            a.movz(false, X12, 0, 0);                 // 4: patched: target address, low half
+            a.movk(false, X12, 0, 16);                // 5: ... high half
+            a.cmp(false, X8, X12);                    // 6
+            a.b_cond(Assembler::NE, generic);         // 7: another target
+            a.nop();                                  // 8: patched: b to the target
             a.bind(link_path);
             a.mov_imm64(X15, reinterpret_cast<u64>(mode));
             a.b_abs(stub_dispatch_link);
@@ -1104,7 +1110,9 @@ struct JitCompiler {
         a.and_(false, X11, X9, X12);                  // w11 = MSR[IR|PR]
         // The jump cache (Ppc750::JumpEntry): this PC in this mode found
         // before, and its block's page not dropped since.
-        a.orr(true, X12, X8, X11, 32);                // the key (x8: zero-extended)
+        load_field(false, X10, xlat_off, 4);
+        a.orr(false, X12, X11, X10, 16);              // translation ID << 16 | MSR[IR|PR]
+        a.orr(true, X12, X8, X12, 32);                // the key (x8: zero-extended)
         a.ubfx(X13, X8, 2, 10);
         load_field(true, X10, jump_ptr_off, 8);
         a.add(true, X13, X10, X13, 4);                // * 16: the entry
@@ -1227,7 +1235,9 @@ struct JitCompiler {
             a.cbnz(true, X10, no_fill);
             a.mov_imm32(X12, msr::IR | msr::PR);
             a.and_(false, X11, X9, X12);
-            a.orr(true, X12, X8, X11, 32);
+            load_field(false, X10, xlat_off, 4);
+            a.orr(false, X12, X11, X10, 16);
+            a.orr(true, X12, X8, X12, 32);
             a.ubfx(X13, X8, 2, 10);
             load_field(true, X10, jump_ptr_off, 8);
             a.add(true, X13, X10, X13, 4);
@@ -1365,6 +1375,7 @@ struct JitCompiler {
         jc.fast_ptr_off = off(&c.jit_fast_ptr_);
         jc.jump_ptr_off = off(&c.jit_jump_ptr_);
         jc.jump_used_off = off(&c.jump_used_);
+        jc.xlat_off = off(&c.xlat_id_);
         jc.kinds = c.jit_word_kinds_;
         jc.link_block_off = off(&c.jit_link_block_);
         jc.link_slot_off = off(&c.jit_link_slot_);
@@ -1526,24 +1537,29 @@ void Ppc750::jit_far_link(void* cpu, u32)
     auto& c = *static_cast<Ppc750*>(cpu);
     u32* mode = c.jit_far_slot_;
     c.jit_far_slot_ = nullptr;
-    if (!mode || c.jit_far_count_ >= kMaxFarLinks || c.watch_cb_)
+    if (!mode || c.watch_cb_)
         return;  // (a code watch: page changes go through dispatch)
+    // Two layouts (JitCompiler::chain): the key's movz/movk at mode[0..1];
+    // a far b/bc has its branch at mode[4]; a computed bclr/bcctr has a
+    // movz/movk of the target address at mode[4..5], the branch at mode[8].
+    const u32 key = c.xlat_id_ << 16 | (c.s_.msr & (msr::IR | msr::PR));
+    const u32 made = (mode[0] >> 5 & 0xFFFFu) | (mode[1] >> 5 & 0xFFFFu) << 16;
+    if (made == key)
+        return;  // linked under this key already (a computed one: to another target): keep it
+    if (c.jit_far_count_ >= kMaxFarLinks)
+        c.jit_unlink_far(~0u);  // the records are full (relinks add one each): start again
+    const bool computed = (mode[4] & 0xFFE0001Fu) == (0x52800000u | 12);
+    const u32 at = computed ? 8 : 4;
     BlockCache::Block* b = c.jit_link_block_;
-    const u32 bits = c.s_.msr & (msr::IR | msr::PR);
-    // Two layouts: a far b/bc (the branch at mode[3]); a computed bclr/bcctr
-    // (mode[3] is a movz w12 for the target address, the branch at mode[7]).
-    const bool computed = (mode[3] & 0xFFE0001Fu) == (0x52800000u | 12);
-    if (computed && (mode[0] >> 5 & 0xFFFF) != 0xFFFF)
-        return;  // already linked (to another mode): keep it
-    const u32 at = computed ? 7 : 3;
     u32* slot = mode + at;
     const u32* target = c.jit_code_ + (b->code - 1);
     if (computed) {
         const u32 ea = c.s_.pc;  // the target this time
-        mode[3] = 0x52800000u | ((ea & 0xFFFF) << 5) | 12;  // movz w12, #lo
-        mode[4] = 0x72A00000u | ((ea >> 16) << 5) | 12;     // movk w12, #hi, lsl 16
+        mode[4] = 0x52800000u | ((ea & 0xFFFF) << 5) | 12;  // movz w12, #lo
+        mode[5] = 0x72A00000u | ((ea >> 16) << 5) | 12;     // movk w12, #hi, lsl 16
     }
-    mode[0] = 0x52800000u | (bits << 5) | 12;  // movz w12, #bits
+    mode[0] = 0x52800000u | ((key & 0xFFFF) << 5) | 12;    // movz w12, #key lo
+    mode[1] = 0x72A00000u | ((key >> 16) << 5) | 12;       // movk w12, #key hi, lsl 16
     slot[0] = 0x14000000u | (static_cast<u32>(target - slot) & 0x03FFFFFFu);
     sync_icache(mode, slot + 1);
     c.jit_far_links_[c.jit_far_count_++] = FarLink{mode, b->pa >> BlockCache::kPageShift, at};
@@ -1560,9 +1576,10 @@ void Ppc750::jit_unlink_far(u32 page)
             jit_far_links_[kept++] = l;
             continue;
         }
-        l.mode[0] = 0x52800000u | (0xFFFFu << 5) | 12;  // movz w12, #0xFFFF: matches no mode
+        l.mode[0] = 0x52800000u | (0xFFFFu << 5) | 12;  // key 0xFFFFFFFF: matches none
+        l.mode[1] = 0x72A00000u | (0xFFFFu << 5) | 12;
         l.mode[l.branch] = 0xD503201Fu;                  // nop
-        sync_icache(l.mode, l.mode + 4);
+        sync_icache(l.mode, l.mode + l.branch + 1);
         ++jit_stats_.unlinked_far;
     }
     jit_far_count_ = kept;

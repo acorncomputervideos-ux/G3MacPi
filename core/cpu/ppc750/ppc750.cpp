@@ -373,7 +373,7 @@ void Ppc750::execute_op31(u32 insn)
                 const u32 v = s_.gpr[field::rd(insn)];
                 if (s_.sr[sr] != v) {
                     s_.sr[sr] = v;
-                    flush_tlb();
+                    switch_translation();
                 }
             }
         }
