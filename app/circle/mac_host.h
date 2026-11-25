@@ -13,6 +13,7 @@
 
 #include "core/storage/block_device.h"
 #include "platform/common/audio_bridge.h"
+#include "platform/common/modem_sound.h"
 #include "platform/common/net_bridge.h"
 #include "platform/common/mac_session.h"
 #include "platform/common/disk_cache.h"
@@ -75,6 +76,10 @@ public:
 	void disc_ejected (u32 nDrive) override;
 	g3::AudioSink *audio_sink (void) override	{ return m_bSound ? &m_Audio : 0; }
 	g3::NetLink *net_link (void) override		{ return m_bNet ? &m_Net : 0; }
+	// The modem's speaker: posted by the emulation core, mixed into the
+	// HDMI sound by core 3 (only when that sound works).
+	g3::ModemSound *modem_sound (void) override	{ return m_bSound ? &m_ModemSound : 0; }
+	g3::ModemSound *GetModemSound (void)		{ return &m_ModemSound; }
 	bool mac_address (u8 Out[6]) override;
 
 	// Sound and Ethernet: the emulation core's ends of the queues the I/O
@@ -93,6 +98,7 @@ private:
 	void		*m_pEjectContext;
 	CDiskIoCore	*m_pIoCore = 0;
 	g3::AudioBridge	m_Audio;
+	g3::ModemSound	m_ModemSound;
 	g3::NetBridge	m_Net;
 	boolean		m_bSound = FALSE;
 	boolean		m_bNet = FALSE;

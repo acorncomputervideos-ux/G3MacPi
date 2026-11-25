@@ -17,7 +17,8 @@ reproduced is what the Mac sees.
 | The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | `platform/common/dialup_link.*` | done |
 | Dial-up sounds, generated | `platform/common/modem_sound.*` | done |
 | Put together on channel A, in the session (`modem = yes`) | `platform/common/dialup_modem.*`, `net_tee.*` | done |
-| The Pi's audio mix, g3_host's capture, menu option | | next |
+| The Pi: menu "Modem", speaker mixed into the HDMI sound on core 3 | `platform/common/config_menu.*`, `app/circle/kernel.cpp`, `mac_host.h` | built; not yet tried on a Pi |
+| g3_host: `G3_MODEMWAV` (speaker), `G3_MODEMLOG` (bytes, DTR, events) | `app/host/main.cpp` | done |
 
 ## The modem (hayes_modem.h)
 
@@ -100,3 +101,20 @@ while the card's receiver is off. The speaker goes to the host's
 `tests/unit/platform/test_dialup_modem.cpp` drives it through the SCC's
 registers (AT, pacing, dialling, carrier, the provider's first PPP frame,
 DTR hang-up); 4 sabotage runs, all caught.
+
+## With Mac OS 9.2.1 (tried in g3_host)
+
+Remote Access, the Modem control panel's "Internal Modem" and Apple's
+"PowerMac G3 Internal 56K" script: the script sets the modem up, dials,
+gets `CONNECT 53333`, and PPP comes up (PAP with the typed name and
+password, the Mac gets its address and DNS); the status shows "Connected
+at: 53333 bps". What that needed, beyond the pieces above:
+
+- The device tree names channel A "Modem" (`slot-names`), or the Modem
+  panel shows "no serial ports available" (docs/firmware/bw-device-tree.md).
+- Mac OS's serial driver (SerialDMA) runs both directions through DBDMA,
+  and uses FLUSH to see partial receives (docs/hardware/dbdma.md).
+- RR0's CTS bit reads inverted on Macs (docs/hardware/escc.md).
+- S registers up to S255 (the script sets S95).
+- S25: a DTR drop counts only after 50 ms; Mac OS resets the SCC just
+  after CONNECT, which drops DTR for microseconds, and the script sets &D3.

@@ -132,6 +132,7 @@ bool ConfigMenu::restart_differs(u32 item) const
     if (item == kDepth) return a.depth != b.depth;
     if (item == kSound) return a.sound != b.sound;
     if (item == kNetwork) return a.network != b.network;
+    if (item == kModem) return a.modem != b.modem;
     if (item == kJit) return a.jit != b.jit;
     if (item >= kDrive0 && item < kFloppy) {
         const auto& x = a.drive[item - kDrive0];
@@ -393,6 +394,8 @@ void ConfigMenu::change_main(u32 item, int dir)
     } else if (item == kWifi) {
         toggle_wifi();
         return;
+    } else if (item == kModem) {
+        cfg_.modem = !cfg_.modem;
     } else if (item == kAutostart) {
         cfg_.autostart = !cfg_.autostart;
     } else if (item == kJit) {
@@ -768,6 +771,9 @@ void ConfigMenu::render(Screen& s) const
                 } else {
                     scopy(buf, sizeof buf, "WiFi (no network set: wifi_name in g3macpi.ini)");
                 }
+            } else if (i == kModem) {
+                scat(label, sizeof label, "Modem");
+                scopy(buf, sizeof buf, cfg_.modem ? "Internal 56K: dials up through the network" : "None");
             } else if (i == kAutostart) {
                 scat(label, sizeof label, "At power-on");
                 scopy(buf, sizeof buf, cfg_.autostart ? "Start the Mac (F12: this menu)" : "Show this menu");

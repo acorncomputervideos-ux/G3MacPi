@@ -259,6 +259,11 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     r.press(kLeft);
     CHECK(!r.menu.config().wifi);
     CHECK(r.has("Ethernet"));
+    r.press(kDown);                                    // Modem: off by default
+    CHECK(!r.menu.config().modem);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::None);
+    CHECK(r.menu.config().modem);
+    CHECK(r.has("Internal 56K: dials up through the network"));
     r.press(kDown);                                    // At power-on
     CHECK(r.has("Start the Mac (F12: this menu)"));
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);

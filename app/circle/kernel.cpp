@@ -271,7 +271,7 @@ void CKernel::StartSoundAndNet (void)
 	{
 		m_pHDMISound->SetWriteFormat (SoundFormatSigned16, 2);
 		m_MacHost.EnableSound ();
-		m_DrawCore.AttachSound (m_MacHost.GetAudioBridge (), m_pHDMISound);
+		m_DrawCore.AttachSound (m_MacHost.GetAudioBridge (), m_pHDMISound, m_MacHost.GetModemSound ());
 		m_Logger.Write (FromKernel, LogNotice, "Sound: HDMI, %u Hz, mixed on core 3", SoundSampleRate);
 	}
 	else
@@ -658,9 +658,10 @@ void CDrawCore::DetachDisk (g3::DiskCache *pCache)
 	}
 }
 
-void CDrawCore::AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice)
+void CDrawCore::AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice, g3::ModemSound *pModem)
 {
 	m_pSound = pDevice;
+	m_pModemSound = pModem;
 	__atomic_store_n (&m_pAudio, pBridge, __ATOMIC_SEQ_CST);
 	asm volatile ("sev");
 }
@@ -677,8 +678,8 @@ void CDrawCore::AttachNet (CNetDevice *pAdapter, g3::NetBridge *pMac, const u8 *
 }
 
 // The HDMI sound queue: kept filled with the Mac's sound, resampled to the
-// device's 48 kHz (silence when the Mac plays nothing). Returns the chunks
-// written.
+// device's 48 kHz (silence when the Mac plays nothing), with the dial-up
+// modem's speaker added. Returns the chunks written.
 u32 CDrawCore::ServiceSound (void)
 {
 	g3::AudioBridge *pBridge = __atomic_load_n (&m_pAudio, __ATOMIC_SEQ_CST);
@@ -693,6 +694,10 @@ u32 CDrawCore::ServiceSound (void)
 	       && m_pSound->GetQueueSizeFrames () - m_pSound->GetQueueFramesAvail () >= Chunk)
 	{
 		pBridge->render (Buffer, Chunk, SoundSampleRate);
+		if (m_pModemSound != 0)
+		{
+			m_pModemSound->render_add (Buffer, Chunk, SoundSampleRate);
+		}
 		m_pSound->Write (Buffer, sizeof Buffer);
 		nDone++;
 	}

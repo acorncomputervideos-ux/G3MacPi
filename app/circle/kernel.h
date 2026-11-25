@@ -82,7 +82,7 @@ public:
 	// Core 0, once: the sound and network devices core 3 serves. The
 	// network: the adapter, and the two stations sharing it (either
 	// bridge may be 0): the Mac and the Pi's own stack (the web interface).
-	void AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice);
+	void AttachSound (g3::AudioBridge *pBridge, CSoundBaseDevice *pDevice, g3::ModemSound *pModem);
 	void AttachNet (CNetDevice *pAdapter, g3::NetBridge *pMac, const u8 *pMacAddress,
 			g3::NetBridge *pPi, const u8 *pPiAddress);
 
@@ -93,6 +93,7 @@ private:
 	u32 ServiceNet (void);
 	g3::AudioBridge *m_pAudio = 0;		// atomic accesses only
 	CSoundBaseDevice *m_pSound = 0;
+	g3::ModemSound *m_pModemSound = 0;	// mixed into the Mac's sound
 	CNetDevice *m_pNetDevice = 0;		// atomic accesses only
 	g3::NetBridge *m_pMacNet = 0;
 	g3::NetBridge *m_pPiNet = 0;
