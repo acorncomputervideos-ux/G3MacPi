@@ -61,6 +61,8 @@ void BlockCache::flush()
     used_ = 0;
     *signal_ = 1;
     ++stats_.flushes;
+    if (on_flushed_)
+        on_flushed_(hook_ctx_);
 }
 
 BlockCache::Block* BlockCache::allocate(u32 pa, u32 ops)
@@ -95,6 +97,8 @@ void BlockCache::invalidate_page(u32 page)
     code_[page] = 0;
     *signal_ = 1;
     ++stats_.invalidations;
+    if (on_invalidated_)
+        on_invalidated_(hook_ctx_, page);
 }
 
 } // namespace g3::ppc

@@ -148,6 +148,7 @@ public:
         u64 code_words = 0;   // AArch64 instructions generated (compiled here)
         u64 retried = 0;      // blocks asked again for code (a request or result was dropped)
         u64 linked = 0;       // direct links patched (block to block, same page)
+        u64 linked_far = 0, unlinked_far = 0;  // links to another page made / undone
     };
     // Profile of the JIT's handler calls (docs/cpu/jit-a64.md): generated
     // code counts, per kind of instruction (jit_op_id), the instructions it
@@ -422,6 +423,20 @@ private:
     u32* jit_link_slot_ = nullptr;
     BlockCache::Block* jit_link_block_ = nullptr;
     static void jit_link(void* cpu, u32 unused);
+    // Links to blocks in other pages (ppc750_jit.cpp).
+    static constexpr u32 kMaxFarLinks = 16384;
+    struct FarLink {
+        u32* mode;   // the slot's movz
+        u32 page;    // the target's physical page
+        u32 branch;  // the branch is mode[branch] (3: far b/bc; 7: bclr/bcctr)
+    };
+    u32* jit_far_slot_ = nullptr;  // asked for by dispatch_link, made by enter
+    u32 jit_far_count_ = 0;
+    u32 jit_stub_dispatch_link_ = 0;
+    static void jit_far_link(void* cpu, u32 unused);
+    void jit_unlink_far(u32 page);
+    static void jit_cache_invalidated(void* cpu, u32 page);
+    static void jit_cache_flushed(void* cpu);
     // Generates b's code at `at` (room words); words used in `size`. Reads
     // nothing of the CPU that changes while it runs (callable from the worker).
     bool jit_generate(BlockCache::Block& b, u32* at, u32 room, u32& size, JitStats& st);
@@ -480,6 +495,7 @@ private:
     CpuState s_;
     TlbEntry itlb_[kTlbSize];
     TlbEntry dtlb_[kTlbSize];
+    FarLink jit_far_links_[kMaxFarLinks] = {};
     // The JIT profile.
     u64 jit_profile_[kJitOpIds] = {};
     u32 jit_sample_[kJitOpIds] = {};  // written by whoever compiles (relaxed atomics)

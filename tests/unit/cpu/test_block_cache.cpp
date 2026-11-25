@@ -1300,3 +1300,221 @@ BOTH(supervisor_spr_read_in_user_mode)
     CHECK_EQ(c.cpu.state().gpr[4], 0xAAAAu);   // not read
     CHECK_EQ(c.cpu.state().gpr[5], 1u);        // the program exception handler ran
 }
+
+BOTH(far_links_loop_between_pages)
+{
+    // A loop whose two blocks are in different pages: the b and the bdnz
+    // are linked directly (another page), and results match the interpreter.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, b(0x6000 - 0x5004)},
+            {0x6000, addi(4, 4, 1)},
+            {0x6004, bdnz(0x5000 - 0x6004)},
+            {0x6008, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().ctr() = 50;
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "far loop", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 50u);
+    CHECK_EQ(c.cpu.state().gpr[4], 50u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().linked_far >= 2);
+}
+
+BOTH(far_link_target_page_rewritten)
+{
+    // The loop rewrites the instruction its far link jumps to: the link
+    // must be undone (the target's page dropped) and the new code run.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, cmpwi(0, 3, 20)},
+            {0x5008, bne(0x8)},          // -> 0x5010
+            {0x500C, stw(10, 0, 11)},    // r3 == 20: rewrite 0x6000
+            {0x5010, b(0x6000 - 0x5010)},
+            {0x6000, addi(4, 4, 1)},
+            {0x6004, bdnz(0x5000 - 0x6004)},
+            {0x6008, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().ctr() = 40;
+        m->cpu.state().gpr[10] = addi(4, 4, 100);
+        m->cpu.state().gpr[11] = 0x6000;
+        m->cpu.run(2000);
+    }
+    CHECK(same(a, c, "far rewrite", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 19u + 21u * 100u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().unlinked_far >= 1);
+}
+
+BOTH(far_link_translation_changed)
+{
+    // Translated fetch: the source through IBAT0, the far target (EA
+    // 0x40000) through IBAT1. After 19 passes the loop remaps IBAT1 to
+    // other code: a link made under the old translation must not be used.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, addi(3, 3, 1)},
+            {0x25004, cmpwi(0, 3, 20)},
+            {0x25008, bne(0xC)},                // -> 0x5014
+            {0x2500C, mtspr(531, 12)},          // IBAT1L: EA 0x40000 -> PA 0x80000
+            {0x25010, isync()},
+            {0x25014, cmpwi(0, 3, 40)},
+            {0x25018, beq(0x10)},               // -> 0x5028: done
+            {0x2501C, b(0x40000 - 0x501C)},     // far: EA 0x40000
+            {0x25028, b(0)},
+            {0x60000, addi(4, 4, 1)},           // EA 0x40000 before the remap
+            {0x60004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},         // ... and after
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // IBAT1U: EA 0x40000, 128 KB, Vs
+        s.spr[spr::IBAT0U + 3] = 0x00060002u;   // IBAT1L: -> PA 0x60000
+        s.gpr[12] = 0x00080002u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "far translation", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 19u + 20u * 100u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().unlinked_far >= 1);
+}
+
+BOTH(far_link_mode_changes)
+{
+    // A far link made in real mode must not be taken once instruction
+    // translation is on: the same effective target is other code then.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, cmpwi(0, 3, 10)},
+            {0x5008, bne(0xC)},            // -> 0x5014
+            {0x500C, mtmsr(9)},            // IR on at r3 == 10
+            {0x5010, isync()},
+            {0x5014, cmpwi(0, 3, 20)},
+            {0x5018, beq(0x10)},           // -> 0x5028: done
+            {0x501C, b(0x40000 - 0x501C)},
+            {0x5028, b(0)},
+            {0x40000, addi(4, 4, 1)},      // real mode: PA 0x40000
+            {0x40004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},    // translated: IBAT1 -> PA 0x80000
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0 -> PA 0, 128 KB
+        s.spr[spr::IBAT0U + 1] = 0x00000002u;
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // EA 0x40000 -> PA 0x80000
+        s.spr[spr::IBAT0U + 3] = 0x00080002u;
+        s.gpr[9] = msr::ME | msr::IR;
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "far mode", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 9u + 10u * 100u);
+}
+
+TEST_CASE("cpu/jit/far_link_records_die_with_a_flush")
+{
+    // Links recorded before a cache flush point into code that is dead and
+    // whose space new code reuses: a later translation change must not
+    // patch them (it would overwrite the new code).
+    g_jit = true;
+    Machine c(4u << 20);
+    Machine a(0);
+    g_jit = false;
+    auto far_loop = [](Machine& m) {
+        place(m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, b(0x6000 - 0x5004)},
+            {0x6000, addi(4, 4, 1)},
+            {0x6004, bdnz(0x5000 - 0x6004)},
+            {0x6008, b(0)},
+        });
+        m.cpu.state().pc = 0x5000;
+        m.cpu.state().msr = msr::ME;
+        m.cpu.state().ctr() = 30;
+        m.cpu.run(200);
+    };
+    far_loop(c);
+    far_loop(a);
+    REQUIRE(c.cpu.jit_stats().linked_far >= 1);
+    c.cache.flush();  // the old code is dead; new code reuses its space
+    // New code: one long block (where the old blocks' link slots were) and
+    // a loop around it.
+    std::vector<std::pair<u32, u32>> code;
+    for (u32 k = 0; k < 24; ++k)
+        code.push_back({0x9000 + 4 * k, addi(5, 5, static_cast<u32>(k + 1))});
+    code.push_back({0x9000 + 4 * 24, bdnz(-4 * 24)});
+    code.push_back({0x9000 + 4 * 25, b(0)});
+    for (Machine* m : {&a, &c}) {
+        for (auto& w : code)
+            store_be32(m->ram.data() + w.first, w.second);
+        m->cpu.state().pc = 0x9000;
+        m->cpu.state().ctr() = 20;
+        m->cpu.run(25);                 // compiled, one pass
+        m->cpu.flush_tlb();             // a translation change: undoes far links
+        m->cpu.run(25 * 19 + 1);
+    }
+    CHECK(same(a, c, "stale far links", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 20u * 300u);
+}
+
+BOTH(computed_branch_links)
+{
+    // A function in another page, called from two sites in a loop: its
+    // blr returns to two different places (the site's link holds the first;
+    // the other must take dispatch), and a bctr alternates between targets.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, b(0x6000 - 0x5000, false, true)},   // bl func
+            {0x5004, addi(3, 3, 1)},
+            {0x5008, b(0x6000 - 0x5008, false, true)},   // bl func again
+            {0x500C, addi(3, 3, 10)},
+            {0x5010, D(28, 3, 8, 1)},                    // andi. r8, r3, 1
+            {0x5014, beq(0xC)},                          // even: target A
+            {0x5018, mtspr(9, 20)},                      // odd: CTR = r20 (0x7000)
+            {0x501C, b(0x8)},
+            {0x5020, mtspr(9, 21)},                      // CTR = r21 (0x7100)
+            {0x5024, X(19, 20, 0, 0, 528)},              // bctr
+            {0x6000, addi(4, 4, 1)},                     // func
+            {0x6004, bclr(20, 0)},                       // blr
+            {0x7000, addi(5, 5, 1)},
+            {0x7004, b(0x5040 - 0x7004)},
+            {0x7100, addi(6, 6, 1)},
+            {0x7104, b(0x5040 - 0x7104)},
+            {0x5040, addi(30, 30, -1)},                  // the loop counter: r30
+            {0x5044, cmpwi(0, 30, 0)},
+            {0x5048, bne(0x5000 - 0x5048)},
+            {0x504C, b(0)},
+        });
+        CpuState& s = m->cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[30] = 60;
+        s.gpr[20] = 0x7000;
+        s.gpr[21] = 0x7100;
+        m->cpu.run(3000);
+    }
+    CHECK(same(a, c, "computed links", 0, 0));
+    CHECK(c.cpu.state().gpr[4] > 10u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().linked_far >= 2);
+}

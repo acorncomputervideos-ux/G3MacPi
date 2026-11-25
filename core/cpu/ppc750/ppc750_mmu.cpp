@@ -226,6 +226,8 @@ bool Ppc750::probe_translate(u32 ea, bool write, u32& pa)
 void Ppc750::flush_tlb()
 {
     fetch_host_ = nullptr;
+    if (jit_far_count_)
+        jit_unlink_far(~0u);  // links to other pages were made under the old translation
     for (u32 i = 0; i < kTlbSize; ++i) {
         itlb_[i].tag = 0;
         dtlb_[i].tag = 0;
