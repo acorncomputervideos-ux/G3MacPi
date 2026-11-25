@@ -15,8 +15,8 @@ reproduced is what the Mac sees.
 | PPP framing (RFC 1662) | `platform/common/ppp_framer.*` | done |
 | PPP provider end (LCP, PAP, IPCP, IP) | `platform/common/ppp_server.*` | done |
 | The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | `platform/common/dialup_link.*` | done |
-| Dial-up sounds, generated | | next |
-| Wiring on the Pi and in g3_host, menu options | | |
+| Dial-up sounds, generated | `platform/common/modem_sound.*` | done |
+| Wiring on the Pi and in g3_host, menu options | | next |
 
 ## The modem (hayes_modem.h)
 
@@ -70,3 +70,19 @@ Only IPv4 to the Mac's address and hardware address goes back to the
 Mac. On the network, the dialled-in Mac is the same station as the Mac
 on Ethernet; Mac OS uses one or the other at a time. Tests:
 `tests/unit/platform/test_dialup_link.cpp`; 8 sabotage runs, all caught.
+
+## The sounds (modem_sound.h)
+
+Generated from published tone definitions, not recordings: dial tone
+350 + 440 Hz and ringback 440 + 480 Hz (2 s on, 4 s off; North American
+Precise Tone Plan, ITU-T E.180 Supplement 2), DTMF (ITU-T Q.23), pulse
+clicks at 10 a second. The handshake is an approximation of a V.90 call:
+ANSam (2100 Hz, 15 Hz AM, phase reversals every 450 ms; V.25/V.8) for
+2.5 s, V.21 FSK (980/1180 and 1650/1850 Hz at 300 bit/s) for 1 s, line
+probing (tones every 150 Hz, 150-3750 Hz) for 1.5 s, then band-limited
+noise (training) until CONNECT. ATM0 silences it, ATM1 (the default)
+stops at CONNECT, ATM2 leaves a quiet hiss; ATL0-3 set the volume. It
+is mixed into the audio output on the core that plays it, clipped, not
+wrapped. Tests measure each sound's frequencies (Goertzel); 8 sabotage
+runs, 7 caught; the eighth (not muting after CONNECT in render_add) is
+also guarded in the sound itself.
