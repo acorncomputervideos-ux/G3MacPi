@@ -90,6 +90,7 @@ bool Ppc750::set_jit(u32* code, u32 words, JitRunner runner, void* context)
     jit_code_pages_ = cache_->code_pages();
     jit_dtlb_ = dtlb_;
     jit_far_count_ = 0;
+    far_index_rebuild();
     jit_fast_ptr_ = jit_fast_;
     fast_used_ = 0xF;
     jit_fast_drop(false);
@@ -1546,8 +1547,14 @@ void Ppc750::jit_far_link(void* cpu, u32)
     const u32 made = (mode[0] >> 5 & 0xFFFFu) | (mode[1] >> 5 & 0xFFFFu) << 16;
     if (made == key)
         return;  // linked under this key already (a computed one: to another target): keep it
-    if (c.jit_far_count_ >= kMaxFarLinks)
-        c.jit_unlink_far(~0u);  // the records are full (relinks add one each): start again
+    u32 record = made != 0xFFFFFFFFu ? c.far_find(mode) : ~0u;  // linked under another key
+    if (record == ~0u) {
+        if (c.jit_far_count_ >= kMaxFarLinks)
+            c.jit_unlink_far(~0u);  // full: start again
+        record = c.jit_far_count_++;
+        c.jit_far_links_[record].mode = mode;
+        c.far_index_add(record);
+    }
     const bool computed = (mode[4] & 0xFFE0001Fu) == (0x52800000u | 12);
     const u32 at = computed ? 8 : 4;
     BlockCache::Block* b = c.jit_link_block_;
@@ -1562,7 +1569,7 @@ void Ppc750::jit_far_link(void* cpu, u32)
     mode[1] = 0x72A00000u | ((key >> 16) << 5) | 12;       // movk w12, #key hi, lsl 16
     slot[0] = 0x14000000u | (static_cast<u32>(target - slot) & 0x03FFFFFFu);
     sync_icache(mode, slot + 1);
-    c.jit_far_links_[c.jit_far_count_++] = FarLink{mode, b->pa >> BlockCache::kPageShift, at};
+    c.jit_far_links_[record] = FarLink{mode, b->pa >> BlockCache::kPageShift, at};
     ++c.jit_stats_.linked_far;
 }
 
@@ -1582,7 +1589,49 @@ void Ppc750::jit_unlink_far(u32 page)
         sync_icache(l.mode, l.mode + l.branch + 1);
         ++jit_stats_.unlinked_far;
     }
+    const bool removed = kept != jit_far_count_;
     jit_far_count_ = kept;
+    if (removed)
+        far_index_rebuild();
+}
+
+namespace {
+u32 far_hash(const u32* mode)
+{
+    return static_cast<u32>(static_cast<u32>(reinterpret_cast<uintptr_t>(mode) >> 2) * 2654435761u) >>
+           (32 - 15);
+}
+} // namespace
+
+u32 Ppc750::far_find(const u32* mode) const
+{
+    static_assert(kFarIndex == 1u << 15, "far_hash gives 15 bits");
+    for (u32 h = far_hash(mode);; h = (h + 1) & (kFarIndex - 1)) {
+        const u32 v = jit_far_index_[h];
+        if (v == 0)
+            return ~0u;
+        // (Only an active record counts: if the index were ever stale, a
+        // slot would get a second record, which undoes it on either page:
+        // too early, never too late.)
+        if (v - 1 < jit_far_count_ && jit_far_links_[v - 1].mode == mode)
+            return v - 1;
+    }
+}
+
+void Ppc750::far_index_add(u32 record)
+{
+    u32 h = far_hash(jit_far_links_[record].mode);
+    while (jit_far_index_[h])
+        h = (h + 1) & (kFarIndex - 1);
+    jit_far_index_[h] = static_cast<u16>(record + 1);
+}
+
+void Ppc750::far_index_rebuild()
+{
+    for (u16& v : jit_far_index_)
+        v = 0;
+    for (u32 i = 0; i < jit_far_count_; ++i)
+        far_index_add(i);
 }
 
 void Ppc750::jit_cache_invalidated(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->jit_unlink_far(page); }
@@ -1590,6 +1639,7 @@ void Ppc750::jit_cache_flushed(void* cpu)
 {
     Ppc750& c = *static_cast<Ppc750*>(cpu);
     c.jit_far_count_ = 0;  // the code is dead
+    c.far_index_rebuild();
     c.jit_jump_drop();     // and the blocks
 }
 
@@ -1605,6 +1655,14 @@ void Ppc750::jit_cache_marked(void* cpu, u32 page) { static_cast<Ppc750*>(cpu)->
 
 void Ppc750::jit_fast_drop(bool translated_only)
 {
+    if (translated_only && fast_touched_n_ <= kTouched) {
+        for (u32 i = 0; i < fast_touched_n_; ++i)
+            jit_fast_[fast_touched_[i]] = FastEntry{};
+        fast_touched_n_ = 0;
+        fast_used_ &= ~0xAu;  // tables 1 and 3 (MSR[DR] set) are empty again
+        return;
+    }
+    fast_touched_n_ = 0;
     for (u32 t = 0; t < 4; ++t) {
         if ((translated_only && !(t & 1)) || !(fast_used_ & (1u << t)))
             continue;  // real mode: pa = ea, whatever the MMU holds; or nothing filled
@@ -1660,6 +1718,12 @@ void Ppc750::jit_fill(void* cpu, u32 ea)
     e.write = may_write ? page : kFastNone;
     e.addend = reinterpret_cast<u64>(host) - (static_cast<u64>(page) << 12);
     c.fast_used_ |= 1u << table;
+    if (table & 1) {  // translated: listed for jit_fast_drop(true)
+        if (c.fast_touched_n_ < kTouched)
+            c.fast_touched_[c.fast_touched_n_] = static_cast<u16>(table * kFastSize + (page & (kFastSize - 1)));
+        if (c.fast_touched_n_ <= kTouched)
+            ++c.fast_touched_n_;
+    }
 }
 
 void Ppc750::set_jit_word_kinds(u8* kinds)

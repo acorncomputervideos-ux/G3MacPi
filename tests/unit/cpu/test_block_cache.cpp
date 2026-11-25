@@ -1796,3 +1796,50 @@ BOTH(far_link_page_table_changed)
     CHECK(same(a, c, "page table changed", 0, 0));
     CHECK_EQ(c.cpu.state().gpr[4], 19u + 20u * 100u);
 }
+
+
+BOTH(fast_entries_past_the_list_are_dropped_too)
+{
+    // 60 pages read through DBAT0 (256 KB at EA 0x10000000 -> PA 0x40000)
+    // twice, which fills more fast-table and TLB entries than the lists of
+    // touched ones hold; then DBAT0 points at PA 0x80000 and they are read
+    // again: every load must see the new mapping.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lwz(3, 0, 4)},
+            {0x5004, add(5, 5, 3)},
+            {0x5008, addi(4, 4, 0x1000)},
+            {0x500C, bdnz(0x5000 - 0x500C)},
+            {0x5010, addi(7, 7, 1)},
+            {0x5014, cmpwi(0, 7, 2)},
+            {0x5018, bne(0xC)},                 // -> 0x5024
+            {0x501C, mtspr(537, 12)},           // DBAT0L: -> PA 0x80000
+            {0x5020, isync()},
+            {0x5024, cmpwi(0, 7, 3)},
+            {0x5028, beq(0x14)},                // -> 0x503C: done
+            {0x502C, lis(4, 0x1000)},
+            {0x5030, li(6, 60)},
+            {0x5034, mtspr(9, 6)},
+            {0x5038, b(0x5000 - 0x5038)},
+            {0x503C, b(0)},
+        });
+        for (u32 k = 0; k < 60; ++k) {
+            store_be32(m->ram.data() + 0x40000 + k * 0x1000, 1);
+            store_be32(m->ram.data() + 0x80000 + k * 0x1000, 100);
+        }
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000006u;       // BEPI 0x10000000, 256 KB, Vs
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000, read/write
+        s.gpr[4] = 0x10000000u;
+        s.gpr[12] = 0x00080002u;
+        s.ctr() = 60;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR;
+        m->cpu.flush_tlb();
+        m->cpu.run(2000);
+    }
+    CHECK(same(a, c, "past the lists", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 60u + 60u + 60u * 100u);
+    CHECK_EQ(c.cpu.state().pc, 0x503Cu);
+}

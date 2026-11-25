@@ -384,6 +384,13 @@ private:
     static constexpr u32 kTlbSize = 256;
     static constexpr u32 kTlbValid = 0x80000000u;
     bool tlb_enabled_ = true;
+    // The entries filled since the TLBs were last emptied (bit 8: the ITLB),
+    // so that emptying them on an SR or BAT switch (about once per 5000
+    // instructions in Mac OS) clears those, not all 512; past kTouched,
+    // everything is cleared.
+    static constexpr u32 kTouched = 48;
+    u16 tlb_touched_[kTouched] = {};
+    u32 tlb_touched_n_ = 0;
 
     // --- system (ppc750_system.cpp)
     void op_mfspr(u32 insn);
@@ -469,6 +476,13 @@ private:
     u32 jit_stub_dispatch_link_ = 0;
     static void jit_far_link(void* cpu, u32 unused);
     void jit_unlink_far(u32 page);
+    // Which record holds a slot (open addressing on the slot's address;
+    // value record + 1, 0 empty; at most half full). A slot that is linked
+    // has exactly one record: a relink under another key updates it.
+    static constexpr u32 kFarIndex = 2 * kMaxFarLinks;
+    u32 far_find(const u32* mode) const;
+    void far_index_add(u32 record);
+    void far_index_rebuild();
     static void jit_cache_invalidated(void* cpu, u32 page);
     static void jit_cache_flushed(void* cpu);
     // The fast data table (ppc750_jit.cpp, docs/cpu/jit-a64.md): what
@@ -563,12 +577,15 @@ private:
     TlbEntry itlb_[kTlbSize];
     TlbEntry dtlb_[kTlbSize];
     FarLink jit_far_links_[kMaxFarLinks] = {};
+    u16 jit_far_index_[kFarIndex] = {};
     XlatLayout xlat_layouts_[kXlatLayouts];
     JumpEntry jit_jump_[kJumpSize];
     FastEntry jit_fast_[4 * kFastSize];  // [MSR[PR] * 2 + MSR[DR]][page & 255]
     u8* fast_ram_ = nullptr;             // the RAM window jit_fast_ was filled for
     u32 fast_ram_size_ = 0;
     u32 fast_used_ = 0;                  // bit t: table t may hold entries
+    u16 fast_touched_[kTouched] = {};    // translated entries filled (table * 256 + index)
+    u32 fast_touched_n_ = 0;             // past kTouched: clear the tables whole
     // The JIT profile.
     u64 jit_profile_[kJitOpIds] = {};
     u32 jit_sample_[kJitOpIds] = {};  // written by whoever compiles (relaxed atomics)

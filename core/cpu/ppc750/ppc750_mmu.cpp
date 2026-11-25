@@ -227,10 +227,18 @@ void Ppc750::drop_translations()
 {
     fetch_host_ = nullptr;
     jit_fast_drop(true);  // the translated entries came from the TLB
-    for (u32 i = 0; i < kTlbSize; ++i) {
-        itlb_[i].tag = 0;
-        dtlb_[i].tag = 0;
+    if (tlb_touched_n_ <= kTouched) {
+        for (u32 i = 0; i < tlb_touched_n_; ++i) {
+            const u32 t = tlb_touched_[i];
+            ((t & 0x100) ? itlb_ : dtlb_)[t & 0xFF].tag = 0;
+        }
+    } else {
+        for (u32 i = 0; i < kTlbSize; ++i) {
+            itlb_[i].tag = 0;
+            dtlb_[i].tag = 0;
+        }
     }
+    tlb_touched_n_ = 0;
 }
 
 void Ppc750::flush_tlb()
@@ -326,6 +334,11 @@ bool Ppc750::translate_enabled(u32 ea, Access access, u32& pa)
         e.pa_page = pa & ~0xFFFu;
         e.writable = writable;
         e.changed = changed;
+        if (tlb_touched_n_ < kTouched)
+            tlb_touched_[tlb_touched_n_] =
+                static_cast<u16>((page & (kTlbSize - 1)) | (access == Access::Fetch ? 0x100u : 0u));
+        if (tlb_touched_n_ <= kTouched)
+            ++tlb_touched_n_;  // (kTouched + 1: too many to list)
     }
     return true;
 }
