@@ -69,7 +69,14 @@ void DbdmaChannel::write_reg(u32 reg, u32 value)
             progress_ = 0;
             return;
         }
-        // FLUSH is acknowledged immediately (no buffered data in this model).
+        // FLUSH: the current transfer descriptor gets its progress so far
+        // (res_count, and xfer_status with ACTIVE and FLUSH set), then the
+        // bit clears (nothing is buffered in this model). Mac OS 9's serial
+        // driver (SerialDMA) relies on it: it sets FLUSH, waits for the bit
+        // to clear, then reads the receive descriptor's status for ACTIVE
+        // and its residual count for the bytes received so far.
+        if ((mask & dbdma::FLUSH) && (v & dbdma::FLUSH) && (status_ & dbdma::ACTIVE))
+            flush_progress();
         status_ &= ~dbdma::FLUSH;
         const bool start = (status_ & dbdma::RUN) && !was_running;
         const bool wake = (status_ & dbdma::WAKE) && (status_ & dbdma::RUN);
@@ -101,6 +108,19 @@ void DbdmaChannel::set_device_status(u8 bits)
 }
 
 void DbdmaChannel::kick() { run(); }
+
+void DbdmaChannel::flush_progress()
+{
+    if (!bus_)
+        return;
+    const u32 desc = cmdptr_;
+    const u16 cmd = rd16(desc + 2) >> 12;
+    if (cmd > dbdma::INPUT_LAST)
+        return;  // not a transfer: nothing in progress
+    const u16 req = rd16(desc + 0);
+    wr16(desc + 12, static_cast<u16>(req - (progress_ < req ? progress_ : req)));
+    wr16(desc + 14, static_cast<u16>(status_ | dbdma::ACTIVE | dbdma::FLUSH));
+}
 
 bool DbdmaChannel::condition(u32 sel) const
 {

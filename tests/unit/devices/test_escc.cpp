@@ -3,11 +3,14 @@
 // "point high", both address layouts, resets, transmit and its interrupt
 // through WR9's master enable, and Paddington's inputs 15 and 16.
 
+#include "core/common/endian.h"
 #include "core/devices/macio/escc.h"
 #include "core/machine/yosemite.h"
 #include "tests/framework/g3test.h"
 
+#include <cstring>
 #include <string>
+#include <vector>
 
 using namespace g3;
 
@@ -253,4 +256,64 @@ TEST_CASE("devices/escc/baud_rate")
     CHECK_EQ(e.baud(MacioEscc::A), 57600u);                  // 3686400 / (2 * 16 * 2)
     wreg(e, kACtl, 12, 4);
     CHECK_EQ(e.baud(MacioEscc::A), 19200u);
+}
+
+// DMA (escc.h): the receive channel waits on an INPUT_MORE until characters
+// arrive, then takes them out of the FIFO (no PIO read needed); the transmit
+// channel's OUTPUT_LAST reaches the device like data-port writes.
+TEST_CASE("devices/escc/dma_receive_and_transmit")
+{
+    std::vector<u8> ram(0x10000);
+    PhysicalBus bus;
+    bus.map_ram(0, ram.data(), static_cast<u32>(ram.size()));
+    DbdmaController dma(bus);
+    constexpr u32 kDma = 0x80808000u;
+    bus.map_mmio(kDma, DbdmaController::kWindowSize, &dma);
+    MacioEscc e;
+    e.attach_dma(MacioEscc::A, &dma.channel(8), &dma.channel(10));
+    std::string sent;
+    e.set_tx_sink([](void* c, u32, u8 b) { static_cast<std::string*>(c)->push_back(static_cast<char>(b)); }, &sent);
+    auto desc = [&](u32 at, u16 c, u16 req, u32 addr) {
+        store_le16(&ram[at + 0], req);
+        store_le16(&ram[at + 2], c);
+        store_le32(&ram[at + 4], addr);
+        store_le32(&ram[at + 8], 0);
+        store_le32(&ram[at + 12], 0);
+    };
+    auto start = [&](u32 ch, u32 prog) {
+        bus.write32(kDma + ch * DbdmaController::kChannelStride + 0x00, byteswap32(0x80000000u));  // stop
+        bus.write32(kDma + ch * DbdmaController::kChannelStride + 0x0C, byteswap32(prog));
+        bus.write32(kDma + ch * DbdmaController::kChannelStride + 0x00, byteswap32(0x80008000u));  // RUN
+    };
+    wreg(e, kACtl, 3, 0x01);                                 // receiver on
+    // Receive: 4 bytes into 0x2000, then STOP.
+    desc(0x1000, static_cast<u16>(dbdma::INPUT_MORE << 12), 4, 0x2000);
+    desc(0x1010, static_cast<u16>(dbdma::STOP << 12), 0, 0);
+    start(10, 0x1000);
+    CHECK_EQ(dma.channel(10).status() & dbdma::DEAD, 0u);   // waiting, not killed
+    CHECK_EQ(dma.channel(10).command_pointer(), 0x1000u);
+    for (u8 b : {'A', 'T', 'Z', '\r'})
+        e.rx_push(MacioEscc::A, b);
+    CHECK(std::memcmp(&ram[0x2000], "ATZ\r", 4) == 0);
+    CHECK_EQ(dma.channel(10).command_pointer(), 0x1010u);   // the descriptor completed
+    CHECK_EQ(rd(e, kACtl) & 0x01, 0u);                       // the FIFO is empty again
+    // SerialDMA's way to see a partial receive: FLUSH writes the waiting
+    // descriptor's residual count and ACTIVE into it, and clears itself.
+    desc(0x1200, static_cast<u16>(dbdma::INPUT_MORE << 12), 768, 0x4000);
+    start(10, 0x1200);
+    e.rx_push(MacioEscc::A, 'h');
+    e.rx_push(MacioEscc::A, 'i');
+    CHECK_EQ(load_le16(&ram[0x120E]), 0u);                   // nothing written yet
+    bus.write32(kDma + 10 * DbdmaController::kChannelStride, byteswap32(0x20002000u));  // FLUSH
+    CHECK_EQ(load_le16(&ram[0x120C]), 766u);
+    CHECK_EQ(load_le16(&ram[0x120E]) & dbdma::ACTIVE, dbdma::ACTIVE);
+    CHECK_EQ(dma.channel(10).status() & (dbdma::FLUSH | dbdma::ACTIVE), dbdma::ACTIVE);
+    CHECK(std::memcmp(&ram[0x4000], "hi", 2) == 0);
+    // Transmit: "OK\r\n" from 0x3000.
+    std::memcpy(&ram[0x3000], "OK\r\n", 4);
+    desc(0x1100, static_cast<u16>(dbdma::OUTPUT_LAST << 12), 4, 0x3000);
+    desc(0x1110, static_cast<u16>(dbdma::STOP << 12), 0, 0);
+    start(8, 0x1100);
+    CHECK(sent == "OK\r\n");
+    CHECK_EQ(dma.channel(8).status() & dbdma::DEAD, 0u);
 }

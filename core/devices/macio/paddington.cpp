@@ -29,6 +29,11 @@ Paddington::Paddington(PhysicalBus& bus, Scheduler& scheduler, u8 revision)
         };
         dbdma_.channel(kSoundDmaChannel[i]).set_irq(raise, &sound_dma_irq_[i]);
         dbdma_.channel(kBmacDmaChannel[i]).set_irq(raise, &bmac_dma_irq_[i]);
+        escc_.attach_dma(i, &dbdma_.channel(kEsccDmaChannel[i][0]), &dbdma_.channel(kEsccDmaChannel[i][1]));
+        for (u32 d = 0; d < 2; ++d) {
+            escc_dma_irq_[i][d] = {&pic_, kEsccDmaIrq[i][d]};
+            dbdma_.channel(kEsccDmaChannel[i][d]).set_irq(raise, &escc_dma_irq_[i][d]);
+        }
     }
     for (u32 i = 0; i < 2; ++i) {
         ide_irq_[i] = {&pic_, kIdeIrq[i]};

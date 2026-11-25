@@ -84,6 +84,7 @@ private:
     bool condition(u32 sel) const;
     void finish(u32 desc, u16 cmdword, u32 cmd_dep, u16 residual, bool allow_branch);
     void kill();
+    void flush_progress();
     u16 rd16(u32 a);
     u32 rd32(u32 a);
     void wr16(u32 a, u16 v);

@@ -40,13 +40,18 @@
 //    mac-io model, ESCC_CLOCK).
 // Interrupts: channel A on PIC input 15, B on 16 (the real B&W's Linux log),
 // asserted while the channel has a pending interrupt and WR9's MIE is set.
-// Not modelled: DMA, sync/SDLC modes, parity and framing errors, the
+// DMA (Heathrow wires each channel's transmitter and receiver to a DBDMA
+// channel, see paddington.h): the receive channel takes characters out of
+// the receive FIFO as they arrive, the transmit channel writes them as the
+// data port does. Mac OS 9's serial driver (SerialDMA) uses both.
+// Not modelled: sync/SDLC modes, parity and framing errors, the
 // status in RR2's vector, interrupt priority daisy chains (IUS).
 
 #ifndef G3_CORE_DEVICES_MACIO_ESCC_H
 #define G3_CORE_DEVICES_MACIO_ESCC_H
 
 #include "core/common/types.h"
+#include "core/devices/macio/dbdma.h"
 #include "core/mem/physical_bus.h"
 
 namespace g3 {
@@ -76,6 +81,10 @@ public:
     u32 baud(u32 ch) const;               // 0 if not set up
     static constexpr u32 kClockHz = 3686400;
 
+    // DMA: the channels' DBDMA ends (attach_dma also lets the receiver
+    // wake its channel when a character arrives).
+    void attach_dma(u32 ch, DbdmaChannel* tx, DbdmaChannel* rx);
+
     u8 read_control(u32 ch);
     void write_control(u32 ch, u8 v);
     u8 read_data(u32 ch);
@@ -99,6 +108,14 @@ private:
         bool dcd = false, cts = false;
         bool lines_dtr = false, lines_rts = false;  // last reported
     };
+    class DmaPort final : public DbdmaStream {
+    public:
+        MacioEscc* escc = nullptr;
+        u32 ch = 0;
+        u32 dma_output(const u8* data, u32 len, bool last) override;
+        u32 dma_input(u8* data, u32 len) override;
+    };
+    bool take(u32 ch, u8& byte);
     void update_rx_ip(u32 ch);
     void report_lines(u32 ch);
     void reset_channel(u32 ch);
@@ -109,6 +126,8 @@ private:
     static bool decode(u32 offset, u32& ch, bool& data);
 
     Chan chan_[2];
+    DmaPort dma_[2];
+    DbdmaChannel* rx_dma_[2] = {};
     u8 wr9_ = 0;
     bool line_[2] = {};
     IrqCallback irq_ = nullptr;

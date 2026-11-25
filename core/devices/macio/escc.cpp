@@ -70,6 +70,8 @@ void MacioEscc::rx_push(u32 ch, u8 byte)
         c.fifo[c.fifo_n++] = byte;
     update_rx_ip(ch);
     update_irq();
+    if (rx_dma_[ch & 1])
+        rx_dma_[ch & 1]->kick();  // a waiting receive descriptor takes it
 }
 
 void MacioEscc::set_dcd(u32 ch, bool on)
@@ -181,19 +183,53 @@ void MacioEscc::write_control(u32 ch, u8 v)
     update_irq();
 }
 
-u8 MacioEscc::read_data(u32 ch)
+bool MacioEscc::take(u32 ch, u8& byte)
 {
     Chan& c = chan_[ch & 1];
     if (!c.fifo_n)
-        return 0;
-    const u8 v = c.fifo[0];
+        return false;
+    byte = c.fifo[0];
     for (u32 i = 1; i < c.fifo_n; ++i)
         c.fifo[i - 1] = c.fifo[i];
     --c.fifo_n;
     c.rx_first = false;  // "first character" mode: until RES_RxINT_FC
     update_rx_ip(ch);
     update_irq();
+    return true;
+}
+
+u8 MacioEscc::read_data(u32 ch)
+{
+    u8 v = 0;
+    take(ch, v);
     return v;
+}
+
+void MacioEscc::attach_dma(u32 ch, DbdmaChannel* tx, DbdmaChannel* rx)
+{
+    DmaPort& p = dma_[ch & 1];
+    p.escc = this;
+    p.ch = ch & 1;
+    if (tx)
+        tx->attach_stream(&p);
+    if (rx)
+        rx->attach_stream(&p);
+    rx_dma_[ch & 1] = rx;
+}
+
+u32 MacioEscc::DmaPort::dma_output(const u8* data, u32 len, bool)
+{
+    for (u32 i = 0; i < len; ++i)
+        escc->write_data(ch, data[i]);
+    return len;
+}
+
+u32 MacioEscc::DmaPort::dma_input(u8* data, u32 len)
+{
+    u32 n = 0;
+    while (n < len && escc->take(ch, data[n]))
+        ++n;
+    return n;
 }
 
 void MacioEscc::write_data(u32 ch, u8 v)

@@ -122,6 +122,7 @@ private:
     IrqRoute ide_irq_[2] = {};
     IrqRoute ide_dma_irq_[2] = {};
     IrqRoute sound_dma_irq_[2] = {}, bmac_dma_irq_[2] = {};
+    IrqRoute escc_dma_irq_[2][2] = {};
     u32 mapped_base_ = 0;  // 0 = not mapped
 };
 
