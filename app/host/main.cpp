@@ -13,6 +13,10 @@
 // are read from that file at the start (if valid) and written at the end.
 // G3_INPUT=s:dx:dy:b,...: at guest second s, move the mouse by (dx, dy) in
 // steps of at most 2 pixels per 10 ms, then set the button to b (0/1).
+// G3_SIMLAN=1: the Mac's network is a small simulated one (sim_lan.h): a
+// router with DHCP, DNS and a web page. G3_MODEMWAV=file.wav: the dial-up
+// modem's speaker (modem = yes), in guest time. G3_WRITEBACK=1: disk
+// images the Mac changed are written back to their files at the end.
 // G3_VIDEO=file.mp4: a video of the screen, one frame per 40 ms of guest
 // time (25 frames per guest second), each frame fitted into 1152x870; needs
 // ffmpeg on PATH. With jit = yes in the .ini: the block cache; G3_JITSIM=1
@@ -29,6 +33,8 @@
 #include "core/machine/yosemite.h"
 #include "platform/common/guest_pacer.h"
 #include "platform/common/mac_session.h"
+#include "platform/common/modem_sound.h"
+#include "app/host/sim_lan.h"
 #include "platform/common/machine_state.h"
 
 #include <chrono>
@@ -62,6 +68,24 @@ struct HostFiles final : MacHost {
     std::vector<u8> rom;
     std::vector<std::unique_ptr<std::vector<u8>>> data;
     std::vector<std::unique_ptr<RamBlockDevice>> devices;
+    std::vector<std::string> paths;  // of data[i]
+    std::vector<bool> writable;
+    ModemSound speaker;
+    SimLan lan;
+    ModemSound* modem_sound() override { return std::getenv("G3_MODEMWAV") ? &speaker : nullptr; }
+    // G3_WRITEBACK: the writable images back to their files.
+    void write_back()
+    {
+        for (size_t i = 0; i < data.size(); ++i) {
+            if (!writable[i])
+                continue;
+            FILE* f = std::fopen(paths[i].c_str(), "wb");
+            const bool ok = f && std::fwrite(data[i]->data(), 1, data[i]->size(), f) == data[i]->size();
+            if (f)
+                std::fclose(f);
+            std::printf("[g3_host] image %s %s\n", ok ? "written back to" : "NOT written back to", paths[i].c_str());
+        }
+    }
     const u8* load_file(const char* path, u32& size) override
     {
         if (!read_file(path, rom))
@@ -76,6 +100,8 @@ struct HostFiles final : MacHost {
             return nullptr;
         devices.push_back(std::make_unique<RamBlockDevice>(bytes->data(), bytes->size(), read_only));
         data.push_back(std::move(bytes));
+        paths.push_back(path);
+        writable.push_back(!read_only);
         return devices.back().get();
     }
     void close_image(BlockDevice*) override {}
@@ -116,14 +142,17 @@ struct HostFiles final : MacHost {
     // comes back.
     struct Net final : NetLink {
         u64 sent = 0;
+        SimLan* lan = nullptr;
         void net_send(const u8* f, u32 n) override
         {
             ++sent;
+            if (lan)
+                lan->from_mac(f, n);
             if (std::getenv("G3_NETLOG") && n >= 14)
                 std::printf("[g3_host] frame out: %u bytes to %02x:%02x:%02x:%02x:%02x:%02x type %02x%02x\n", n, f[0],
                             f[1], f[2], f[3], f[4], f[5], f[12], f[13]);
         }
-        u32 net_receive(u8*) override { return 0; }
+        u32 net_receive(u8* buf) override { return lan ? lan->to_mac(buf) : 0; }
     } net;
 };
 
@@ -269,6 +298,10 @@ int main(int argc, char** argv)
         have_saved = read_file(state_path, bytes) && saved.decode(bytes.data(), static_cast<u32>(bytes.size()));
         std::printf("[g3_host] saved state: %s\n", have_saved ? "restored" : "none");
     }
+    if (std::getenv("G3_SIMLAN"))
+        host.net.lan = &host.lan;
+    static HostFiles::Wav modem_wav;
+    size_t lan_shown = 0;
     const MacSession::Error e = session.start(config, host, mem, driver.empty() ? nullptr : driver.data(),
                                               static_cast<u32>(driver.size()),
                                               static_cast<u64>(std::time(nullptr)), have_saved ? &saved : nullptr);
@@ -593,6 +626,15 @@ int main(int argc, char** argv)
                 }, &lan);
             }
             session.run(10000000000ull);  // 10 ms of guest time
+            if (std::getenv("G3_MODEMWAV")) {
+                static std::vector<s16> chunk(2 * 441);
+                std::fill(chunk.begin(), chunk.end(), 0);
+                host.speaker.render_add(chunk.data(), 441, 44100);
+                modem_wav.samples.insert(modem_wav.samples.end(), chunk.begin(), chunk.end());
+                modem_wav.rate = 44100;
+            }
+            while (lan_shown < host.lan.log.size())
+                std::printf("[sim-lan] %.2f s: %s\n", session.guest_time_ps() / 1e12, host.lan.log[lan_shown++].c_str());
             if (video && slice % 4 == 3) {     // every 40 ms
                 video_frame(session, frame);
                 std::fwrite(frame.data(), 1, frame.size(), video);
@@ -717,6 +759,8 @@ int main(int argc, char** argv)
         if (const char* wp = std::getenv("G3_WAV"))
             std::printf("[g3_host] sound %s %s\n", host.wav.write(wp) ? "written to" : "NOT written to", wp);
     }
+    if (const char* mw = std::getenv("G3_MODEMWAV"))
+        std::printf("[g3_host] modem sound %s %s\n", modem_wav.write(mw) ? "written to" : "NOT written to", mw);
     if (state_path) {
         static MachineState now;
         std::vector<u8> bytes(MachineState::kFileSize);
@@ -736,5 +780,7 @@ int main(int argc, char** argv)
         else
             std::printf("[g3_host] no screen to save\n");
     }
+    if (std::getenv("G3_WRITEBACK"))
+        host.write_back();  // (the images are in memory; written as they are now)
     return 0;
 }
