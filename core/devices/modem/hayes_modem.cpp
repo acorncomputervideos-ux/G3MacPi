@@ -13,7 +13,7 @@ bool is_digit(char c) { return c >= '0' && c <= '9'; }
 
 void HayesModem::reset()
 {
-    static const u8 kDefaults[kSRegs] = {0, 0, 43, 13, 10, 8, 2, 50, 2, 6, 14, 95, 50};
+    static const u8 kDefaults[kSRegs] = {0, 0, 43, 13, 10, 8, 2, 50, 2, 6, 14, 95, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5};
     for (u32 i = 0; i < kSRegs; ++i)
         s_[i] = kDefaults[i];
     echo_ = 1;
@@ -414,10 +414,20 @@ void HayesModem::hang_up(u64 now_us, bool report)
 
 void HayesModem::set_dtr(bool on, u64 now_us)
 {
-    const bool dropped = dtr_ && !on;
+    if (dtr_ && !on) {  // acted on once it has stayed off for S25 (tick)
+        dtr_off_at_ = now_us;
+        dtr_pending_ = true;
+    }
+    if (on)
+        dtr_pending_ = false;  // back on in time: ignored
     dtr_ = on;
-    if (!dropped)
-        return;
+    if (dtr_pending_ && s_[25] == 0)
+        dtr_dropped(now_us);
+}
+
+void HayesModem::dtr_dropped(u64 now_us)
+{
+    dtr_pending_ = false;
     switch (amp_d_) {
     case 1:
         if (state_ == State::Online) {
@@ -457,6 +467,8 @@ void HayesModem::remote_hang_up(u64 now_us)
 
 void HayesModem::tick(u64 now_us)
 {
+    if (dtr_pending_ && now_us - dtr_off_at_ >= static_cast<u64>(s_[25]) * 10000u)
+        dtr_dropped(now_us);
     while (state_ == State::Dialing && now_us >= step_end_)
         next_dial_step(now_us);
     if (state_ == State::Online && pluses_ == 3) {

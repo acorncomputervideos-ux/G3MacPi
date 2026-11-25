@@ -105,9 +105,16 @@ TEST_CASE("platform/dialup_modem/through_the_scc")
     REQUIRE(at != std::string::npos);
     CHECK(s.compare(at, 6, std::string("\x7E\xFF\x7D\x23\xC0\x21", 6)) == 0);
     CHECK(r.d->ppp().running());
-    // DTR drops: the modem hangs up (&D2), carrier goes.
+    // Mac OS re-opening the port: a channel reset drops DTR for a moment,
+    // then DTR is set again. Shorter than S25 (50 ms): the call stays up.
+    r.wreg(9, 0x80);
+    r.wreg(5, 0xEA);
+    r.run(100000);
+    CHECK(r.d->ppp().running());
+    CHECK_EQ(r.rr0() & 0x08, 0x08u);
+    // DTR drops: the modem hangs up (&D2) after 50 ms, carrier goes.
     r.wreg(5, 0x6A);
-    r.run(2000);
+    r.run(60000);
     CHECK_EQ(r.rr0() & 0x08, 0u);
     CHECK(!r.d->ppp().running());
 }

@@ -48,6 +48,8 @@ DialupModem::DialupModem(MacioEscc& escc, Scheduler& sched, const u8 mac_address
     }, this);
     modem_.set_events([](void* c, HayesModem::Event e, char digit) {
         auto* d = static_cast<DialupModem*>(c);
+        if (d->trace_)
+            d->trace_(d->trace_ctx_, true, 0x200u | static_cast<u32>(e));
         if (d->sound_)
             d->sound_->post(e, digit, d->modem_.pulse_dialing(), d->modem_.speaker_mode(), d->modem_.speaker_volume());
     }, this);

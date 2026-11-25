@@ -316,22 +316,31 @@ int main(int argc, char** argv)
     // G3_MODEMLOG=1: the bytes between the Mac and the virtual modem, a line
     // per direction change ("mac>" what the Mac sent, "<mdm" the modem's).
     if (std::getenv("G3_MODEMLOG") && session.dialup()) {
-        struct Log { MacSession* s; int dir; std::string text; };
-        static Log log{&session, -1, {}};
+        struct Log { MacSession* s; int dir; std::string text; double t0; };
+        static Log log{&session, -1, {}, 0};
         session.dialup()->set_trace([](void* c, bool to_mac, u32 b) {
             auto* l = static_cast<Log*>(c);
             const double t = static_cast<double>(l->s->machine()->scheduler().now()) / 1e12;
+            if (b >= 0x200) {
+                static const char* const kEv[] = {"off hook", "digit", "pause", "ringback", "handshake", "connected",
+                                                  "on hook"};
+                if ((b & 0xFF) != 1 && (b & 0xFF) != 2)
+                    std::printf("[modem] %.2f s: event %s\n", t, (b & 0xFF) < 7 ? kEv[b & 0xFF] : "?");
+                return;
+            }
             if (b >= 0x100) {
                 std::printf("[modem] %.2f s: DTR %s\n", t, (b & 1) ? "on" : "off");
                 return;
             }
             if (l->dir != (to_mac ? 1 : 0) || b == '\n' || l->text.size() > 60) {
                 if (!l->text.empty())
-                    std::printf("[modem] %.2f s: %s %s\n", t, l->dir ? "<mdm" : "mac>", l->text.c_str());
+                    std::printf("[modem] %.2f s: %s %s\n", l->t0, l->dir ? "<mdm" : "mac>", l->text.c_str());
                 l->text.clear();
                 l->dir = to_mac ? 1 : 0;
             }
             char buf[8];
+            if (l->text.empty())
+                l->t0 = t;  // a line's time is its first byte's
             if (b >= 32 && b < 127)
                 l->text.push_back(static_cast<char>(b));
             else {

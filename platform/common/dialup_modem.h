@@ -37,7 +37,8 @@ public:
     void set_network(NetTee* tee);   // nullptr: no network (calls connect, DHCP never answers)
     void set_sound(ModemSound* s) { sound_ = s; }
     // Debugging: every byte between the Mac and the modem (to_mac: the
-    // modem's output), and DTR changes (byte 0x100 | on).
+    // modem's output), DTR changes (0x100 | on) and the modem's events
+    // (0x200 | HayesModem::Event).
     using TraceFn = void (*)(void* context, bool to_mac, u32 byte);
     void set_trace(TraceFn fn, void* ctx) { trace_ = fn; trace_ctx_ = ctx; }
 

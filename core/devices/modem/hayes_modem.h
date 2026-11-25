@@ -26,7 +26,11 @@
 //    NO DIALTONE 6, BUSY 7, NO ANSWER 8; CONNECT <speed> when X > 0.
 //  - S registers: S0 0, S2 43 ('+', escape character), S3 13, S4 10, S5 8,
 //    S6 2, S7 50 (seconds to wait for carrier), S8 2 (comma pause, s),
-//    S11 95 (DTMF tone length, ms), S12 50 (escape guard time, 1/50 s).
+//    S11 95 (DTMF tone length, ms), S12 50 (escape guard time, 1/50 s),
+//    S25 5 (how long DTR must stay off before &D acts, 1/100 s; 0: at
+//    once). Without that delay Mac OS 9's PPP hung the modem up just after
+//    CONNECT: re-opening the port resets the SCC, which drops DTR for a few
+//    microseconds, and Apple's script sets &D3.
 //    S0-S255 can be set and read: modems kept vendor settings in the high
 //    numbers, and init strings set them (Apple's "PowerMac G3 Internal
 //    56K" script sends S95=1); those have no effect here.
@@ -110,6 +114,7 @@ private:
     void put(const char* s);
     void put_byte(u8 b);
     void hang_up(u64 now_us, bool report);
+    void dtr_dropped(u64 now_us);
     void go_online(u64 now_us);
     void emit(Event e, char digit = 0);
     void next_dial_step(u64 now_us);
@@ -118,6 +123,8 @@ private:
     u8 s_[kSRegs] = {};
     u8 echo_ = 1, verbose_ = 1, quiet_ = 0, speaker_ = 1, volume_ = 1, results_ = 4, amp_c_ = 1, amp_d_ = 2;
     bool dtr_ = false;
+    bool dtr_pending_ = false;  // DTR went off; acted on after S25
+    u64 dtr_off_at_ = 0;
 
     char line_[kLine] = {};
     u32 line_n_ = 0;

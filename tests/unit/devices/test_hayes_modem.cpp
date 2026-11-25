@@ -239,11 +239,19 @@ TEST_CASE("devices/modem/online_data_and_escape")
 
 TEST_CASE("devices/modem/hang_ups")
 {
-    // DTR drop, &D2 (default): hang up.
+    // DTR drop, &D2 (default): hang up, once DTR has stayed off for S25
+    // (5: 50 ms). A shorter drop (Mac OS resetting the SCC) is ignored.
     Rig r;
     r.m.set_dtr(true, r.now);
     r.connect();
     r.m.set_dtr(false, r.now);
+    r.m.set_dtr(true, r.now + 10);
+    r.wait(200);
+    CHECK(r.m.online());
+    r.m.set_dtr(false, r.now);
+    r.wait(30);
+    CHECK(r.m.connected());
+    r.wait(30);
     CHECK(!r.m.connected());
     CHECK(r.events.back() == 'X');
     // &D1: command mode, still connected.
@@ -252,6 +260,7 @@ TEST_CASE("devices/modem/hang_ups")
     d1.type("AT&D1\r");
     d1.connect();
     d1.m.set_dtr(false, d1.now);
+    d1.wait(60);
     CHECK(d1.m.connected());
     CHECK(!d1.m.online());
     CHECK(d1.out() == "\r\nOK\r\n");
@@ -261,6 +270,7 @@ TEST_CASE("devices/modem/hang_ups")
     d0.type("AT&D0\r");
     d0.connect();
     d0.m.set_dtr(false, d0.now);
+    d0.wait(60);
     CHECK(d0.m.online());
     // A key while dialling aborts.
     Rig a;
