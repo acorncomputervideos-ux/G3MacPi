@@ -152,12 +152,16 @@ void Ppc750::op_mtspr(u32 insn)
         }
         s_.spr[n] = v;
         break;
-    default:
+    default: {
+        // Translation context changed: drop cached translations (not when
+        // the value is the same: about 1 in 3 BAT writes in Mac OS's
+        // context switches).
+        const bool changed = s_.spr[n] != v;
         s_.spr[n] = v;
-        // Translation context changed: drop cached translations.
-        if (n == spr::SDR1 || (n >= spr::IBAT0U && n <= spr::DBAT0U + 7))
+        if (changed && (n == spr::SDR1 || (n >= spr::IBAT0U && n <= spr::DBAT0U + 7)))
             flush_tlb();
         break;
+    }
     }
 }
 

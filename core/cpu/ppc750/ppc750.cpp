@@ -367,8 +367,14 @@ void Ppc750::execute_op31(u32 insn)
             if (xo10 == 595 || xo10 == 659) {
                 s_.gpr[field::rd(insn)] = s_.sr[sr];
             } else {
-                s_.sr[sr] = s_.gpr[field::rd(insn)];
-                flush_tlb();  // cached translations used the old VSID/keys
+                // Cached translations used the old VSID/keys: dropped, unless
+                // the value is the same (Mac OS rewrites unchanged ones on
+                // its context switches, about 1 in 9).
+                const u32 v = s_.gpr[field::rd(insn)];
+                if (s_.sr[sr] != v) {
+                    s_.sr[sr] = v;
+                    flush_tlb();
+                }
             }
         }
         break;
