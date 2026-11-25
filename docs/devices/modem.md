@@ -14,8 +14,8 @@ reproduced is what the Mac sees.
 | Hayes AT modem | `core/devices/modem/hayes_modem.*` | done |
 | PPP framing (RFC 1662) | `platform/common/ppp_framer.*` | done |
 | PPP provider end (LCP, PAP, IPCP, IP) | `platform/common/ppp_server.*` | done |
-| The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | | next |
-| Dial-up sounds, generated | | |
+| The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | `platform/common/dialup_link.*` | done |
+| Dial-up sounds, generated | | next |
 | Wiring on the Pi and in g3_host, menu options | | |
 
 ## The modem (hayes_modem.h)
@@ -56,3 +56,17 @@ get a Protocol-Reject. Restart timer 3 s, at most 10 requests, then the
 call is ended. Tests: `tests/unit/platform/test_ppp_server.cpp` (the
 test plays the Mac's side); 10 sabotage runs, two of which needed the
 last two tests.
+
+## The network side (dialup_link.h)
+
+When the call is up, it asks the network's DHCP server for an address
+as the Mac (the Mac's hardware address, the BROADCAST flag set), and gives
+the PPP end the address, the router (as the PPP peer) and up to two DNS
+servers. It renews at half the lease. The Mac's IPv4 packets go out in
+Ethernet frames under the Mac's hardware address: to the router, or to
+a host on the same subnet, after ARP (up to 3 requests a second apart;
+up to 8 packets held meanwhile). It answers ARP for the Mac's address.
+Only IPv4 to the Mac's address and hardware address goes back to the
+Mac. On the network, the dialled-in Mac is the same station as the Mac
+on Ethernet; Mac OS uses one or the other at a time. Tests:
+`tests/unit/platform/test_dialup_link.cpp`; 8 sabotage runs, all caught.
