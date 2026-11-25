@@ -30,6 +30,9 @@ namespace ppc {
 class JitWorker;
 }
 class BwFirmware;
+class DialupModem;
+class ModemSound;
+class NetTee;
 struct MachineState;
 struct ScreenFrame;
 
@@ -50,6 +53,9 @@ public:
     // once by start(); the objects must outlive the session.
     virtual AudioSink* audio_sink() { return nullptr; }
     virtual NetLink* net_link() { return nullptr; }
+    // The dial-up modem's speaker (modem_sound.h), mixed in by the host as
+    // it plays sound; nullptr: silent.
+    virtual ModemSound* modem_sound() { return nullptr; }
     // The Ethernet address to give the Mac (the device tree's); false keeps
     // the built-in default.
     virtual bool mac_address(u8 out[6]) { (void)out; return false; }
@@ -155,6 +161,7 @@ public:
     void screen_frame(ScreenFrame& f) const;
 
     YosemiteMachine* machine() { return m_; }   // for diagnostics and tests
+    DialupModem* dialup() { return dialup_; }   // the virtual modem (config.modem), or nullptr
     BwFirmware* firmware() { return fw_; }
 
 private:
@@ -165,6 +172,8 @@ private:
 
     YosemiteMachine* m_ = nullptr;
     BwFirmware* fw_ = nullptr;
+    NetTee* tee_ = nullptr;          // the host's link, shared by the Ethernet card and the modem
+    DialupModem* dialup_ = nullptr;
     MacHost* host_ = nullptr;
     BlockDevice* image_[MachineConfig::kDrives] = {};
     AtapiCdrom cd_[MachineConfig::kDrives];

@@ -315,13 +315,14 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                     reject(r, line_no, "wifi_country: two capital letters, e.g. GB");
             } else if (word_is(key, kn, "sound") || word_is(key, kn, "network") || word_is(key, kn, "web") ||
                        word_is(key, kn, "autostart") || word_is(key, kn, "wifi") ||
-                       word_is(key, kn, "pi_overclock")) {
+                       word_is(key, kn, "pi_overclock") || word_is(key, kn, "modem")) {
                 bool& flag = word_is(key, kn, "sound") ? c.sound : word_is(key, kn, "network") ? c.network
                              : word_is(key, kn, "web") ? c.web : word_is(key, kn, "wifi") ? c.wifi
-                             : word_is(key, kn, "pi_overclock") ? c.pi_overclock : c.autostart;
+                             : word_is(key, kn, "pi_overclock") ? c.pi_overclock
+                             : word_is(key, kn, "modem") ? c.modem : c.autostart;
                 if (word_is(val, vn, "yes")) flag = true;
                 else if (word_is(val, vn, "no")) flag = false;
-                else reject(r, line_no, "sound/network/web/autostart/wifi/pi_overclock: yes or no");
+                else reject(r, line_no, "sound/network/modem/web/autostart/wifi/pi_overclock: yes or no");
             } else {
                 reject(r, line_no, "unknown key in [machine]");
             }
@@ -380,6 +381,8 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     o.str(c.sound ? "yes" : "no");
     o.str("\nnetwork = ");
     o.str(c.network ? "yes" : "no");
+    o.str("\nmodem = ");
+    o.str(c.modem ? "yes" : "no");
     o.str("\nautostart = ");
     o.str(c.autostart ? "yes" : "no");
     o.str("\nweb = ");

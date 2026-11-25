@@ -90,6 +90,7 @@ public:
     bool online() const { return state_ == State::Online; }
     bool connected() const { return state_ == State::Online || state_ == State::OnlineCommand; }
     u8 speaker_mode() const { return speaker_; }
+    bool pulse_dialing() const { return pulse_; }
     u8 speaker_volume() const { return volume_; }
     u8 s(u32 n) const { return n < kSRegs ? s_[n] : 0; }
 

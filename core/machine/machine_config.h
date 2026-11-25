@@ -67,6 +67,8 @@ struct MachineConfig {
     // Built-in sound and Ethernet (docs/hardware/davbus.md, bmac.md).
     bool sound = true;
     bool network = true;
+    // The virtual dial-up modem on the serial port (docs/devices/modem.md).
+    bool modem = false;
     // The web interface, and its password (empty: none).
     static constexpr u32 kPasswordMax = 64;
     bool web = true;

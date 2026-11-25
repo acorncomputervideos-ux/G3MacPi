@@ -3,6 +3,9 @@
 // platform/common/mac_session.cpp — see mac_session.h.
 
 #include "platform/common/mac_session.h"
+
+#include "platform/common/dialup_modem.h"
+#include "platform/common/net_tee.h"
 #include "platform/common/jit_report.h"
 #include "platform/common/rom_from_disc.h"
 
@@ -79,10 +82,14 @@ void MacSession::disc_ejected(void* ctx)
 
 void MacSession::stop()
 {
+    delete dialup_;  // (it uses the machine's SCC and scheduler)
+    dialup_ = nullptr;
     delete fw_;
     fw_ = nullptr;
     delete m_;
     m_ = nullptr;
+    delete tee_;     // (the Ethernet card used it)
+    tee_ = nullptr;
     for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         cd_[i].insert(nullptr);
         if (image_[i] && host_)
@@ -177,7 +184,13 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     fc.ethernet = config.network;
     host.mac_address(fc.mac_address);
     m_->macio().sound().set_sink(config.sound ? host.audio_sink() : nullptr);
-    m_->macio().ethernet().set_link(config.network ? host.net_link() : nullptr);
+    tee_ = config.network ? new NetTee(host.net_link()) : nullptr;
+    m_->macio().ethernet().set_link(tee_);
+    if (config.modem) {
+        dialup_ = new DialupModem(m_->macio().escc(), m_->scheduler(), fc.mac_address);
+        dialup_->set_network(tee_);
+        dialup_->set_sound(host.modem_sound());
+    }
     fw_ = new BwFirmware(*m_, fc);
     if (!fw_ || !fw_->ok())
         return fail(Error::Firmware);

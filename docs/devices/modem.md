@@ -16,7 +16,8 @@ reproduced is what the Mac sees.
 | PPP provider end (LCP, PAP, IPCP, IP) | `platform/common/ppp_server.*` | done |
 | The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | `platform/common/dialup_link.*` | done |
 | Dial-up sounds, generated | `platform/common/modem_sound.*` | done |
-| Wiring on the Pi and in g3_host, menu options | | next |
+| Put together on channel A, in the session (`modem = yes`) | `platform/common/dialup_modem.*`, `net_tee.*` | done |
+| The Pi's audio mix, g3_host's capture, menu option | | next |
 
 ## The modem (hayes_modem.h)
 
@@ -86,3 +87,16 @@ is mixed into the audio output on the core that plays it, clipped, not
 wrapped. Tests measure each sound's frequencies (Goertzel); 8 sabotage
 runs, 7 caught; the eighth (not muting after CONNECT in render_add) is
 also guarded in the sound itself.
+
+## Put together (dialup_modem.h)
+
+`modem = yes` in `[machine]` attaches the modem to the SCC's channel A.
+The Mac's bytes and DTR go to the modem; the modem's output enters the
+SCC's receiver one character per character time at the port's baud rate;
+the modem drives DCD and CTS is on. The network side shares the host's
+link with the Ethernet card through `NetTee`, which pulls frames in even
+while the card's receiver is off. The speaker goes to the host's
+`ModemSound` (MacHost::modem_sound). Test:
+`tests/unit/platform/test_dialup_modem.cpp` drives it through the SCC's
+registers (AT, pacing, dialling, carrier, the provider's first PPP frame,
+DTR hang-up); 4 sabotage runs, all caught.
