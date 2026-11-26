@@ -50,6 +50,12 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         layout_.htab < kVectorsEnd + (1u << 20))
         return;
 
+    // Mac OS 9 shuts down and restarts the B&W through Cuda (POWER_DOWN,
+    // RESET_SYSTEM), not RTAS: the same flags as RTAS's power calls.
+    m.macio().cuda().set_power_callbacks(
+        [](void* self) { static_cast<BwFirmware*>(self)->powered_off_ = true; },
+        [](void* self) { static_cast<BwFirmware*>(self)->reboot_ = true; }, this);
+
     // PCI resources, as firmware assigns them at power-on.
     m.bridge().config_write(0x18, (1u << 16) | (1u << 8) | 0u, 0x7);  // subordinate 1, secondary 1, primary 0
     // Forwarding windows (PCI-to-PCI Bridge Architecture 3.2.5): I/O base and
