@@ -305,9 +305,12 @@ int main(int argc, char** argv)
     struct IllegalLog { MacSession* s; u32 shown; } illegal_log{&session, 0};
     static HostFiles::Wav modem_wav;
     size_t lan_shown = 0;
+    const auto start_t0 = std::chrono::steady_clock::now();
     const MacSession::Error e = session.start(config, host, mem, driver.empty() ? nullptr : driver.data(),
                                               static_cast<u32>(driver.size()),
                                               static_cast<u64>(std::time(nullptr)), have_saved ? &saved : nullptr);
+    std::printf("[g3_host] session start: %.0f ms\n",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_t0).count());
     if (e != MacSession::Error::None) {
         std::fprintf(stderr, "cannot start: %s%s%s\n", MacSession::error_text(e), session.detail()[0] ? ": " : "",
                      session.detail());

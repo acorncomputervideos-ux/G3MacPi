@@ -41,6 +41,11 @@ public:
     // zeroed memory.
     static constexpr u32 kTrapVector = kTrapBase | 0x40;
 
+    // Called first at every trap from the client (e.g. to drop cached
+    // translations: the client may have changed its page table).
+    using EntryHook = void (*)(void* context);
+    void set_entry_hook(EntryHook fn, void* ctx) { entry_hook_ = fn; entry_ctx_ = ctx; }
+
     Firmware(DeviceTree& tree, ppc::MemoryInterface& mem) : mem_(mem), ci_(tree, mem)
     {
         ci_.set_exit(on_exit, this);
@@ -88,6 +93,8 @@ private:
     static void on_exit(void* context);
 
     ppc::MemoryInterface& mem_;
+    EntryHook entry_hook_ = nullptr;
+    void* entry_ctx_ = nullptr;
     ClientInterface ci_;
     u32 entry_ = 0;
     u32 calls_ = 0;

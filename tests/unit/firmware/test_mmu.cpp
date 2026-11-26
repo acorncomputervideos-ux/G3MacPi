@@ -5,6 +5,7 @@
 
 #include "core/cpu/ppc750/ppc750.h"
 #include "core/firmware/forth/forth.h"
+#include "core/firmware/openfirm/guest_view.h"
 #include "core/firmware/openfirm/mmu.h"
 #include "core/mem/flat_memory.h"
 #include "tests/framework/g3test.h"
@@ -239,4 +240,49 @@ TEST_CASE("firmware/mmu/package_methods")
     g.push(0x00400000u); g.push(0x2000);
     REQUIRE(memdrv.method(0, "release", g));
     CHECK(phys_map.is_free(0x00400000u, 0x2000));
+}
+
+// The firmware's view of guest memory caches translations (guest_view.h):
+// it follows a changed page table only after invalidate(), and any change
+// of the segment register or MSR[DR] at once.
+TEST_CASE("firmware/mmu/guest_view_cached_translations")
+{
+    constexpr u32 kRam = 4u << 20;
+    std::unique_ptr<u8[]> ram(new u8[kRam]());
+    FlatMemory mem(ram.get(), kRam);
+    ppc::Ppc750 cpu(mem);
+    GuestView view(mem, cpu);
+    PageTable pt(mem, 0x00100000u, 0x10000u);
+    REQUIRE(pt.clear());
+    cpu.state().sr[1] = 0x77;
+    cpu.state().spr[ppc::spr::SDR1] = pt.sdr1();
+    REQUIRE(pt.insert(0x77, 0x10003000u, 0x00200000u, 0x12));
+    ram[0x00200010] = 0xAA;
+    ram[0x00300010] = 0xBB;
+    cpu.state().msr = ppc::msr::DR;
+    u8 v = 0;
+    REQUIRE(view.read8(0x10003010u, v));
+    CHECK_EQ(v, 0xAAu);
+    // The page table now says 0x300000 (as the firmware's map would).
+    REQUIRE(pt.clear());
+    REQUIRE(pt.insert(0x77, 0x10003000u, 0x00300000u, 0x12));
+    REQUIRE(view.read8(0x10003010u, v));
+    CHECK_EQ(v, 0xAAu);                       // cached (the firmware invalidates on every change)
+    view.invalidate();
+    REQUIRE(view.read8(0x10003010u, v));
+    CHECK_EQ(v, 0xBBu);
+    // Another segment register value: looked up again (unmapped there).
+    cpu.state().sr[1] = 0x78;
+    CHECK(!view.read8(0x10003010u, v));
+    cpu.state().sr[1] = 0x77;
+    REQUIRE(view.read8(0x10003010u, v));
+    CHECK_EQ(v, 0xBBu);
+    // Real mode: physical, whatever is cached.
+    cpu.state().msr = 0;
+    REQUIRE(view.read8(0x00200010u, v));
+    CHECK_EQ(v, 0xAAu);
+    // Writes too.
+    cpu.state().msr = ppc::msr::DR;
+    REQUIRE(view.write8(0x10003011u, 0xCC));
+    CHECK_EQ(ram[0x00300011], 0xCCu);
 }

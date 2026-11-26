@@ -40,6 +40,8 @@ void Firmware::start_client(ppc::CpuState& s, u32 entry, u32 stack_top) const
 bool Firmware::hle_trap(void* context, u32 insn, ppc::CpuState& s, u32& next_pc)
 {
     auto* fw = static_cast<Firmware*>(context);
+    if (fw->entry_hook_)
+        fw->entry_hook_(fw->entry_ctx_);
     if (insn == kTrapIdle) {
         next_pc = s.pc;  // a client that exited stays here
         return true;

@@ -221,6 +221,7 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
     if (!fw_.install(layout_.ci_entry) || !fw_.install_vectors())
         return;
     fw_.attach(m.cpu());
+    fw_.set_entry_hook([](void* v) { static_cast<of::GuestView*>(v)->invalidate(); }, &view_);
     of::ClientInterface& ci = fw_.client();
     ci.set_memory(&memory_);
     ci.set_instances(&inst_);
@@ -248,6 +249,7 @@ bool BwFirmware::sync_mmu(void* ctx) { return static_cast<BwFirmware*>(ctx)->app
 // register n holds VSID n (Ks = Kp = 0: PP 00-10 read/write).
 bool BwFirmware::apply_mmu()
 {
+    view_.invalidate();  // the page table is rewritten
     of::PageTable pt(m_.bus(), layout_.htab, layout_.htab_size);
     if (!pt.clear())
         return false;

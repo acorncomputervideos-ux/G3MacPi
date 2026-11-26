@@ -6,6 +6,27 @@
 
 namespace g3::of {
 
+bool GuestView::pa(u32 a, bool write, u32& out)
+{
+    const ppc::CpuState& s = cpu_.state();
+    const u32 msr = s.msr & (ppc::msr::DR | ppc::msr::PR);
+    if (!(msr & ppc::msr::DR)) {  // real mode: no translation
+        out = a;
+        return true;
+    }
+    const u32 page = a >> 12;
+    Entry& e = cache_[((page & 7) << 1) | (write ? 1 : 0)];
+    const u32 sdr1 = s.spr[ppc::spr::SDR1], sr = s.sr[a >> 28], id = cpu_.translation_id();
+    if (e.valid && e.page == page && e.msr == msr && e.sdr1 == sdr1 && e.sr == sr && e.id == id) {
+        out = (e.phys_page << 12) | (a & 0xFFF);
+        return true;
+    }
+    if (!cpu_.probe_translate(a, write, out))
+        return false;
+    e = Entry{true, page, out >> 12, msr, sdr1, sr, id};
+    return true;
+}
+
 bool GuestView::read8(u32 a, u8& v)
 {
     u32 p;

@@ -101,6 +101,9 @@ public:
     // R/C bits or touching the TLB. For firmware that reads and writes
     // client memory on the client's behalf. False if no translation.
     bool probe_translate(u32 ea, bool write, u32& pa);
+    // Changes whenever the segment registers or BATs take values not seen
+    // in the current set (the same values give the same id again).
+    u32 translation_id() const { return xlat_id_; }
 
     // Called just before the time base or the decrementer is read or the
     // decrementer is written, so whoever drives time (the execution loop) can
