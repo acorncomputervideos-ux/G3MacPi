@@ -22,6 +22,7 @@
 #include "core/common/endian.h"
 #include "core/common/version.h"
 #include "ndrv_data.h"
+#include <circle/net/ntpdaemon.h>
 #include "platform/common/cpu_selftest.h"
 #include "platform/common/net_switch.h"
 #include "platform/common/wpa_config.h"
@@ -343,6 +344,7 @@ void CKernel::StartNetwork (void)
 		m_Logger.Write (FromKernel, LogWarning, "Network: the Ethernet adapter did not start");
 		return;
 	}
+	StartInternetTime ();
 	CNetDevice *pAdapter = 0;
 	for (unsigned i = 0; CNetDevice::GetNetDevice (i) != 0; i++)
 	{
@@ -447,6 +449,7 @@ void CKernel::StartWifi (void)
 		m_Logger.Write (FromKernel, LogWarning, "WiFi: the network stack did not start");
 		return;
 	}
+	StartInternetTime ();
 	// Let the stack's task pick its device (CPiNetPort) before the
 	// supplicant asks the stack for its address.
 	for (unsigned i = 0; i < 10; i++)
@@ -997,6 +1000,40 @@ boolean CKernel::MountSDCard (void)
 }
 
 // Writes the logger's text buffer (the last 16 KB of log output) to the SD card.
+// Internet time (NTP, pool.ntp.org) once the Pi's network stack runs:
+// Circle's daemon sets the Pi's clock (UTC) when DHCP has given an address,
+// then every so often. SyncMacClock() passes it on to the Mac.
+void CKernel::StartInternetTime (void)
+{
+	if (m_pNtp == 0 && m_pNet != 0)
+	{
+		m_pNtp = new CNTPDaemon ("pool.ntp.org", m_pNet);
+		m_Logger.Write (FromKernel, LogNotice, "Clock: internet time from pool.ntp.org");
+	}
+}
+
+// The Mac's clock follows internet time: once it is first known (the Mac
+// may have started before, from its saved clock), and when the time zone
+// changes in the menu.
+void CKernel::SyncMacClock (void)
+{
+	if (!m_bMacRunning)
+	{
+		return;
+	}
+	const u64 nUTC = m_Timer.GetUniversalTime ();
+	const s32 nOffset = m_pMenu->config ().utc_offset_minutes;
+	if (nUTC < TrustedTimeFrom || (m_bClockSet && nOffset == m_nClockOffsetApplied))
+	{
+		return;
+	}
+	m_Session.set_clock (nUTC + (s64) nOffset * 60);
+	m_bClockSet = TRUE;
+	m_nClockOffsetApplied = nOffset;
+	m_Logger.Write (FromKernel, LogNotice, "Clock: the Mac's clock set from internet time (UTC%+d min)",
+			(int) nOffset);
+}
+
 // Start-up timing, to the log: milliseconds since the Pi was powered on
 // (the system timer starts with the chip, so the Pi firmware's own time is
 // included).
@@ -1536,7 +1573,17 @@ void CKernel::StartMac (void)
 	// unless something set it. Then the Mac's clock carries on from where it
 	// was when it last stopped (it lags by the time the Pi was off), or
 	// starts in 2001 the first time.
-	const u64 nTime = g3::choose_start_time (m_Timer.GetUniversalTime (), 1577836800u,
+	// With internet time (InternetTime()): UTC plus the time zone, since the
+	// Mac's clock is local time.
+	u64 nHostTime = m_Timer.GetUniversalTime ();
+	m_bClockSet = FALSE;	// this Mac's clock: set again once internet time is known
+	if (nHostTime >= TrustedTimeFrom)
+	{
+		nHostTime += (s64) m_pMenu->config ().utc_offset_minutes * 60;
+		m_nClockOffsetApplied = m_pMenu->config ().utc_offset_minutes;
+		m_bClockSet = TRUE;
+	}
+	const u64 nTime = g3::choose_start_time (nHostTime, TrustedTimeFrom,
 						 m_bStateValid ? &m_SavedState : 0, 978307200u);
 
 	g3::MacSession::Memory Memory;
@@ -1910,6 +1957,7 @@ TShutdownMode CKernel::Run (void)
 			nLastThrottleTicks = nNow;
 		}
 
+		SyncMacClock ();
 		if (m_bMacRunning && !m_bMenuShown)
 		{
 			RunMac ();

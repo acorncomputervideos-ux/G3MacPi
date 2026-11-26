@@ -122,7 +122,7 @@ private:
     // In screen order, by group (The Mac, Drives, Screen, Network, The Pi),
     // then the actions. kFloppy is not shown (the B&W has no floppy drive).
     enum MainItem : u8 { kRam, kRom, kJit, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kNewHardDisk,
-                         kMode, kDepth, kScale, kSound, kNetwork, kWifi, kModem, kAutostart, kPiSpeed, kSelfTest,
+                         kMode, kDepth, kScale, kSound, kNetwork, kWifi, kModem, kAutostart, kTimeZone, kPiSpeed, kSelfTest,
                          kSave, kStart, kRestartPi, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
     enum WifiItem : u8 { kWUse, kWName, kWPassword, kWCountry, kWKeyboard, kWBack, kWifiItems };

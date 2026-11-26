@@ -128,6 +128,12 @@ private:
 	boolean MountSDCard (void);
 	void WriteLogFile (void);
 	void StartupMark (const char *pWhat);
+	void StartInternetTime (void);
+	void SyncMacClock (void);
+	static const u64 TrustedTimeFrom = 1577836800u;	// 2020: before that the Pi's clock was never set
+	class CNTPDaemon	*m_pNtp = 0;
+	boolean			m_bClockSet = FALSE;	// the Mac's clock came from internet time
+	s32			m_nClockOffsetApplied = 0;
 	boolean			m_bFirstFrameLogged = FALSE;
 	unsigned		m_nLogFileTicks = 0;	// when to write boot.log again (0: not)
 

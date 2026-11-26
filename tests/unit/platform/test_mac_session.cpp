@@ -337,3 +337,13 @@ TEST_CASE("platform/session/state_survives_a_restart")
     Rig r3;
     CHECK(!r3.session.capture_state(none));  // no Mac running
 }
+
+TEST_CASE("platform/session/set_clock_while_running")
+{
+    // Internet time arriving after the Mac started: its real-time clock
+    // (Cuda, seconds since 1904) is set at once.
+    Rig r;
+    REQUIRE(r.start() == MacSession::Error::None);
+    r.session.set_clock(1767225600u);  // 2026-01-01 00:00:00 as the Mac's local time
+    CHECK_EQ(r.session.machine()->macio().cuda().rtc(), static_cast<u32>(1767225600u + 2082844800u));
+}

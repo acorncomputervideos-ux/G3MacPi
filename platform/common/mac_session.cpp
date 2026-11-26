@@ -332,6 +332,12 @@ void MacSession::mouse(s32 dx, s32 dy, u32 buttons)
     m_->mouse().buttons(buttons);
 }
 
+void MacSession::set_clock(u64 unix_time)
+{
+    if (m_)
+        m_->macio().cuda().set_rtc(static_cast<u32>(unix_time + kUnixTo1904));
+}
+
 bool MacSession::change_disc(u32 drive, const char* path)
 {
     if (!m_ || drive >= MachineConfig::kDrives || !is_cd_[drive])

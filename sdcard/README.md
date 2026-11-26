@@ -25,6 +25,12 @@ draws; F12 opens the menu at any time). "Restart the Pi" at the bottom
 of the menu, or Ctrl+Alt+Delete, writes the Mac's disks and restarts.
 Mac OS's Shut Down stops the Mac and shows the menu.
 
+Clock: with a network (Ethernet or WiFi) the Pi gets the time from the
+internet (pool.ntp.org) and sets the Mac's clock from it, in the menu's
+"Time zone" (UTC plus or minus hours; change it for summer time). Without
+a network the Mac's clock carries on from where it was when it stopped
+(the Pi 400 has no battery clock).
+
 Start-up disk "Automatic" (and "Hard disk") starts from a disk that has
 Mac OS on it (a System Folder with the Mac OS ROM file), so a new blank
 disk never gets in the way; with none, from the CD. Mac OS starts only

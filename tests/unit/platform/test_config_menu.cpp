@@ -297,6 +297,14 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);
     CHECK(!r.menu.config().autostart);
     CHECK(r.has("Show this menu"));
+    r.press(kDown);                                    // Time zone: UTC by default, 30-minute steps
+    CHECK(r.has("UTC+00:00"));
+    r.press(kRight, 2);
+    CHECK_EQ(r.menu.config().utc_offset_minutes, 60);
+    CHECK(r.has("UTC+01:00"));
+    r.press(kLeft, 4);
+    CHECK_EQ(r.menu.config().utc_offset_minutes, -60);
+    CHECK(r.has("UTC-01:00"));
     r.press(kDown);                                    // Pi CPU speed
     CHECK(r.has("1.8 GHz (standard)"));
     r.press(kRight);

@@ -313,6 +313,33 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& c, ConfigPar
                     copy(c.wifi_country, 3, val, vn);
                 else
                     reject(r, line_no, "wifi_country: two capital letters, e.g. GB");
+            } else if (word_is(key, kn, "time_zone")) {
+                // [+|-]hh[:mm]
+                u32 i = 0;
+                s32 sign = 1;
+                if (i < vn && (val[i] == '+' || val[i] == '-'))
+                    sign = val[i++] == '-' ? -1 : 1;
+                u32 hh = 0, mm = 0, digits = 0;
+                while (i < vn && val[i] >= '0' && val[i] <= '9' && digits < 2) {
+                    hh = hh * 10 + static_cast<u32>(val[i++] - '0');
+                    ++digits;
+                }
+                bool ok = digits > 0;
+                if (ok && i < vn && val[i] == ':') {
+                    ++i;
+                    u32 md = 0;
+                    while (i < vn && val[i] >= '0' && val[i] <= '9' && md < 2) {
+                        mm = mm * 10 + static_cast<u32>(val[i++] - '0');
+                        ++md;
+                    }
+                    ok = md == 2 && mm < 60;
+                }
+                const s32 minutes = sign * static_cast<s32>(hh * 60 + mm);
+                ok = ok && i == vn && minutes >= MachineConfig::kMinUtcOffset && minutes <= MachineConfig::kMaxUtcOffset;
+                if (ok)
+                    c.utc_offset_minutes = minutes;
+                else
+                    reject(r, line_no, "time_zone: +hh:mm or -hh:mm, from -12:00 to +14:00");
             } else if (word_is(key, kn, "sound") || word_is(key, kn, "network") || word_is(key, kn, "web") ||
                        word_is(key, kn, "autostart") || word_is(key, kn, "wifi") ||
                        word_is(key, kn, "pi_overclock") || word_is(key, kn, "modem") ||
@@ -393,6 +420,12 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     o.str(c.autostart ? "yes" : "no");
     o.str("\nsharp_pixels = ");
     o.str(c.sharp_pixels ? "yes" : "no");
+    {
+        char tz[8];
+        format_utc_offset(c.utc_offset_minutes, tz);
+        o.str("\ntime_zone = ");
+        o.str(tz);
+    }
     o.str("\nweb = ");
     o.str(c.web ? "yes" : "no");
     if (c.web_password[0]) {
@@ -440,6 +473,19 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
         return 0;
     out[o.len] = 0;
     return o.len;
+}
+
+void format_utc_offset(s32 minutes, char out[8])
+{
+    const u32 m = static_cast<u32>(minutes < 0 ? -minutes : minutes);
+    out[0] = minutes < 0 ? '-' : '+';
+    out[1] = static_cast<char>('0' + m / 600);
+    out[2] = static_cast<char>('0' + m / 60 % 10);
+    out[3] = ':';
+    out[4] = static_cast<char>('0' + m % 60 / 10);
+    out[5] = static_cast<char>('0' + m % 10);
+    out[6] = 0;
+    out[7] = 0;
 }
 
 u32 choose_boot_drive(const MachineConfig& c, const bool has_image[MachineConfig::kDrives], const bool* has_system)

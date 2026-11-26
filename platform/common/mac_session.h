@@ -151,6 +151,10 @@ public:
     // CD-ROM drives: put in another disc (path) or eject (empty path).
     // False if `drive` is not a CD-ROM or the image cannot be opened.
     bool change_disc(u32 drive, const char* path);
+    // Sets the Mac's real-time clock (Cuda) while it runs: `unix_time` as
+    // the Mac's local time. Mac OS follows within seconds (Cuda's
+    // one-second packets carry the time).
+    void set_clock(u64 unix_time);
 
     // Screen: the Mac's frame buffer as 0x00RRGGBB pixels.
     bool screen_on() const;

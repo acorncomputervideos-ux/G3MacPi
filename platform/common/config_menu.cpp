@@ -424,6 +424,13 @@ void ConfigMenu::change_main(u32 item, int dir)
         cfg_.modem = !cfg_.modem;
     } else if (item == kAutostart) {
         cfg_.autostart = !cfg_.autostart;
+    } else if (item == kTimeZone) {
+        s32 m = cfg_.utc_offset_minutes + (dir < 0 ? -30 : 30);
+        if (m > MachineConfig::kMaxUtcOffset)
+            m = MachineConfig::kMinUtcOffset;
+        else if (m < MachineConfig::kMinUtcOffset)
+            m = MachineConfig::kMaxUtcOffset;
+        cfg_.utc_offset_minutes = m;
     } else if (item == kJit) {
         cfg_.jit = !cfg_.jit;
     } else if (item == kPiSpeed) {
@@ -754,8 +761,6 @@ void ConfigMenu::render(Screen& s) const
             // between groups: the bottom rows are kept for long status text).
             const char* group = i == kRam ? "The Mac" : i == kDrive0 ? "Drives" : i == kMode ? "Display"
                                 : i == kNetwork ? "Network" : i == kAutostart ? "The Pi" : nullptr;
-            if (i == kRam)
-                ++row;  // under the title
             char label[48];
             scopy(label, sizeof label, group ? group : "");
             while (slen(label) < kGroupWidth)
@@ -816,6 +821,13 @@ void ConfigMenu::render(Screen& s) const
             } else if (i == kModem) {
                 scat(label, sizeof label, "Modem");
                 scopy(buf, sizeof buf, cfg_.modem ? "Internal 56K: dials up through the network" : "None");
+            } else if (i == kTimeZone) {
+                scat(label, sizeof label, "Time zone");
+                char tz[8];
+                format_utc_offset(cfg_.utc_offset_minutes, tz);
+                scopy(buf, sizeof buf, "UTC");
+                scat(buf, sizeof buf, tz);
+                scat(buf, sizeof buf, " (internet time, with a network)");
             } else if (i == kAutostart) {
                 scat(label, sizeof label, "At power-on");
                 scopy(buf, sizeof buf, cfg_.autostart ? "Start the Mac (F12: this menu)" : "Show this menu");

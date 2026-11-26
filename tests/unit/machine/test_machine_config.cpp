@@ -137,6 +137,7 @@ TEST_CASE("machine/config/write_then_parse_round_trips")
     REQUIRE(a.set_image(2, "/g3macpi/disks/Macintosh HD.img"));
     a.drive[2].read_only = true;
     a.sharp_pixels = true;
+    a.utc_offset_minutes = -330;
     char buf[2048];
     const u32 n = write_machine_config(a, buf, sizeof buf);
     REQUIRE(n > 0);
@@ -156,6 +157,8 @@ TEST_CASE("machine/config/write_then_parse_round_trips")
     CHECK(std::strcmp(b.drive[2].image, "/g3macpi/disks/Macintosh HD.img") == 0);
     CHECK(b.drive[1].type == MachineConfig::DriveType::None);
     CHECK(b.sharp_pixels);
+    CHECK_EQ(b.utc_offset_minutes, -330);
+    CHECK(std::strstr(buf, "time_zone = -05:30") != nullptr);
     CHECK(!MachineConfig{}.sharp_pixels);   // fill the screen by default
 
     // Too small a buffer: refused, not truncated.
@@ -343,4 +346,25 @@ TEST_CASE("machine/config/disk_in_the_cd_position_is_writable")
     MachineConfig e;
     parse("[ata0.master]\nreadonly = no\ntype = cdrom\n", e, r);
     CHECK(e.drive[0].read_only);
+}
+
+TEST_CASE("machine/config/time_zone")
+{
+    MachineConfig c;
+    ConfigParseReport r;
+    CHECK_EQ(c.utc_offset_minutes, 0);
+    parse("[machine]\ntime_zone = +01:00\n", c, r);
+    CHECK_EQ(c.utc_offset_minutes, 60);
+    CHECK_EQ(r.ignored, 0u);
+    parse("[machine]\ntime_zone = -9\n", c, r);
+    CHECK_EQ(c.utc_offset_minutes, -540);
+    parse("[machine]\ntime_zone = +14:00\n", c, r);
+    CHECK_EQ(c.utc_offset_minutes, 840);
+    for (const char* bad : {"+15:00", "-12:30", "+1:5", "abc", "+01:60"}) {
+        MachineConfig d;
+        ConfigParseReport rr;
+        parse((std::string("[machine]\ntime_zone = ") + bad + "\n").c_str(), d, rr);
+        CHECK_EQ(d.utc_offset_minutes, 0);
+        CHECK_EQ(rr.ignored, 1u);
+    }
 }

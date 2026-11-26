@@ -19,6 +19,7 @@
 //   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
 //   autostart = yes      ; at power-on start the Mac at once (no: show the menu)
 //   sharp_pixels = no    ; yes: whole-number scaling on the host screen (sharp, may leave borders)
+//   time_zone = +01:00   ; the Mac's local time, from UTC (with internet time; -12:00 to +14:00)
 //   web = yes            ; the web interface (platform/common/web_ui.h)
 //   web_password = text  ; needed by the web interface if set (no ; or # in it)
 //   wifi = no            ; yes: the Pi's WiFi instead of its Ethernet port
@@ -78,6 +79,10 @@ struct MachineConfig {
     // The host screen: the Mac's picture filled to the screen (no) or scaled
     // by a whole number, every Mac pixel the same size (yes).
     bool sharp_pixels = false;
+    // The Mac's clock is local time (it has no time zone of its own); the
+    // host's internet time (UTC) plus this many minutes.
+    s32 utc_offset_minutes = 0;
+    static constexpr s32 kMinUtcOffset = -12 * 60, kMaxUtcOffset = 14 * 60;
     char web_password[kPasswordMax] = {};
     // WiFi (the Pi's own radio) instead of the Ethernet port, for the Mac
     // and the web interface (docs/wifi.md).
@@ -140,6 +145,9 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& config, Conf
 // starts from) before the slaves; a disk without a system (a new blank
 // one) is chosen only when nothing else can be, so adding one does not
 // stop the Mac from starting from its usual disk.
+// "+hh:mm" / "-hh:mm" (7 characters and a NUL).
+void format_utc_offset(s32 minutes, char out[8]);
+
 u32 choose_boot_drive(const MachineConfig& config, const bool has_image[MachineConfig::kDrives],
                       const bool* has_system = nullptr);
 
