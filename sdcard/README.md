@@ -169,7 +169,14 @@ blank disk". After Enter the menu goes back to the main page with the disk
 in that drive, and the settings are saved. Or open a drive position yourself, set Type to Hard disk,
 then go to "New blank disk". Left/Right picks the size (256 MB to 4 GB; FAT32 files
 can't reach 4 GB), Enter creates `/g3macpi/hdd/hdN.img` and puts it in the
-drive. The disk is blank: start the Mac from the Mac OS CD, open Drive
-Setup (in the CD's Utilities folder), initialise the disk, then install
-Mac OS on it. (Drive Setup writes Apple's disk driver onto the disk; Mac
-OS doesn't mount an ATA disk without it.)
+drive. If another drive holds a Mac OS hard disk, the new disk gets a
+copy of Apple's disk driver from it and an empty volume, "New Disk": it
+shows on the Mac's desktop at the next start, ready to use. (Mac OS
+doesn't mount an ATA hard disk without that driver, and G3MacPi can't
+include Apple's.) Without a Mac OS hard disk the new disk is blank: start
+the Mac from the Mac OS CD, open Drive Setup (in the CD's Utilities
+folder), initialise the disk, then install Mac OS on it.
+
+The Mac OS ROM file: if the one in the settings is missing, the Mac uses
+the "Mac OS ROM" in the System Folder of the disk it starts from (or of a
+Mac OS CD).

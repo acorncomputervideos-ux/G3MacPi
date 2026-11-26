@@ -23,6 +23,7 @@
 #include "core/common/version.h"
 #include "ndrv_data.h"
 #include <circle/net/ntpdaemon.h>
+#include "core/storage/new_mac_disk.h"
 #include "platform/common/cpu_selftest.h"
 #include "platform/common/net_switch.h"
 #include "platform/common/wpa_config.h"
@@ -1479,17 +1480,58 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 		g3::ConfigMenu::Screen Screen;
 		m_pMenu->render (Screen);
 		DrawSettings (&m_Screen, Screen);
+		// Apple's driver comes from a Mac OS hard disk in the settings
+		// (core/storage/new_mac_disk.h): the running Mac's own image of it
+		// (the Mac is paused while the menu shows), else the file opened
+		// read-only. The first disk that has one is used.
+		const g3::MachineConfig &Config = m_pMenu->config ();
+		g3::BlockDevice *pDrivers = 0;
+		CFatFsImage *pOpened = 0;
+		static g3::NewMacDisk Check;
+		for (u32 i = 0; i < g3::MachineConfig::kDrives && pDrivers == 0; i++)
+		{
+			const g3::MachineConfig::Drive &D = Config.drive[i];
+			if (   D.type != g3::MachineConfig::DriveType::Disk || D.image[0] == '\0'
+			    || strcmp (D.image, m_pMenu->new_disk_path ()) == 0)
+			{
+				continue;
+			}
+			g3::BlockDevice *pDevice = m_bMacRunning ? m_Session.disk_image (i) : 0;
+			CFatFsImage *pFile = 0;
+			if (pDevice == 0 && m_bSDMounted)
+			{
+				pFile = new CFatFsImage;
+				if (pFile != 0 && pFile->Open (D.image, TRUE))
+				{
+					pDevice = pFile;
+				}
+			}
+			if (pDevice != 0 && Check.plan (*pDevice, m_pMenu->new_disk_bytes ()))
+			{
+				pDrivers = pDevice;
+				pOpened = pFile;
+				m_Logger.Write (FromKernel, LogNotice, "New disk: Apple's driver from %s", D.image);
+			}
+			else
+			{
+				delete pFile;
+			}
+		}
 		const char *pMessage = "";
+		boolean bMountable = FALSE;
 		const boolean bOK = m_bSDMounted
-				    && CreateBlankDisk (m_pMenu->new_disk_path (), m_pMenu->new_disk_bytes (), &pMessage);
+				    && CreateBlankDisk (m_pMenu->new_disk_path (), m_pMenu->new_disk_bytes (), pDrivers,
+							&bMountable, &pMessage);
+		delete pOpened;
 		if (!m_bSDMounted)
 		{
 			pMessage = "No SD card file system.";
 		}
-		m_Logger.Write (FromKernel, bOK ? LogNotice : LogWarning, "New disk %s (%u MB): %s",
+		m_Logger.Write (FromKernel, bOK ? LogNotice : LogWarning, "New disk %s (%u MB): %s%s%s",
 				m_pMenu->new_disk_path (), (unsigned) (m_pMenu->new_disk_bytes () >> 20),
-				bOK ? "created" : pMessage);
-		m_pMenu->disk_created (bOK, bOK ? 0 : pMessage);
+				bOK ? (bMountable ? "created with Apple's driver" : "created blank") : "",
+				bOK && pMessage[0] ? ": " : "", pMessage);
+		m_pMenu->disk_created (bOK, bMountable, pMessage);
 		// Saved at once, so the new disk stays in its drive after a restart.
 		if (bOK && SaveSettings (m_pMenu->config ()))
 		{

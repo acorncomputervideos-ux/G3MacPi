@@ -118,8 +118,10 @@ public:
     const char* new_disk_path() const { return new_disk_path_; }
     u64 new_disk_bytes() const;
     // The front end reports the result; on success the disk goes into the
-    // drive being edited (as a writable hard disk).
-    void disk_created(bool ok, const char* message);
+    // drive being edited (as a writable hard disk). mountable: it carries
+    // Apple's driver and a volume (Mac OS shows it); else it is blank and
+    // message says why (Drive Setup must initialise it).
+    void disk_created(bool ok, bool mountable, const char* message);
     static constexpr u32 kDiskSizes = 5;
     static u32 disk_size_mb(u32 index);  // 256, 512, 1024, 2048, 4095
 

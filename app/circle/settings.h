@@ -15,6 +15,7 @@
 #include <circle/types.h>
 
 #include "core/machine/machine_config.h"
+#include "core/storage/block_device.h"
 #include "platform/common/config_menu.h"
 #include "platform/common/machine_state.h"
 
@@ -57,7 +58,13 @@ void CreateSettingsFolders (void);
 // allocated and the first megabyte zeroed, so Mac OS sees an uninitialised
 // disk (Drive Setup then initialises it). FALSE with a message on failure;
 // a partly made file is removed.
-boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage);
+// A new hard disk image of nBytes at pPath. With pDrivers (an existing Mac
+// OS disk), its partition map and Apple's ATA drivers are copied and an
+// empty volume made (core/storage/new_mac_disk.h): Mac OS mounts it.
+// Without, or if that disk can't be used, the disk is blank (*pbMountable
+// FALSE): Drive Setup must initialise it.
+boolean CreateBlankDisk (const char *pPath, u64 nBytes, g3::BlockDevice *pDrivers,
+			 boolean *pbMountable, const char **ppMessage);
 
 // The "Pi CPU speed" setting into the firmware's config.txt (a marked
 // block: platform/common/pi_overclock.h), from the next power-on. The file

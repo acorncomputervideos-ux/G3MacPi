@@ -3,6 +3,7 @@
 // app/circle/settings.cpp — see settings.h.
 
 #include "settings.h"
+#include "core/storage/new_mac_disk.h"
 #include "platform/common/frame_copy.h"
 #include "platform/common/menu_painter.h"
 #include "platform/common/pi_overclock.h"
@@ -163,9 +164,11 @@ void CreateSettingsFolders (void)
 	f_mkdir (Path);
 }
 
-boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
+boolean CreateBlankDisk (const char *pPath, u64 nBytes, g3::BlockDevice *pDrivers,
+			 boolean *pbMountable, const char **ppMessage)
 {
 	*ppMessage = "";
+	*pbMountable = FALSE;
 	char Path[g3::MachineConfig::kPathMax + 8];
 	SdPath (Path, sizeof Path, pPath);
 	if (nBytes >= 0x100000000ull)			// FAT32: files below 4 GB
@@ -174,11 +177,54 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
 		return FALSE;
 	}
 
+	// The new disk's start: Apple's drivers from the Mac OS disk and an
+	// empty volume, or (without a usable Mac OS disk) a zeroed first
+	// megabyte: no partition map, an uninitialised disk.
+	static g3::NewMacDisk Plan;
+	static u8 AltMdb[512];
+	u64 nHead = 1u << 20;
+	const char *pWhyBlank = "no Mac OS hard disk in the settings to copy Apple's driver from";
+	if (pDrivers != 0)
+	{
+		if (Plan.plan (*pDrivers, nBytes))
+		{
+			nHead = Plan.head_bytes ();
+			*pbMountable = TRUE;
+		}
+		else
+		{
+			pWhyBlank = Plan.why ();
+		}
+	}
+	u8 *pHead = new u8[nHead];
+	if (pHead == 0)
+	{
+		*ppMessage = "Not enough memory to make the disk.";
+		return FALSE;
+	}
+	memset (pHead, 0, nHead);
+	if (*pbMountable)
+	{
+		g3::HfsFormatOptions Options;
+		Options.volume_name = "New Disk";
+		// Mac OS dates: seconds since 1904 (local time as the Mac's clock;
+		// the Pi's clock may not be set yet: then any date will do).
+		Options.date = 0xE0000000u;
+		if (!Plan.build (*pDrivers, Options, pHead, AltMdb))
+		{
+			pWhyBlank = Plan.why ();
+			*pbMountable = FALSE;
+			memset (pHead, 0, nHead < (1u << 20) ? nHead : (1u << 20));
+			nHead = nHead < (1u << 20) ? nHead : (1u << 20);
+		}
+	}
+
 	FATFS *pFileSystem;
 	DWORD nFreeClusters;
 	if (f_getfree (G3_SD_DRIVE, &nFreeClusters, &pFileSystem) == FR_OK
 	    && (u64) nFreeClusters * pFileSystem->csize * 512 < nBytes + (1u << 20))
 	{
+		delete [] pHead;
 		*ppMessage = "Not enough free space on the SD card for that size.";
 		return FALSE;
 	}
@@ -186,20 +232,23 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
 	FIL File;
 	if (f_open (&File, Path, FA_WRITE | FA_CREATE_NEW) != FR_OK)
 	{
+		delete [] pHead;
 		*ppMessage = "Could not create the file (does it exist already?).";
 		return FALSE;
 	}
 	// Seeking past the end in write mode allocates the space (its old
-	// contents stay; FatFs doesn't write it). Then zero the first megabyte:
-	// no partition map, so Mac OS sees an uninitialised disk.
-	boolean bOK = f_lseek (&File, (FSIZE_t) nBytes) == FR_OK && f_tell (&File) == nBytes
-		      && f_lseek (&File, 0) == FR_OK;
-	static u8 Zero[64 * 1024];
-	for (u32 nDone = 0; bOK && nDone < (1u << 20); nDone += sizeof Zero)
+	// contents stay; FatFs doesn't write it): only the start and the
+	// volume's alternate MDB are written.
+	boolean bOK = f_lseek (&File, (FSIZE_t) nBytes) == FR_OK && f_tell (&File) == nBytes;
+	UINT nWritten = 0;
+	bOK = bOK && f_lseek (&File, 0) == FR_OK
+	      && f_write (&File, pHead, (UINT) nHead, &nWritten) == FR_OK && nWritten == nHead;
+	if (bOK && *pbMountable)
 	{
-		UINT nWritten = 0;
-		bOK = f_write (&File, Zero, sizeof Zero, &nWritten) == FR_OK && nWritten == sizeof Zero;
+		bOK = f_lseek (&File, (FSIZE_t) Plan.alt_mdb_offset ()) == FR_OK
+		      && f_write (&File, AltMdb, sizeof AltMdb, &nWritten) == FR_OK && nWritten == sizeof AltMdb;
 	}
+	delete [] pHead;
 	if (f_close (&File) != FR_OK)
 	{
 		bOK = FALSE;
@@ -208,8 +257,13 @@ boolean CreateBlankDisk (const char *pPath, u64 nBytes, const char **ppMessage)
 	{
 		f_unlink (Path);
 		*ppMessage = "Writing the new disk failed (SD card full or read-only?).";
+		return FALSE;
 	}
-	return bOK;
+	if (!*pbMountable)
+	{
+		*ppMessage = pWhyBlank;
+	}
+	return TRUE;
 }
 
 static boolean WriteWholeFile (const char *pPath, const char *pData, unsigned nLength)

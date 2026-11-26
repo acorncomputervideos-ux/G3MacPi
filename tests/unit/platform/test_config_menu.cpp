@@ -80,6 +80,15 @@ struct Rig {
         return a;
     }
     bool has(const std::string& text) { return screen().find(text) != std::string::npos; }
+    // The status wraps at spaces onto up to three lines: text across them.
+    bool status_has(const std::string& text)
+    {
+        std::string s;
+        for (char c : screen())
+            if (c == '\n' || c != ' ' || (!s.empty() && s.back() != ' '))
+                s += c == '\n' ? ' ' : c;
+        return s.find(text) != std::string::npos;
+    }
     // Moves the main page's selection to the line containing `text`.
     bool go(const std::string& text)
     {
@@ -489,17 +498,22 @@ TEST_CASE("platform/menu/new_blank_hard_disk")
     CHECK(r.press(kEnter) == ConfigMenu::Action::CreateDisk);
     CHECK(std::string(r.menu.new_disk_path()) == "/g3macpi/hdd/hd2.img");
     // Failure: reported, the drive is unchanged.
-    r.menu.disk_created(false, "Not enough space on the SD card.");
+    r.menu.disk_created(false, false, "Not enough space on the SD card.");
     CHECK(r.has("Not enough space on the SD card."));
     CHECK(r.menu.config().drive[2].image[0] == 0);
     // Success: the disk is in the drive, writable, and the settings changed.
     CHECK(r.press(kEnter) == ConfigMenu::Action::CreateDisk);
-    r.menu.disk_created(true, nullptr);
+    r.menu.disk_created(true, false, "no Mac OS hard disk in the settings");
     CHECK(std::strcmp(r.menu.config().drive[2].image, "/g3macpi/hdd/hd2.img") == 0);
     CHECK(r.menu.config().drive[2].type == MachineConfig::DriveType::Disk);
     CHECK(!r.menu.config().drive[2].read_only);
     CHECK(r.menu.dirty());                             // (the Pi then saves them at once)
+    CHECK(r.status_has("blank (no Mac OS hard disk in the settings)"));
     CHECK(r.has("Drive Setup"));
+    // With Apple's driver copied: Mac OS shows it.
+    r.menu.disk_created(true, true, nullptr);
+    CHECK(r.status_has("shows on the Mac's desktop as \"New Disk\""));
+    CHECK(!r.has("Drive Setup"));
     // Back on the main page, on that drive's line, which shows the disk.
     CHECK(r.selected().find("Hard disk bus master") != std::string::npos);
     CHECK(r.selected().find("hd2.img") != std::string::npos);

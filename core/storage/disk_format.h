@@ -47,6 +47,14 @@ struct HfsFormatOptions {
 // at least 800 KB). False if the size or name is unusable.
 bool format_hfs(u8* vol, u64 bytes, const HfsFormatOptions& opt);
 
+// The same volume in two parts, for disks too large to build in memory:
+// hfs_head_bytes(bytes) is how much of the volume's start holds everything
+// (0 if the size is unusable); format_hfs_head writes that much at `head`
+// and the alternate MDB (512 bytes) to `alt_mdb`, which belongs at
+// `bytes - 1024` in the volume. The rest of the volume may hold anything.
+u64 hfs_head_bytes(u64 bytes);
+bool format_hfs_head(u8* head, u64 bytes, const HfsFormatOptions& opt, u8* alt_mdb);
+
 // Writes a whole disk: driver descriptor map (no drivers), a partition map
 // (63 blocks: the map itself and one Apple_HFS partition) and an empty HFS
 // volume in the rest of the disk.

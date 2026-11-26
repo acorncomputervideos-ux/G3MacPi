@@ -112,40 +112,64 @@ u32 catalog_key(u8* p, u32 parent, const char* name)
 
 } // namespace
 
-bool format_hfs(u8* vol, u64 bytes, const HfsFormatOptions& opt)
+namespace {
+
+// Where everything of a new HFS volume goes (in bytes and blocks).
+struct HfsLayout {
+    u64 sectors;
+    u32 al_blk, nm_al_blks, al_bl_st, tree_blocks, tree_size, tree_nodes;
+    u64 head;  // bytes from the volume's start that hold all of it but the alternate MDB
+};
+
+bool hfs_layout(u64 bytes, HfsLayout& l)
 {
     if (bytes % kSector || bytes < 800 * 1024 || bytes > 0xFFFFFFFFull * kSector)
         return false;
-    if (!opt.volume_name || !valid_name(opt.volume_name, 27))
-        return false;
-    const u64 sectors = bytes / kSector;
-
+    l.sectors = bytes / kSector;
     // Allocation block size: the smallest multiple of 512 bytes that keeps
     // the block count within 16 bits.
-    const u64 usable = sectors - 3 - 2;  // boot blocks + MDB, alternate MDB + reserved
-    u32 al_blk = kSector;
-    while (usable * kSector / al_blk > 0xFFFF)
-        al_blk += kSector;
+    const u64 usable = l.sectors - 3 - 2;  // boot blocks + MDB, alternate MDB + reserved
+    l.al_blk = kSector;
+    while (usable * kSector / l.al_blk > 0xFFFF)
+        l.al_blk += kSector;
     // Bitmap blocks, then recompute the allocation block count from the rest.
-    u32 nm_al_blks = static_cast<u32>(usable * kSector / al_blk);
-    const u32 bitmap_sectors = (nm_al_blks + 4095) / 4096;
-    const u32 al_bl_st = 3 + bitmap_sectors;
-    nm_al_blks = static_cast<u32>((sectors - al_bl_st - 2) * kSector / al_blk);
-    if (nm_al_blks > 0xFFFF)
-        nm_al_blks = 0xFFFF;
-
+    l.nm_al_blks = static_cast<u32>(usable * kSector / l.al_blk);
+    const u32 bitmap_sectors = (l.nm_al_blks + 4095) / 4096;
+    l.al_bl_st = 3 + bitmap_sectors;
+    l.nm_al_blks = static_cast<u32>((l.sectors - l.al_bl_st - 2) * kSector / l.al_blk);
+    if (l.nm_al_blks > 0xFFFF)
+        l.nm_al_blks = 0xFFFF;
     // B-tree files: about 1/256 of the volume each, at least 16 KB, at most
     // 4 MB, in whole allocation blocks.
     u64 tree_bytes = bytes / 256;
     if (tree_bytes < 16 * 1024) tree_bytes = 16 * 1024;
     if (tree_bytes > 4 * 1024 * 1024) tree_bytes = 4 * 1024 * 1024;
-    const u32 tree_blocks = static_cast<u32>((tree_bytes + al_blk - 1) / al_blk);
-    const u32 tree_size = tree_blocks * al_blk;
-    const u32 tree_nodes = tree_size / kNodeSize;
-    if (2 * tree_blocks >= nm_al_blks)
+    l.tree_blocks = static_cast<u32>((tree_bytes + l.al_blk - 1) / l.al_blk);
+    l.tree_size = l.tree_blocks * l.al_blk;
+    l.tree_nodes = l.tree_size / kNodeSize;
+    if (2 * l.tree_blocks >= l.nm_al_blks)
         return false;
+    l.head = static_cast<u64>(l.al_bl_st) * kSector + 2ull * l.tree_size;
+    return true;
+}
 
-    fill(vol, bytes, 0);
+} // namespace
+
+u64 hfs_head_bytes(u64 bytes)
+{
+    HfsLayout l;
+    return hfs_layout(bytes, l) ? l.head : 0;
+}
+
+bool format_hfs_head(u8* head, u64 bytes, const HfsFormatOptions& opt, u8* alt_mdb)
+{
+    HfsLayout l;
+    if (!hfs_layout(bytes, l) || !opt.volume_name || !valid_name(opt.volume_name, 27))
+        return false;
+    const u32 al_blk = l.al_blk, nm_al_blks = l.nm_al_blks, al_bl_st = l.al_bl_st;
+    const u32 tree_blocks = l.tree_blocks, tree_size = l.tree_size, tree_nodes = l.tree_nodes;
+    u8* vol = head;
+    fill(vol, l.head, 0);
     auto alloc = [&](u32 block) { return vol + static_cast<u64>(al_bl_st) * kSector + static_cast<u64>(block) * al_blk; };
 
     // Extents overflow file: allocation blocks [0, tree_blocks); empty tree.
@@ -205,9 +229,23 @@ bool format_hfs(u8* vol, u64 bytes, const HfsFormatOptions& opt)
     put32(mdb + 146, tree_size);             // drCTFlSize
     put16(mdb + 150, tree_blocks);           // drCTExtRec[0]
     put16(mdb + 152, tree_blocks);
-    u8* alt = vol + (sectors - 2) * kSector;
     for (u32 i = 0; i < kSector; ++i)
-        alt[i] = mdb[i];
+        alt_mdb[i] = mdb[i];
+    return true;
+}
+
+bool format_hfs(u8* vol, u64 bytes, const HfsFormatOptions& opt)
+{
+    if (!hfs_head_bytes(bytes))
+        return false;
+    u8 alt[kSector];
+    if (!format_hfs_head(vol, bytes, opt, alt))
+        return false;
+    const u64 head = hfs_head_bytes(bytes);
+    fill(vol + head, bytes - head, 0);
+    u8* last = vol + bytes - 2 * kSector;
+    for (u32 i = 0; i < kSector; ++i)
+        last[i] = alt[i];
     return true;
 }
 

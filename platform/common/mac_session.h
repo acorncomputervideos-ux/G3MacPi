@@ -119,6 +119,9 @@ public:
     // Where the Mac OS ROM file came from: the configured path, or "the CD
     // in <drive>" when it was taken from a CD's System Folder.
     const char* rom_source() const { return rom_source_; }
+    // The image in drive i while the Mac runs (null: none, or a CD), e.g. to
+    // read from while the Mac is paused.
+    BlockDevice* disk_image(u32 i) const { return i < MachineConfig::kDrives && !is_cd_[i] ? image_[i] : nullptr; }
     static const char* error_text(Error e);
 
     // Emulates `picoseconds` of guest time.

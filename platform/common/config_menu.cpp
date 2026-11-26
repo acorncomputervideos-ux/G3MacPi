@@ -663,7 +663,7 @@ ConfigMenu::Action ConfigMenu::request_new_disk()
     return Action::None;
 }
 
-void ConfigMenu::disk_created(bool ok, const char* message)
+void ConfigMenu::disk_created(bool ok, bool mountable, const char* message)
 {
     if (!ok) {
         set_status(message && message[0] ? message : "The disk could not be created.");
@@ -681,8 +681,15 @@ void ConfigMenu::disk_created(bool ok, const char* message)
     scat(buf, sizeof buf, base_name(new_disk_path_));
     scat(buf, sizeof buf, " on the ");
     scat(buf, sizeof buf, MachineConfig::drive_label(drive_));
-    scat(buf, sizeof buf, ". It is blank: initialise it with Drive Setup (on the Mac OS CD).");
-    set_status(message && message[0] ? message : buf);
+    if (mountable) {
+        scat(buf, sizeof buf, running_ ? ". Restart the Mac: it shows on the desktop as \"New Disk\"."
+                                       : ". It shows on the Mac's desktop as \"New Disk\".");
+    } else {
+        scat(buf, sizeof buf, ". It is blank (");
+        scat(buf, sizeof buf, message && message[0] ? message : "no Mac OS disk to copy Apple's driver from");
+        scat(buf, sizeof buf, "): initialise it with Drive Setup.");
+    }
+    set_status(buf);
 }
 
 ConfigMenu::Action ConfigMenu::set_drive_image(const char* path)
