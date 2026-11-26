@@ -157,7 +157,6 @@ private:
 	// unless cmdline.txt has bootlog=1; then the Mac starts at once unless
 	// F12 or Esc comes during the first moments (autostart in the settings).
 	boolean			m_bQuietBoot = TRUE;
-	boolean			m_bBootWait = FALSE;
 	boolean			m_bUSBReady = FALSE;	// the USB host controller started
 	void			BootToMac (void);
 	unsigned		m_nMipsX10 = 0;	// the last measured emulation speed

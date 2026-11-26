@@ -115,6 +115,11 @@ TEST_CASE("platform/menu/navigation_skips_floppy")
     r.press(kUp);
     CHECK(r.selected().find("Hard disk bus slave") != std::string::npos);
     r.press(kEnd);
+    CHECK(r.selected().find("Restart the Pi") != std::string::npos);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::RestartPi);
+    r.press(kUp);
+    CHECK(r.selected().find("New hard disk") != std::string::npos);
+    r.press(kUp);
     CHECK(r.selected().find("CPU self-test") != std::string::npos);
     r.press(kUp);
     CHECK(r.selected().find("Start the Mac") != std::string::npos);
@@ -652,4 +657,36 @@ TEST_CASE("platform/menu/wifi_page_typing")
     CHECK(std::strcmp(back.wifi_name, "Home 5G\"@") == 0);
     CHECK(std::strcmp(back.wifi_password, "eeeee@oo") == 0);
     CHECK(back.keyboard == MachineConfig::Keyboard::Uk);
+}
+
+TEST_CASE("platform/menu/new_hard_disk_shortcut")
+{
+    // "New hard disk...": the first free position, hard disk bus master
+    // first, becomes a hard disk; its page opens on "New blank disk".
+    Rig r;
+    r.press(kEnd);
+    r.press(kUp);
+    REQUIRE(r.selected().find("New hard disk") != std::string::npos);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::None);
+    CHECK(r.selected().find("New blank disk") != std::string::npos);
+    CHECK(r.has("Hard disk bus master"));
+    CHECK(r.menu.config().drive[2].type == MachineConfig::DriveType::Disk);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::CreateDisk);   // with the size shown
+    // All positions taken by images: a hint instead.
+    Rig full;
+    for (auto& d : full.cfg.drive) {
+        d.type = MachineConfig::DriveType::Disk;
+        std::strcpy(d.image, "/g3macpi/hdd/x.img");
+    }
+    ConfigMenu m{full.cfg, full.fs, "/g3macpi/disks", "/g3macpi/rom"};
+    for (int i = 0; i < 40; ++i)
+        m.key(0x4D);  // End
+    m.key(0x52);      // Up
+    m.key(0x28);      // Enter
+    ConfigMenu::Screen sc;
+    m.render(sc);
+    bool hint = false;
+    for (const auto& row : sc.text)
+        hint = hint || std::strstr(row, "All four drive positions are in use") != nullptr;
+    CHECK(hint);
 }

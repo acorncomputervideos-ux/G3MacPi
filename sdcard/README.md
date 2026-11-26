@@ -19,8 +19,11 @@ e.g. `loglevel=4` (debug) or `width=1280 height=720`.
 
 ## Settings menu and your files
 
-At start-up the emulator shows its settings menu (F12 switches between the
-menu and the log view; Ctrl+Alt+Delete reboots). On first start it creates:
+At start-up the emulator shows its settings menu, or, with "At power-on:
+Start the Mac", goes straight into the Mac (a black screen until the Mac
+draws; F12 opens the menu at any time). "Restart the Pi" at the bottom
+of the menu, or Ctrl+Alt+Delete, writes the Mac's disks and restarts.
+Mac OS's Shut Down stops the Mac and shows the menu. On first start it creates:
 
 | Folder / file | Put there |
 |---|---|
@@ -92,8 +95,8 @@ joined it), so TCP/IP, DHCP and AppleTalk are translated: see docs/wifi.md.
 Untested on a real Pi so far.
 
 Pi CPU speed: the menu's "Pi CPU speed" row (or `pi_overclock = yes`)
-runs the Pi 400 at 2.0 GHz instead of 1.8 from the next restart: "Save
-settings" writes a marked block into `config.txt` (the old file is kept
+runs the Pi 400 at 2.0 GHz instead of 1.8 from the next restart ("Save
+settings", then the menu's "Restart the Pi"): "Save settings" writes a marked block into `config.txt` (the old file is kept
 as `config.bak`). It stays within Raspberry Pi's limits that keep the
 warranty bit clear (over_voltage 6, no force_turbo), but not every Pi is
 stable at 2.0 GHz: if it misbehaves or will not start, remove the block
@@ -144,8 +147,10 @@ is reduced. `config.txt` has an optional overclock (2.0 GHz), commented out.
 
 ## A new hard disk
 
-In the menu, open a drive position, set Type to Hard disk, then go to
-"New blank disk": Left/Right picks the size (256 MB to 4 GB; FAT32 files
+In the menu, choose "New hard disk..." (near the bottom): it takes the
+first free drive position (the hard disk bus first) and opens it on "New
+blank disk". Or open a drive position yourself, set Type to Hard disk,
+then go to "New blank disk". Left/Right picks the size (256 MB to 4 GB; FAT32 files
 can't reach 4 GB), Enter creates `/g3macpi/hdd/hdN.img` and puts it in the
 drive. The disk is blank: start the Mac from the Mac OS CD, open Drive
 Setup (in the CD's Utilities folder), initialise the disk, then install

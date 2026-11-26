@@ -142,12 +142,22 @@ u32 ScreenPresenter::render(const ScreenSurface& out)
                            row_bytes <= cur_.pitch &&
                            static_cast<u64>(cur_.pitch) * (cur_.height - 1) + row_bytes <= cur_.vram_size &&
                            static_cast<u64>(row_bytes) * cur_.height <= shadow_size_;
-        u32 scale = 0;
-        if (valid) {
-            scale = out.width / cur_.width;
-            if (out.height / cur_.height < scale)
-                scale = out.height / cur_.height;
+        // The picture fills the host screen with the Mac's shape kept, as a
+        // monitor shows any mode the Mac picks (Mac OS can switch modes at
+        // its desktop): nearest pixel, so whole factors stay exact.
+        u32 dw = 0, dh = 0;
+        if (valid && out.width && out.height) {
+            if (static_cast<u64>(out.width) * cur_.height <= static_cast<u64>(out.height) * cur_.width) {
+                dw = out.width;
+                dh = static_cast<u32>(static_cast<u64>(cur_.height) * out.width / cur_.width);
+            } else {
+                dh = out.height;
+                dw = static_cast<u32>(static_cast<u64>(cur_.width) * out.height / cur_.height);
+            }
+            if (dw > kMaxOut)
+                dw = dh = 0;
         }
+        const u32 scale = dw && dh ? 1 : 0;  // 0: nothing can be shown
         const bool out_changed = out.base != last_out_base_ || out.width != last_out_w_ ||
                                  out.height != last_out_h_ || out.depth != last_out_depth_;
         if (!valid || scale == 0) {
@@ -161,8 +171,11 @@ u32 ScreenPresenter::render(const ScreenSurface& out)
             if (geometry)
                 clear(out);  // the borders around a smaller picture
             const bool full = geometry || (cur_.depth == 8 && !same_palette(cur_, last_));
-            const u32 x0 = (out.width - cur_.width * scale) / 2;
-            const u32 y0 = (out.height - cur_.height * scale) / 2;
+            const u32 x0 = (out.width - dw) / 2;
+            const u32 y0 = (out.height - dh) / 2;
+            if (geometry)
+                for (u32 x = 0; x < dw; ++x)
+                    xmap_[x] = static_cast<u16>(static_cast<u64>(x) * cur_.width / dw);
             for (u32 y = 0; y < cur_.height; ++y) {
                 const u8* src = cur_.vram + static_cast<size_t>(y) * cur_.pitch;
                 u8* shadow = shadow_ + static_cast<size_t>(y) * row_bytes;
@@ -190,20 +203,20 @@ u32 ScreenPresenter::render(const ScreenSurface& out)
                                    (static_cast<u32>(shadow[4 * x + 2]) << 8) | shadow[4 * x + 3];
                     break;
                 }
-                for (u32 sy = 0; sy < scale; ++sy) {
-                    u8* row = out.base + static_cast<size_t>(y0 + y * scale + sy) * out.pitch;
+                // The host rows showing Mac row y: those r with r * h / dh == y.
+                const u32 r0 = static_cast<u32>((static_cast<u64>(y) * dh + cur_.height - 1) / cur_.height);
+                const u32 r1 = static_cast<u32>((static_cast<u64>(y + 1) * dh + cur_.height - 1) / cur_.height);
+                for (u32 r = r0; r < r1 && r < dh; ++r) {
+                    u8* row = out.base + static_cast<size_t>(y0 + r) * out.pitch;
                     if (out.depth == 32) {
                         u32* d = reinterpret_cast<u32*>(row) + x0;
-                        for (u32 x = 0; x < cur_.width; ++x)
-                            for (u32 sx = 0; sx < scale; ++sx)
-                                *d++ = line_[x] | 0xFF000000u;
+                        for (u32 x = 0; x < dw; ++x)
+                            d[x] = line_[xmap_[x]] | 0xFF000000u;
                     } else {
                         u16* d = reinterpret_cast<u16*>(row) + x0;
-                        for (u32 x = 0; x < cur_.width; ++x) {
-                            const u32 p = line_[x];
-                            const u16 c = static_cast<u16>(((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F));
-                            for (u32 sx = 0; sx < scale; ++sx)
-                                *d++ = c;
+                        for (u32 x = 0; x < dw; ++x) {
+                            const u32 p = line_[xmap_[x]];
+                            d[x] = static_cast<u16>(((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F));
                         }
                     }
                 }

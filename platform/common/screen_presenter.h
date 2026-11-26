@@ -3,7 +3,8 @@
 // platform/common/screen_presenter.h — shows the Mac's screen from another
 // core. The core running the Mac publishes a snapshot of the display (mode,
 // where its video memory is, the palette); a second core renders from it
-// onto the host's frame buffer, scaled by a whole factor and centred, and
+// onto the host's frame buffer, scaled to fill it with the Mac's aspect
+// ratio kept (nearest pixel) and centred, and
 // redraws only the rows of video memory that changed since its last frame
 // (writes to the host frame buffer are slow; comparing rows is cheap).
 //
@@ -85,6 +86,8 @@ private:
     u8* shadow_;
     u32 shadow_size_;
     u32 line_[1920] = {};  // one converted row
+    static constexpr u32 kMaxOut = 4096;  // host screen width
+    u16 xmap_[kMaxOut] = {};  // host column -> Mac column
     u32 frames_ = 0;
     u64 rows_ = 0, skipped_ = 0;
 };

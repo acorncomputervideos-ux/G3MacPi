@@ -349,6 +349,30 @@ ConfigMenu::Action ConfigMenu::key_main(u8 usage)
             return Action::Start;
         if (sel_ == kSelfTest)
             return Action::SelfTest;
+        if (sel_ == kRestartPi)
+            return Action::RestartPi;
+        if (sel_ == kNewHardDisk) {
+            // The first free drive position, hard disk bus first (the
+            // firmware starts from the master positions): made a hard disk,
+            // its page opened on "New blank disk".
+            static const u32 kOrder[4] = {2, 3, 1, 0};
+            for (u32 k = 0; k < 4; ++k) {
+                auto& d = cfg_.drive[kOrder[k]];
+                if (d.type == DriveType::None || (d.type == DriveType::Disk && !d.image[0])) {
+                    if (d.type != DriveType::Disk) {
+                        d.type = DriveType::Disk;
+                        d.read_only = false;
+                        dirty_ = true;
+                    }
+                    drive_ = kOrder[k];
+                    drive_sel_ = kNewDisk;
+                    page_ = Page::Drive;
+                    return Action::None;
+                }
+            }
+            set_status("All four drive positions are in use: open one, set it to Hard disk, then New blank disk.");
+            return Action::None;
+        }
         change_main(sel_, 1);
         return Action::None;
     default:
@@ -795,6 +819,14 @@ void ConfigMenu::render(Screen& s) const
                 continue;
             } else if (i == kSelfTest) {
                 line(s, row, item_attr(sel, false), "CPU self-test (checks the JIT, measures speed)");
+                continue;
+            } else if (i == kNewHardDisk) {
+                line(s, row, item_attr(sel, false), "New hard disk... (creates a blank disk image)");
+                continue;
+            } else if (i == kRestartPi) {
+                line(s, row, item_attr(sel, false),
+                     dirty_ ? "Restart the Pi (the Mac's disks are saved; unsaved settings are lost)"
+                            : "Restart the Pi (the Mac's disks are saved first)");
                 continue;
             }
             line(s, row, item_attr(sel, chg), label, buf);

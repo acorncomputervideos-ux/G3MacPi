@@ -64,8 +64,9 @@ struct Rig {
 
 TEST_CASE("platform/screen/palette_scaled_and_centred")
 {
-    // 640x480 at 8 bits onto 1300x1000: scale 2, picture at (10, 20).
-    Rig r(1300, 1000, 32);
+    // 640x480 at 8 bits onto 1280x1000: fills the width, scale 2, picture
+    // at (0, 20).
+    Rig r(1280, 1000, 32);
     r.mode(640, 480, 8, 640);
     r.f.palette[0] = 0x000000;
     r.f.palette[7] = 0x123456;
@@ -74,14 +75,14 @@ TEST_CASE("platform/screen/palette_scaled_and_centred")
     r.vram[5 * 640 + 3] = 9;          // pixel (3, 5)
     r.p->publish(r.f);
     CHECK_EQ(r.p->render(r.out), 480u);
-    CHECK_EQ(r.px32(10, 20), 0xFF123456u);
-    CHECK_EQ(r.px32(11, 21), 0xFF123456u);   // scaled 2x2
-    CHECK_EQ(r.px32(12, 20), 0xFF000000u);
-    CHECK_EQ(r.px32(10 + 6, 20 + 10), 0xFFABCDEFu);
-    CHECK_EQ(r.px32(10 + 7, 20 + 11), 0xFFABCDEFu);
+    CHECK_EQ(r.px32(0, 20), 0xFF123456u);
+    CHECK_EQ(r.px32(1, 21), 0xFF123456u);    // scaled 2x2
+    CHECK_EQ(r.px32(2, 20), 0xFF000000u);
+    CHECK_EQ(r.px32(6, 20 + 10), 0xFFABCDEFu);
+    CHECK_EQ(r.px32(7, 20 + 11), 0xFFABCDEFu);
     CHECK_EQ(r.px32(0, 0), 0xFF000000u);     // border cleared to black
-    CHECK_EQ(r.px32(1299, 999), 0xFF000000u);
-    CHECK_EQ(r.px32(9, 500), 0xFF000000u);
+    CHECK_EQ(r.px32(1279, 999), 0xFF000000u);
+    CHECK_EQ(r.px32(500, 19), 0xFF000000u);
     CHECK_EQ(r.p->frames_rendered(), 1u);
 }
 
@@ -156,13 +157,21 @@ TEST_CASE("platform/screen/mode_change_clears_and_recentres")
     r.p->publish(r.f);
     r.p->render(r.out);
     CHECK_EQ(r.px32(0, 0), 0xFFFFFFFFu);
-    // 640x480: scale 1, centred at (192, 144); the old white border goes.
+    // Mac OS picks 640x480 at its desktop: it still fills the screen (as a
+    // monitor shows it), not a small picture in the middle.
     r.mode(640, 480, 8, 640);
     r.p->publish(r.f);
     CHECK_EQ(r.p->render(r.out), 480u);
-    CHECK_EQ(r.px32(0, 0), 0xFF000000u);
-    CHECK_EQ(r.px32(192, 144), 0xFFFFFFFFu);
-    CHECK_EQ(r.px32(191, 144), 0xFF000000u);
+    CHECK_EQ(r.px32(0, 0), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(1023, 767), 0xFFFFFFFFu);
+    // A wider shape (800x400): full width, black bands above and below.
+    r.mode(800, 400, 8, 800);
+    r.p->publish(r.f);
+    CHECK_EQ(r.p->render(r.out), 400u);
+    CHECK_EQ(r.px32(0, 127), 0xFF000000u);
+    CHECK_EQ(r.px32(0, 128), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(1023, 639), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(1023, 640), 0xFF000000u);
 }
 
 TEST_CASE("platform/screen/nothing_to_show")
@@ -177,10 +186,11 @@ TEST_CASE("platform/screen/nothing_to_show")
     r.p->publish(r.f);
     CHECK_EQ(r.p->render(r.out), 0u);
     CHECK_EQ(r.px32(100, 100), 0xFF000000u);
-    // A mode bigger than the host screen: shown as nothing.
+    // A mode bigger than the host screen: shrunk to fit.
     r.mode(800, 600, 8, 800);
     r.p->publish(r.f);
-    CHECK_EQ(r.p->render(r.out), 0u);
+    CHECK_EQ(r.p->render(r.out), 600u);
+    CHECK_EQ(r.px32(639, 479), 0xFFFFFFFFu);
     // Inconsistent snapshots are refused, not read out of bounds.
     r.mode(640, 480, 8, 640);
     r.f.vram_size = 640 * 479;           // video memory too small for the mode

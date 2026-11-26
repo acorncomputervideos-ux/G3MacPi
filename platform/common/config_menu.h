@@ -70,7 +70,7 @@ public:
         char text[kRows][kCols + 1];
         Attr attr[kRows];
     };
-    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest, CreateDisk };
+    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest, CreateDisk, RestartPi };
 
     // `disks_dir`/`rom_dir`: where the file pickers start (e.g. "/g3macpi/disks").
     ConfigMenu(const MachineConfig& config, DirectoryLister& lister, const char* disks_dir,
@@ -120,7 +120,7 @@ public:
 private:
     enum class Page : u8 { Main, Drive, Files, Wifi };
     enum MainItem : u8 { kRam, kRom, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kMode,
-                         kDepth, kSound, kNetwork, kWifi, kModem, kAutostart, kJit, kPiSpeed, kSave, kStart, kSelfTest, kMainItems };
+                         kDepth, kSound, kNetwork, kWifi, kModem, kAutostart, kJit, kPiSpeed, kSave, kStart, kSelfTest, kNewHardDisk, kRestartPi, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
     enum WifiItem : u8 { kWUse, kWName, kWPassword, kWCountry, kWKeyboard, kWBack, kWifiItems };
     static constexpr u8 kNotEditing = 0xFF;

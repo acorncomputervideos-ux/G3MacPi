@@ -144,7 +144,8 @@ boolean CKernel::Initialize (void)
 		if (m_bQuietBoot)
 		{
 			m_LogTee.EnableFirst (FALSE);	// the log: UART (and later the SD card) only
-			DrawSplash (&m_Screen, "Starting...", "");
+			// Nothing on the screen (black) until the Mac's own picture or
+			// the settings menu: no start-up text.
 		}
 		else
 		{
@@ -1113,13 +1114,6 @@ void CKernel::ProcessInputEvents (void)
 					m_nHeldModifiers &= ~nBit;
 			}
 
-			// Esc while the Mac is about to start: the settings instead.
-			if (m_bBootWait && Event.key.pressed && Usage == g3::menu_key::kEscape)
-			{
-				ShowMenu (TRUE);
-				continue;
-			}
-
 			// The settings menu takes key presses (F12 toggles it).
 			if (Event.key.pressed && m_pMenu != 0)
 			{
@@ -1245,26 +1239,8 @@ void CKernel::BootToMac (void)
 		ShowMenu (TRUE);
 		return;
 	}
-	if (m_bQuietBoot)
-	{
-		DrawSplash (&m_Screen, "Starting the Mac...", "F12 or Esc: settings");
-	}
-	m_bBootWait = TRUE;
-	const unsigned nStart = m_Timer.GetTicks ();
-	while (!m_bMenuShown && m_Timer.GetTicks () - nStart < 3 * HZ / 2)
-	{
-		m_Scheduler.Yield ();
-		if (m_bUSBReady && m_USBHCI.UpdatePlugAndPlay ())
-		{
-			AttachInputDevices ();
-		}
-		ProcessInputEvents ();
-	}
-	m_bBootWait = FALSE;
-	if (m_bMenuShown)
-	{
-		return;		// asked for the settings
-	}
+	// Straight into the Mac, as a real one starts: no waiting screen. F12
+	// opens the settings at any time while it runs.
 	StartMac ();
 	if (!m_bMacRunning)
 	{
@@ -1362,6 +1338,19 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 	case g3::ConfigMenu::Action::SelfTest:
 		RunSelfTest ();
 		break;
+
+	case g3::ConfigMenu::Action::RestartPi:
+		// The main loop stops the Mac (its disks and state are written to
+		// the SD card), saves the log, then the Pi restarts.
+		m_pMenu->set_status ("Restarting the Pi...");
+		{
+			g3::ConfigMenu::Screen Screen;
+			m_pMenu->render (Screen);
+			DrawSettings (&m_Screen, Screen);
+		}
+		m_Logger.Write (FromKernel, LogNotice, "Menu: restarting the Pi");
+		m_ShutdownMode = ShutdownReboot;
+		return;
 
 	case g3::ConfigMenu::Action::CreateDisk: {
 		// Show "Creating the disk..." first: allocating a few GB takes a while.
