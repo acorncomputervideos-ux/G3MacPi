@@ -144,8 +144,9 @@ boolean CKernel::Initialize (void)
 		if (m_bQuietBoot)
 		{
 			m_LogTee.EnableFirst (FALSE);	// the log: UART (and later the SD card) only
-			// Nothing on the screen (black) until the Mac's own picture or
-			// the settings menu: no start-up text.
+			// The Mac grey at once, as a Mac's screen at power-on (the Mac's
+			// own picture, grey too, follows): no start-up text.
+			FillScreen (&m_Screen, 0x888888u);
 		}
 		else
 		{
@@ -153,6 +154,7 @@ boolean CKernel::Initialize (void)
 		}
 
 		bOK = m_Logger.Initialize (&m_LogTee);
+		StartupMark ("kernel running, screen grey");
 	}
 
 	if (bOK)
@@ -191,7 +193,9 @@ boolean CKernel::Initialize (void)
 	if (bOK)
 	{
 #if !defined (G3_QEMU_DRAWTEST) && !defined (G3_QEMU_BOOT)	// QEMU's raspi4b has no Pi 4 USB controller
+		StartupMark ("SD card ready");
 		bOK = m_USBHCI.Initialize ();
+		StartupMark ("USB ready");
 		m_bUSBReady = bOK;
 #endif
 	}
@@ -199,6 +203,7 @@ boolean CKernel::Initialize (void)
 	if (bOK)
 	{
 		StartDrawCore ();	// not fatal: without it, core 0 draws
+		StartupMark ("cores 1-3, sound and Ethernet ready");
 	}
 
 	return bOK;
@@ -962,6 +967,15 @@ boolean CKernel::MountSDCard (void)
 }
 
 // Writes the logger's text buffer (the last 16 KB of log output) to the SD card.
+// Start-up timing, to the log: milliseconds since the Pi was powered on
+// (the system timer starts with the chip, so the Pi firmware's own time is
+// included).
+void CKernel::StartupMark (const char *pWhat)
+{
+	m_Logger.Write (FromKernel, LogNotice, "Start-up %u ms: %s",
+			(unsigned) (CTimer::GetClockTicks64 () / 1000), pWhat);
+}
+
 void CKernel::WriteLogFile (void)
 {
 	if (!m_bSDMounted)
@@ -1641,10 +1655,21 @@ void CKernel::RunMac (void)
 	}
 
 	unsigned nNow = m_Timer.GetTicks ();
+	if (m_nLogFileTicks != 0 && (int) (nNow - m_nLogFileTicks) >= 0)
+	{
+		m_nLogFileTicks = 0;
+		WriteLogFile ();	// boot.log with the start-up timings
+	}
 	if (m_bDrawCore)
 	{
 		// Core 1 draws; hand it the display's current state (cheap).
 		m_Session.screen_frame (m_Frame);
+		if (!m_bFirstFrameLogged && m_Frame.on)
+		{
+			m_bFirstFrameLogged = TRUE;
+			StartupMark ("the Mac's first picture");
+			m_nLogFileTicks = m_Timer.GetTicks () + 10 * HZ;	// the timings to the SD card, soon
+		}
 		m_pPresenter->publish (m_Frame);
 	}
 	else if (nNow - m_nLastDrawTicks >= HZ / 25)	// up to 25 frames per second
@@ -1826,8 +1851,11 @@ TShutdownMode CKernel::Run (void)
 			"Ctrl+Alt+Delete saves the log and reboots.");
 
 	SetUpSettings ();
+	StartupMark ("settings read");
 	StartNetwork ();
+	StartupMark ("network started");
 	BootToMac ();
+	StartupMark (m_bMacRunning ? "Mac started" : "settings menu shown");
 
 	unsigned nLastThrottleTicks = m_Timer.GetTicks ();
 

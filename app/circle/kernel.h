@@ -127,6 +127,9 @@ private:
 	// SD card log file (SD:/g3macpi/logs/boot.log, previous run kept as boot-prev.log)
 	boolean MountSDCard (void);
 	void WriteLogFile (void);
+	void StartupMark (const char *pWhat);
+	boolean			m_bFirstFrameLogged = FALSE;
+	unsigned		m_nLogFileTicks = 0;	// when to write boot.log again (0: not)
 
 	// Settings menu (F12 switches between it and the log view)
 	void SetUpSettings (void);

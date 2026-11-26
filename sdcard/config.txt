@@ -4,6 +4,9 @@
 arm_64bit=1
 kernel_address=0x80000
 initial_turbo=0
+# No 1-second pause in the Pi's firmware before the kernel loads (the
+# default boot_delay is 1).
+boot_delay=0
 # No rainbow screen at power-on: straight to G3MacPi.
 disable_splash=1
 

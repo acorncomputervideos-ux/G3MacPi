@@ -101,7 +101,12 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         Framebuffer& fb = m.display();
         if (!fb.set_mode(c.width, c.height, c.depth))
             return;
-        display_.fill(0, 0, 0, fb.width(), fb.height());  // black (palette 0 = black at power-on)
+        // Grey at power-on, the Mac grey (0x888888, what the Mac OS ROM
+        // file's boot script draws a moment later): the screen looks like a
+        // Mac's from the first frame instead of black for a second.
+        // Palette entry 0x80 holds it until Mac OS sets its own palette.
+        fb.set_palette(0x80, 0x888888u);
+        display_.fill(0x80, 0, 0, fb.width(), fb.height());
         fb.set_enabled(true);
         desc.vram_base = fb.vram_base();
         desc.vram_size = fb.vram_size();

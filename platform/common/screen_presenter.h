@@ -66,7 +66,7 @@ public:
 
 private:
     bool read_snapshot(ScreenFrame& f);
-    void clear(const ScreenSurface& out);
+    void clear(const ScreenSurface& out, u32 x0, u32 y0, u32 w, u32 h);
 
     // The published snapshot (sequence lock: odd while being written).
     u32 seq_ = 0;

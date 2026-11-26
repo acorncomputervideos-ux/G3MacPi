@@ -107,18 +107,23 @@ void ScreenPresenter::resume()
     __atomic_store_n(&paused_, 0u, __ATOMIC_SEQ_CST);
 }
 
-void ScreenPresenter::clear(const ScreenSurface& out)
+void ScreenPresenter::clear(const ScreenSurface& out, u32 x0, u32 y0, u32 w, u32 h)
 {
-    const u32 row_bytes = out.width * (out.depth / 8);
+    // Black outside the picture's rectangle (x0, y0, w, h); all of it when
+    // w or h is 0. The picture itself is drawn over at once, so it is not
+    // blanked first (no black flash when the Mac's first frame appears).
+    const u32 bpp = out.depth / 8;
     for (u32 y = 0; y < out.height; ++y) {
         u8* row = out.base + static_cast<size_t>(y) * out.pitch;
-        if (out.depth == 32) {
-            u32* p = reinterpret_cast<u32*>(row);
-            for (u32 x = 0; x < out.width; ++x)
-                p[x] = 0xFF000000u;
-        } else {
-            for (u32 i = 0; i < row_bytes; ++i)
-                row[i] = 0;
+        const bool inside_rows = w && h && y >= y0 && y < y0 + h;
+        const u32 a = inside_rows ? x0 : out.width, b = inside_rows ? x0 + w : out.width;
+        for (u32 x = 0; x < out.width; ++x) {
+            if (x >= a && x < b)
+                continue;
+            if (bpp == 4)
+                reinterpret_cast<u32*>(row)[x] = 0xFF000000u;
+            else
+                reinterpret_cast<u16*>(row)[x] = 0;
         }
     }
 }
@@ -164,12 +169,12 @@ u32 ScreenPresenter::render(const ScreenSurface& out)
             // Nothing to show (display off, or a mode too big for the host
             // screen): blank once.
             if (have_last_ || out_changed)
-                clear(out);
+                clear(out, 0, 0, 0, 0);
             have_last_ = false;
         } else {
             const bool geometry = !have_last_ || !same_mode(cur_, last_) || out_changed;
             if (geometry)
-                clear(out);  // the borders around a smaller picture
+                clear(out, (out.width - dw) / 2, (out.height - dh) / 2, dw, dh);  // the borders
             const bool full = geometry || (cur_.depth == 8 && !same_palette(cur_, last_));
             const u32 x0 = (out.width - dw) / 2;
             const u32 y0 = (out.height - dh) / 2;

@@ -70,5 +70,7 @@ const char *ApplyPiSpeed (const g3::MachineConfig &Config);
 void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen);
 // The start-up screen (no log on HDMI): see MenuPainter::paint_splash.
 void DrawSplash (CScreenDevice *pScreen, const char *pMessage, const char *pHint);
+// The whole screen in one colour (0xRRGGBB).
+void FillScreen (CScreenDevice *pScreen, u32 nRGB);
 
 #endif

@@ -325,6 +325,36 @@ void DrawSettings (CScreenDevice *pScreen, const g3::ConfigMenu::Screen &Screen)
 	Present (Back, Surface);
 }
 
+void FillScreen (CScreenDevice *pScreen, u32 nRGB)
+{
+	g3::ScreenSurface Surface;
+	if (!ScreenSurfaceOf (pScreen, Surface))
+	{
+		return;
+	}
+	for (u32 y = 0; y < Surface.height; y++)
+	{
+		u8 *pRow = Surface.base + (size_t) y * Surface.pitch;
+		if (Surface.depth == 32)
+		{
+			u32 *p = (u32 *) pRow;
+			for (u32 x = 0; x < Surface.width; x++)
+			{
+				p[x] = nRGB | 0xFF000000u;
+			}
+		}
+		else
+		{
+			u16 *p = (u16 *) pRow;
+			const u16 c = (u16) (((nRGB >> 8) & 0xF800) | ((nRGB >> 5) & 0x07E0) | ((nRGB >> 3) & 0x001F));
+			for (u32 x = 0; x < Surface.width; x++)
+			{
+				p[x] = c;
+			}
+		}
+	}
+}
+
 void DrawSplash (CScreenDevice *pScreen, const char *pMessage, const char *pHint)
 {
 	g3::ScreenSurface Surface;
