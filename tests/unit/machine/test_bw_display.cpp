@@ -101,11 +101,15 @@ TEST_CASE("machine/bw-display/node_as_offb_reads_it")
     // No configuration space behind it (no vendor ID of ours).
     CHECK_EQ(r.m->grackle().pci_bus().config_read(YosemiteMachine::kDisplayDevfn, 0x00), 0xFFFFFFFFu);
     CHECK_EQ(t.find("screen"), d);
-    // Power-on picture: enabled, the Mac grey (palette entry 0x80).
+    // Power-on picture: enabled, the Mac grey (entry 0x88 of the power-on
+    // grey-ramp palette, which stays untouched: Mac OS in 256 colours hung
+    // when an entry was changed).
     CHECK(r.m->display().enabled());
-    CHECK_EQ(r.vram[0], 0x80u);
-    CHECK_EQ(r.vram[640 * 480 - 1], 0x80u);
-    CHECK_EQ(r.m->display().palette(0x80), 0x888888u);
+    CHECK_EQ(r.vram[0], 0x88u);
+    CHECK_EQ(r.vram[640 * 480 - 1], 0x88u);
+    CHECK_EQ(r.m->display().palette(0x88), 0x888888u);
+    for (u32 i = 0; i < 256; ++i)
+        CHECK_EQ(r.m->display().palette(i), i * 0x010101u);
     CHECK_EQ(r.vram[640 * 480], 0x77u);                       // beyond the picture: untouched
 }
 
@@ -122,8 +126,8 @@ TEST_CASE("machine/bw-display/forth_display_methods")
     CHECK(r.stack("5 10 20 3 2 \" fill-rectangle\" scr $call-method") == V({}));
     CHECK_EQ(r.vram[20 * 640 + 10], 5u);
     CHECK_EQ(r.vram[21 * 640 + 12], 5u);
-    CHECK_EQ(r.vram[21 * 640 + 13], 0x80u);                   // the power-on grey around it
-    CHECK_EQ(r.vram[22 * 640 + 10], 0x80u);
+    CHECK_EQ(r.vram[21 * 640 + 13], 0x88u);                   // the power-on grey around it
+    CHECK_EQ(r.vram[22 * 640 + 10], 0x88u);
     CHECK(r.stack("7 630 470 100 100 \" fill-rectangle\" scr $call-method") == V({}));
     CHECK_EQ(r.vram[479 * 640 + 639], 7u);
     CHECK_EQ(r.vram[640 * 480], 0x77u);                       // nothing written past the screen

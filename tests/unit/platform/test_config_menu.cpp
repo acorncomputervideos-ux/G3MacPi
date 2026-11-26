@@ -246,6 +246,13 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     r.press(kRight);
     CHECK_EQ(r.menu.config().depth, 16u);
     CHECK(r.has("Thousands of colours"));
+    r.press(kDown);                                    // Scaling: fill by default
+    CHECK(r.has("Fill the screen"));
+    r.press(kRight);
+    CHECK(r.menu.config().sharp_pixels);
+    CHECK(r.has("Sharp pixels"));
+    r.press(kLeft);
+    CHECK(!r.menu.config().sharp_pixels);
     r.press(kDown);                                    // Sound: on by default, Enter turns it off
     CHECK(r.has("On (HDMI)"));
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);

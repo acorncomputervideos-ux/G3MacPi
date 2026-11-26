@@ -54,6 +54,13 @@ public:
     // Mac's core.
     void publish(const ScreenFrame& f);
     void pause();   // waits until render() is not running; render() then does nothing
+    // Whole-number scaling (every Mac pixel the same size) instead of
+    // filling the screen; takes effect at the next render.
+    void set_sharp(bool on)
+    {
+        __atomic_store_n(&sharp_, on ? 1u : 0u, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&redraw_all_, 1u, __ATOMIC_SEQ_CST);
+    }
     void resume();  // the next render() redraws everything
     // Drawing core: draws the latest frame if it changed. Returns the
     // number of rows of the Mac's screen redrawn (0: nothing to do).
@@ -76,6 +83,7 @@ private:
     u32 paused_ = 0;
     u32 busy_ = 0;
     u32 redraw_all_ = 1;  // set by resume(), read by render()
+    u32 sharp_ = 0;       // set_sharp()
 
     // Drawing core's state.
     ScreenFrame cur_;

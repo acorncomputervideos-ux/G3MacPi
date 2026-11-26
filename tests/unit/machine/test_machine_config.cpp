@@ -136,6 +136,7 @@ TEST_CASE("machine/config/write_then_parse_round_trips")
     a.drive[2].type = MachineConfig::DriveType::Disk;
     REQUIRE(a.set_image(2, "/g3macpi/disks/Macintosh HD.img"));
     a.drive[2].read_only = true;
+    a.sharp_pixels = true;
     char buf[2048];
     const u32 n = write_machine_config(a, buf, sizeof buf);
     REQUIRE(n > 0);
@@ -154,6 +155,8 @@ TEST_CASE("machine/config/write_then_parse_round_trips")
     CHECK(b.drive[2].read_only);
     CHECK(std::strcmp(b.drive[2].image, "/g3macpi/disks/Macintosh HD.img") == 0);
     CHECK(b.drive[1].type == MachineConfig::DriveType::None);
+    CHECK(b.sharp_pixels);
+    CHECK(!MachineConfig{}.sharp_pixels);   // fill the screen by default
 
     // Too small a buffer: refused, not truncated.
     CHECK_EQ(write_machine_config(a, buf, 40), 0u);

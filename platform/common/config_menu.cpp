@@ -411,6 +411,8 @@ void ConfigMenu::change_main(u32 item, int dir)
             ++i;
         i = (i >= n) ? 0 : cycle(i, n, dir);
         cfg_.depth = MachineConfig::kDepths[i];
+    } else if (item == kScale) {
+        cfg_.sharp_pixels = !cfg_.sharp_pixels;
     } else if (item == kSound) {
         cfg_.sound = !cfg_.sound;
     } else if (item == kNetwork) {
@@ -790,6 +792,10 @@ void ConfigMenu::render(Screen& s) const
             } else if (i == kDepth) {
                 scat(label, sizeof label, "Colours");
                 scopy(buf, sizeof buf, depth_name(cfg_.depth));
+            } else if (i == kScale) {
+                scat(label, sizeof label, "Scaling");
+                scopy(buf, sizeof buf, cfg_.sharp_pixels ? "Sharp pixels (whole steps; may leave borders)"
+                                                         : "Fill the screen");
             } else if (i == kSound) {
                 scat(label, sizeof label, "Sound");
                 scopy(buf, sizeof buf, cfg_.sound ? "On (HDMI)" : "Off");

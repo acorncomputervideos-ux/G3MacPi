@@ -869,6 +869,7 @@ void CKernel::ResumeDrawing (void)
 	{
 		m_Session.screen_frame (m_Frame);
 		m_pPresenter->publish (m_Frame);
+		m_pPresenter->set_sharp (m_pMenu->config ().sharp_pixels);	// takes effect at once
 		m_pPresenter->resume ();
 	}
 }

@@ -254,3 +254,29 @@ TEST_CASE("platform/screen/two_threads")
     CHECK(ok);
     CHECK(r.p->frames_rendered() > 0u);
 }
+
+TEST_CASE("platform/screen/sharp_pixels_whole_steps")
+{
+    // 640x480 on 1600x1000: filling would scale by 2.08 (uneven pixels);
+    // sharp pixels: 2x, centred, with borders.
+    Rig r(1600, 1000, 32);
+    r.mode(640, 480, 8, 640);
+    r.f.palette[0] = 0xFFFFFF;
+    r.p->set_sharp(true);
+    r.p->publish(r.f);
+    CHECK_EQ(r.p->render(r.out), 480u);
+    const u32 x0 = (1600 - 1280) / 2, y0 = (1000 - 960) / 2;
+    CHECK_EQ(r.px32(x0, y0), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(x0 + 1279, y0 + 959), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(x0 - 1, y0), 0xFF000000u);
+    CHECK_EQ(r.px32(x0 + 1280, y0), 0xFF000000u);
+    CHECK_EQ(r.px32(x0, y0 - 1), 0xFF000000u);
+    // Back to filling: the whole height (1333 x 1000, 4:3 kept).
+    r.p->set_sharp(false);
+    r.p->publish(r.f);
+    CHECK_EQ(r.p->render(r.out), 480u);
+    CHECK_EQ(r.px32(800, 0), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(800, 999), 0xFFFFFFFFu);
+    CHECK_EQ(r.px32(132, 500), 0xFF000000u);
+    CHECK_EQ(r.px32(133, 500), 0xFFFFFFFFu);
+}

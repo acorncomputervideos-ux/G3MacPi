@@ -18,6 +18,7 @@
 //   sound = yes          ; the built-in sound (DAV bus, Burgundy), played by the host
 //   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
 //   autostart = yes      ; at power-on start the Mac at once (no: show the menu)
+//   sharp_pixels = no    ; yes: whole-number scaling on the host screen (sharp, may leave borders)
 //   web = yes            ; the web interface (platform/common/web_ui.h)
 //   web_password = text  ; needed by the web interface if set (no ; or # in it)
 //   wifi = no            ; yes: the Pi's WiFi instead of its Ethernet port
@@ -74,6 +75,9 @@ struct MachineConfig {
     bool web = true;
     // At power-on: start the Mac at once (the menu with F12 or Esc).
     bool autostart = true;
+    // The host screen: the Mac's picture filled to the screen (no) or scaled
+    // by a whole number, every Mac pixel the same size (yes).
+    bool sharp_pixels = false;
     char web_password[kPasswordMax] = {};
     // WiFi (the Pi's own radio) instead of the Ethernet port, for the Mac
     // and the web interface (docs/wifi.md).

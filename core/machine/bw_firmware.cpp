@@ -103,10 +103,11 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
             return;
         // Grey at power-on, the Mac grey (0x888888, what the Mac OS ROM
         // file's boot script draws a moment later): the screen looks like a
-        // Mac's from the first frame instead of black for a second.
-        // Palette entry 0x80 holds it until Mac OS sets its own palette.
-        fb.set_palette(0x80, 0x888888u);
-        display_.fill(0x80, 0, 0, fb.width(), fb.height());
+        // Mac's from the first frame instead of black for a second. Entry
+        // 0x88 of the power-on palette (a grey ramp) is that grey; the
+        // palette itself is left as it is: with entry 0x80 changed, Mac OS
+        // 9.2.1 in 256 colours stopped at "Starting Up" for good.
+        display_.fill(0x88, 0, 0, fb.width(), fb.height());
         fb.set_enabled(true);
         desc.vram_base = fb.vram_base();
         desc.vram_size = fb.vram_size();

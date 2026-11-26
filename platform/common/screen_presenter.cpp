@@ -159,6 +159,16 @@ u32 ScreenPresenter::render(const ScreenSurface& out)
                 dh = out.height;
                 dw = static_cast<u32>(static_cast<u64>(cur_.width) * out.height / cur_.height);
             }
+            // Sharp pixels: the largest whole factor that fits (at least
+            // 1; a mode larger than the screen still shrinks to fit).
+            if (__atomic_load_n(&sharp_, __ATOMIC_SEQ_CST)) {
+                const u32 k = out.width / cur_.width < out.height / cur_.height ? out.width / cur_.width
+                                                                                 : out.height / cur_.height;
+                if (k >= 1) {
+                    dw = cur_.width * k;
+                    dh = cur_.height * k;
+                }
+            }
             if (dw > kMaxOut)
                 dw = dh = 0;
         }
