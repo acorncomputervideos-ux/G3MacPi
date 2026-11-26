@@ -31,16 +31,19 @@
 
 static const char FromKernel[] = "g3macpi";
 
-// Generated code for the JIT (docs/cpu/jit-a64.md). In .bss (zeroed at
-// start, not stored in the kernel image: as initialised data it made the
-// image 16 MB larger, which the Pi firmware read from the SD card at every
-// power-on). Circle maps everything after .text as not executable (PXN);
-// MakeExecutable() clears that for these pages at start-up. 16 MB: with
+// Generated code for the JIT (docs/cpu/jit-a64.md). Circle maps everything
+// after the end of .text (_etext) as not executable (PXN) and everything
+// read/write, so this buffer is put into a section of its own, .text_g3jit
+// (its linker script places all .text* before _etext): it is both. Defined
+// in assembly so the section gets the right flags. It adds 16 MB to the
+// kernel image file. (Kept in .bss instead, with PXN cleared at start-up,
+// the image was 1.4 MB, but the Pi 400 then never left the firmware's
+// rainbow screen; devlog 2026-11-26. QEMU started it fine.) 16 MB: with
 // 4 MB, Mac OS's start-up filled it about every 0.7 guest seconds, and each
 // reset sends all code back through the handlers until the worker has
-// compiled it again. 64 KB aligned: the MMU's page size.
+// compiled it again.
 static const unsigned JitCodeWords = 4 * 1024 * 1024;	// 16 MB
-asm (".section .bss.g3jit, \"aw\", %nobits\n"
+asm (".section .text_g3jit, \"awx\", %progbits\n"
      ".balign 65536\n"
      "g3_jit_code:\n"
      ".zero 16777216\n"
@@ -50,37 +53,12 @@ extern "C" u32 g3_jit_code[];
 
 // The CPU self-test's own code buffer (the Mac's may be in use), 512 KB.
 static const unsigned SelfTestCodeWords = 128 * 1024;
-asm (".section .bss.g3jit, \"aw\", %nobits\n"
+asm (".section .text_g3jit, \"awx\", %progbits\n"
      ".balign 65536\n"
      "g3_selftest_code:\n"
      ".zero 524288\n"
      ".previous\n");
 extern "C" u32 g3_selftest_code[];
-
-// Lets the CPU execute the pages of [p, p + n) (identity-mapped, 64 KB
-// pages): clears PXN (bit 53) in their level-3 descriptors in Circle's
-// translation table (TTBR0_EL1: a level-2 table of 512 MB entries, each
-// pointing to a level-3 table of 8192 64 KB pages; lib/translationtable64.cpp),
-// then drops the stale TLB entries on every core. Called before the other
-// cores start; they use the same table.
-static void MakeExecutable (const void *p, size_t n)
-{
-	u64 nTTBR;
-	asm volatile ("mrs %0, ttbr0_el1" : "=r" (nTTBR));
-	u64 *pLevel2 = (u64 *) (uintptr) (nTTBR & 0x0000FFFFFFFFFFC0ull);
-	const u64 nEnd = (u64) (uintptr) p + n;
-	for (u64 nVA = (u64) (uintptr) p & ~0xFFFFull; nVA < nEnd; nVA += 0x10000)
-	{
-		const u64 nL2 = pLevel2[nVA >> 29];
-		if ((nL2 & 3) != 3)
-		{
-			continue;	// not a table: nothing to change
-		}
-		u64 *pLevel3 = (u64 *) (uintptr) (nL2 & 0x0000FFFFFFFF0000ull);
-		pLevel3[(nVA >> 16) & 8191] &= ~(1ull << 53);	// PXN off
-	}
-	asm volatile ("dsb ish\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-}
 
 static u64 SelfTestClock (void *)
 {
@@ -152,10 +130,6 @@ CKernel::~CKernel (void)
 boolean CKernel::Initialize (void)
 {
 	boolean bOK = TRUE;
-
-	// The JIT's code buffers live in .bss: make them executable first.
-	MakeExecutable (g3_jit_code, JitCodeWords * sizeof (u32));
-	MakeExecutable (g3_selftest_code, SelfTestCodeWords * sizeof (u32));
 
 	if (bOK)
 	{

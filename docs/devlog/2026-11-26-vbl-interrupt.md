@@ -55,3 +55,22 @@ use a timer for vertical blanking, so the fix is the hardware's way.
   `interrupts` property) each fail a test.
 - Also fixed: tests/unit/platform/test_wifi_bridge.cpp used a 3-byte array
   as a 6-byte MAC address (AddressSanitizer).
+
+## Later the same day: the Pi 400 stuck on the rainbow screen
+
+On the user's Pi 400 (4 GB) the kernel built since 5202f7a ("Faster
+power-on") never replaced the firmware's rainbow screen (with
+`disable_splash=1`: a blank screen); F12 did nothing and no boot.log was
+written. The newest boot.log on the card came from 4d39d23, the last build
+before that commit, so no later build had started there. QEMU raspi4b (2 GB)
+started all of them.
+
+5202f7a moved the JIT's 16.5 MB of code buffers from the image into .bss
+(image 18.8 MB -> 1.4 MB) and cleared PXN for them in Circle's translation
+table at the start of CKernel::Initialize, before the screen. Both are the
+only start-up changes before the screen comes up. Not confirmed which one
+fails on the real Pi (one guess: the firmware places data just after a small
+image, inside the .bss that Circle clears; QEMU loads the device tree
+elsewhere). The buffers are back in `.text_g3jit` as in 4d39d23; the image is
+18.8 MB again. The firmware-translation cache from the same commit stays (it
+runs after start-up, also in g3_host).
