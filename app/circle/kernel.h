@@ -162,6 +162,7 @@ private:
 	CCircleWebHost		*m_pWebHost = 0;
 	CBcm4343Device		*m_pWLAN = 0;	// with wifi = yes, or started for a search
 	boolean			m_bWLANFailed = FALSE;	// the radio did not start: don't try again
+	CWifiSwitch		*m_pWifiSwitch = 0;	// with wifi = yes
 	CWPASupplicant		*m_pSupplicant = 0;
 	CString			m_Port;		// the Pi's connection, for the web page
 	boolean			m_bWebAddressShown = FALSE;

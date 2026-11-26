@@ -443,7 +443,7 @@ void CKernel::StartWifi (void)
 	{
 		m_MacHost.EnableNet (MacAddress);
 	}
-	new CWifiSwitch (m_pWLAN, Config.network ? m_MacHost.GetNetBridge () : 0,
+	m_pWifiSwitch = new CWifiSwitch (m_pWLAN, Config.network ? m_MacHost.GetNetBridge () : 0,
 			 m_PiPort.Bridge (), pPiAddress, MacAddress);
 
 	m_pSupplicant = new CWPASupplicant (G3_SD_DRIVE G3_WPA_CONFIG);
@@ -1858,6 +1858,7 @@ void CKernel::RunMac (void)
 	if (nNow - m_nLastStateTicks >= 60 * HZ)	// NVRAM, PRAM, clock to the SD card
 	{
 		SaveMacState (FALSE);
+		WriteLogFile ();	// and the log: it survives a freeze or a power cut
 		m_nLastStateTicks = nNow;
 	}
 	if (nNow - m_nLastStatsTicks >= 10 * HZ)	// speed, to the log (UART)
@@ -1870,6 +1871,29 @@ void CKernel::RunMac (void)
 				(unsigned) m_nGuestMs, (unsigned) ((nNow - m_nLastStatsTicks) * (1000 / HZ)),
 				(unsigned) (m_Session.instructions () / 1000000), nClock,
 				m_CPUThrottle.GetTemperature ());
+		// The Mac's network: frames it sent and was given (and dropped:
+		// queues full), and on WiFi whether the Pi has joined and the
+		// address the Mac took (docs/wifi.md). Shows where traffic stops.
+		if (m_pMenu->config ().network)
+		{
+			const g3::NetBridge::Stats &Net = m_MacHost.GetNetBridge ()->stats ();
+			if (m_pWifiSwitch != 0)
+			{
+				const u32 nIP = m_pWifiSwitch->MacIP ();
+				m_Logger.Write (FromKernel, LogNotice, "Mac network (WiFi, %s): %u frames out, %u in, "
+						"%u + %u dropped; the Mac's address %u.%u.%u.%u",
+						m_pWifiSwitch->Joined () ? "joined" : "not joined",
+						(unsigned) Net.out, (unsigned) Net.in, (unsigned) Net.out_dropped,
+						(unsigned) Net.in_dropped, nIP >> 24, (nIP >> 16) & 255, (nIP >> 8) & 255,
+						nIP & 255);
+			}
+			else
+			{
+				m_Logger.Write (FromKernel, LogNotice, "Mac network (%s): %u frames out, %u in, %u + %u dropped",
+						(const char *) m_Port, (unsigned) Net.out, (unsigned) Net.in,
+						(unsigned) Net.out_dropped, (unsigned) Net.in_dropped);
+			}
+		}
 		if (nClock < nMaxClock)
 		{
 			m_Logger.Write (FromKernel, LogWarning, "The ARM clock is reduced to %u MHz (max %u): "

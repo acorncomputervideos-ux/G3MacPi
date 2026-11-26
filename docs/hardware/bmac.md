@@ -55,6 +55,13 @@ traffic without promiscuous mode.
   call by call (`g3_host` `G3_LANTRACE`): it first gave up because the
   feature control register read back 0 (now kept, see heathrow-pic), then
   because the node had no `cell-id`.
-- Not yet seen: Mac OS receiving frames (nothing answers on the host
-  here; the receive path has unit tests).
-- The Pi side is built but not yet run on hardware.
+- Mac OS 9.2.1 receives frames (devlog: the INPUT_MORE packet end and the
+  status word after each frame). From a hard disk, with the TCP/IP control
+  panel set to Ethernet / Using DHCP Server, on g3_host's simulated network
+  (`G3_SIMLAN=1`): DHCP lease, DNS, TCP, and Internet Explorer shows the
+  page (2026-11-26). With TCP/IP left on PPP (as after the dial-up demo)
+  the Mac sends no IP at all and Internet Explorer reports that loading
+  failed.
+- The Pi side: not yet confirmed on hardware. Every 10 s the Pi's log has
+  a "Mac network" line (frames out, in, dropped; on WiFi whether joined
+  and the Mac's address), and the log is saved every minute.

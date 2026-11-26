@@ -60,6 +60,8 @@ public:
 	CWifiSwitch (CNetDevice *pRadio, g3::NetBridge *pMac, g3::NetBridge *pPi,
 		     const u8 *pPiAddress, const u8 *pMacAddress);
 	void Run (void) override;
+	u32 MacIP (void) const	{ return m_Bridge.mac_ip (); }	// learnt from its frames; 0: none yet
+	boolean Joined (void) const	{ return m_pRadio->IsLinkUp (); }
 
 private:
 	void Service (void);
