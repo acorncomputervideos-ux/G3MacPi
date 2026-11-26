@@ -438,23 +438,26 @@ u32 write_machine_config(const MachineConfig& c, char* out, u32 cap)
     return o.len;
 }
 
-u32 choose_boot_drive(const MachineConfig& c, const bool has_image[MachineConfig::kDrives])
+u32 choose_boot_drive(const MachineConfig& c, const bool has_image[MachineConfig::kDrives], const bool* has_system)
 {
-    auto first = [&](MachineConfig::DriveType t) {
-        for (u32 i = 0; i < MachineConfig::kDrives; ++i)
-            if (c.drive[i].type == t && has_image[i])
+    using T = MachineConfig::DriveType;
+    static const u32 kOrder[MachineConfig::kDrives] = {0, 2, 1, 3};  // masters first
+    // want_system: 1 only those with a system, 0 any.
+    auto first = [&](T t, bool want_system) {
+        for (u32 k = 0; k < MachineConfig::kDrives; ++k) {
+            const u32 i = has_system ? kOrder[k] : k;
+            if (c.drive[i].type == t && has_image[i] && (!want_system || !has_system || has_system[i]))
                 return i;
+        }
         return MachineConfig::kDrives;
     };
-    using T = MachineConfig::DriveType;
+    auto pick = [](u32 a, u32 b) { return a < MachineConfig::kDrives ? a : b; };
     switch (c.boot) {
-    case MachineConfig::Boot::CdRom: return first(T::CdRom);
-    case MachineConfig::Boot::Disk: return first(T::Disk);
+    case MachineConfig::Boot::CdRom: return first(T::CdRom, false);
+    case MachineConfig::Boot::Disk: return pick(first(T::Disk, true), first(T::Disk, false));
     case MachineConfig::Boot::Auto:
-    default: {
-        const u32 d = first(T::Disk);
-        return d < MachineConfig::kDrives ? d : first(T::CdRom);
-    }
+    default:
+        return pick(first(T::Disk, true), pick(first(T::CdRom, false), first(T::Disk, false)));
     }
 }
 

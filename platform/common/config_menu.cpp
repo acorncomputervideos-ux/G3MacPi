@@ -556,10 +556,15 @@ void ConfigMenu::disk_created(bool ok, const char* message)
     d.type = DriveType::Disk;
     d.read_only = false;
     set_drive_image(new_disk_path_);
-    char buf[kCols + 1];
+    // Back on the main page, on the drive's line: the new disk shows there.
+    page_ = Page::Main;
+    sel_ = kDrive0 + drive_;
+    char buf[3 * kCols + 1];
     scopy(buf, sizeof buf, "Created ");
-    scat(buf, sizeof buf, new_disk_path_);
-    scat(buf, sizeof buf, ": initialise it in Mac OS with Drive Setup.");
+    scat(buf, sizeof buf, base_name(new_disk_path_));
+    scat(buf, sizeof buf, " on the ");
+    scat(buf, sizeof buf, MachineConfig::drive_label(drive_));
+    scat(buf, sizeof buf, ". It is blank: initialise it with Drive Setup (on the Mac OS CD).");
     set_status(message && message[0] ? message : buf);
 }
 
@@ -739,13 +744,21 @@ void ConfigMenu::render(Screen& s) const
 
     if (page_ == Page::Main) {
         line(s, row, Attr::Title, "G3MacPi settings - Power Macintosh G3 (Blue & White)");
-        ++row;
         for (u32 i = 0; i < kMainItems; ++i) {
             const bool sel = i == sel_;
             const bool chg = restart_differs(i);
             buf[0] = 0;
-            char label[40];
-            scopy(label, sizeof label, chg ? "*" : "");
+            // Each group's name at the left of its first line (no blank lines
+            // between groups: the bottom rows are kept for long status text).
+            const char* group = i == kRam ? "The Mac" : i == kDrive0 ? "Drives" : i == kMode ? "Display"
+                                : i == kNetwork ? "Network" : i == kAutostart ? "The Pi" : nullptr;
+            if (i == kRam)
+                ++row;  // under the title
+            char label[48];
+            scopy(label, sizeof label, group ? group : "");
+            while (slen(label) < kGroupWidth)
+                scat(label, sizeof label, " ");
+            scat(label, sizeof label, chg ? "*" : "");
             if (i == kRam) {
                 sappend_num(buf, sizeof buf, cfg_.ram_mb);
                 scat(buf, sizeof buf, " MB");
@@ -765,13 +778,12 @@ void ConfigMenu::render(Screen& s) const
                         scat(buf, sizeof buf, " [read-only]");
                 }
             } else if (i == kFloppy) {
-                line(s, row, Attr::Dim, "Floppy", "none - the Blue & White G3 has no floppy drive");
-                continue;
+                continue;  // not shown: the Blue & White G3 has no floppy drive
             } else if (i == kBoot) {
                 scat(label, sizeof label, "Start-up disk");
                 scopy(buf, sizeof buf, boot_label(cfg_.boot));
             } else if (i == kMode) {
-                scat(label, sizeof label, "Screen");
+                scat(label, sizeof label, "Resolution");
                 sappend_num(buf, sizeof buf, cfg_.width);
                 scat(buf, sizeof buf, " x ");
                 sappend_num(buf, sizeof buf, cfg_.height);
@@ -793,7 +805,7 @@ void ConfigMenu::render(Screen& s) const
                     scopy(buf, sizeof buf, "WiFi: ");
                     scat(buf, sizeof buf, cfg_.wifi_name);
                 } else {
-                    scopy(buf, sizeof buf, "WiFi (no network set: wifi_name in g3macpi.ini)");
+                    scopy(buf, sizeof buf, "WiFi (no network: set wifi_name)");
                 }
             } else if (i == kModem) {
                 scat(label, sizeof label, "Modem");
@@ -806,7 +818,7 @@ void ConfigMenu::render(Screen& s) const
                 scopy(buf, sizeof buf, cfg_.jit ? "JIT: faster (new)" : "Interpreter: safe, slower");
             } else if (i == kPiSpeed) {
                 scat(label, sizeof label, "Pi CPU speed");
-                scopy(buf, sizeof buf, cfg_.pi_overclock ? "2.0 GHz (overclock, from the next Pi restart)"
+                scopy(buf, sizeof buf, cfg_.pi_overclock ? "2.0 GHz overclock (after a Pi restart)"
                                                          : "1.8 GHz (standard)");
             } else if (i == kSave) {
                 ++row;
@@ -818,18 +830,18 @@ void ConfigMenu::render(Screen& s) const
                      : needs_restart() ? "Restart the Mac (applies the * changes)" : "Resume the Mac");
                 continue;
             } else if (i == kSelfTest) {
-                line(s, row, item_attr(sel, false), "CPU self-test (checks the JIT, measures speed)");
-                continue;
+                scat(label, sizeof label, "CPU self-test");
+                scopy(buf, sizeof buf, "Enter: checks the JIT, measures speed");
             } else if (i == kNewHardDisk) {
-                line(s, row, item_attr(sel, false), "New hard disk... (creates a blank disk image)");
-                continue;
+                scat(label, sizeof label, "New hard disk...");
+                scopy(buf, sizeof buf, "Enter: creates a blank disk image");
             } else if (i == kRestartPi) {
                 line(s, row, item_attr(sel, false),
                      dirty_ ? "Restart the Pi (the Mac's disks are saved; unsaved settings are lost)"
                             : "Restart the Pi (the Mac's disks are saved first)");
                 continue;
             }
-            line(s, row, item_attr(sel, chg), label, buf);
+            line(s, row, item_attr(sel, chg), label, buf, kGroupWidth + kLabelWidth);
         }
     } else if (page_ == Page::Drive) {
         const auto& d = cfg_.drive[drive_];

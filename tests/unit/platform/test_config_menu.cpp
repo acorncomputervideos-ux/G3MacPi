@@ -80,6 +80,17 @@ struct Rig {
         return a;
     }
     bool has(const std::string& text) { return screen().find(text) != std::string::npos; }
+    // Moves the main page's selection to the line containing `text`.
+    bool go(const std::string& text)
+    {
+        press(0x4A);  // Home
+        for (int i = 0; i < 40; ++i) {
+            if (selected().find(text) != std::string::npos)
+                return true;
+            press(0x51);  // Down
+        }
+        return false;
+    }
 };
 
 } // namespace
@@ -90,7 +101,12 @@ TEST_CASE("platform/menu/main_page_and_memory")
     CHECK(r.has("Memory"));
     CHECK(r.has("256 MB"));
     CHECK(r.has("CD-ROM: (empty)"));
-    CHECK(r.has("no floppy drive"));
+    CHECK(!r.has("Floppy"));                          // the B&W has none: not listed
+    CHECK(r.has("The Mac"));                          // grouped
+    CHECK(r.has("Drives"));
+    CHECK(r.has("Display"));
+    CHECK(r.has("Network"));
+    CHECK(r.has("The Pi"));
     CHECK(r.has("Start the Mac"));
     CHECK(r.selected().find("Memory") != std::string::npos);
     r.press(kRight);
@@ -108,9 +124,9 @@ TEST_CASE("platform/menu/main_page_and_memory")
 TEST_CASE("platform/menu/navigation_skips_floppy")
 {
     Rig r;
-    r.press(kDown, 5);                                 // Memory, ROM, 4 drives -> Hard disk bus slave
+    r.press(kDown, 6);                                 // Memory, ROM, CPU, 4 drives -> Hard disk bus slave
     CHECK(r.selected().find("Hard disk bus slave") != std::string::npos);
-    r.press(kDown);                                    // over the floppy line
+    r.press(kDown);                                    // over the (hidden) floppy
     CHECK(r.selected().find("Start-up disk") != std::string::npos);
     r.press(kUp);
     CHECK(r.selected().find("Hard disk bus slave") != std::string::npos);
@@ -118,12 +134,11 @@ TEST_CASE("platform/menu/navigation_skips_floppy")
     CHECK(r.selected().find("Restart the Pi") != std::string::npos);
     CHECK(r.press(kEnter) == ConfigMenu::Action::RestartPi);
     r.press(kUp);
-    CHECK(r.selected().find("New hard disk") != std::string::npos);
+    CHECK(r.selected().find("Start the Mac") != std::string::npos);
+    r.press(kUp);
+    CHECK(r.selected().find("Save settings") != std::string::npos);
     r.press(kUp);
     CHECK(r.selected().find("CPU self-test") != std::string::npos);
-    r.press(kUp);
-    CHECK(r.selected().find("Start the Mac") != std::string::npos);
-    r.press(kDown);
     CHECK(r.press(kEnter) == ConfigMenu::Action::SelfTest);
     r.press(kHome);
     CHECK(r.selected().find("Memory") != std::string::npos);
@@ -134,7 +149,7 @@ TEST_CASE("platform/menu/navigation_skips_floppy")
 TEST_CASE("platform/menu/insert_a_cd_image")
 {
     Rig r;
-    r.press(kDown, 2);                                 // CD bus master (the CD-ROM)
+    REQUIRE(r.go("CD bus master"));
     r.press(kEnter);
     CHECK(r.has("Drive: CD bus master"));
     CHECK(r.has("CD-ROM"));
@@ -160,7 +175,7 @@ TEST_CASE("platform/menu/insert_a_cd_image")
 TEST_CASE("platform/menu/folders_and_parent")
 {
     Rig r;
-    r.press(kDown, 2);
+    REQUIRE(r.go("CD bus master"));
     r.press(kEnter);
     r.press(kDown);
     r.press(kEnter);
@@ -180,7 +195,7 @@ TEST_CASE("platform/menu/folders_and_parent")
 TEST_CASE("platform/menu/drive_type_readonly_and_eject")
 {
     Rig r;
-    r.press(kDown, 4);                                 // Hard disk bus master: no drive
+    REQUIRE(r.go("Hard disk bus master"));             // no drive
     r.press(kEnter);
     CHECK(r.has("No drive"));
     r.press(kDown);                                    // image/eject/read-only disabled: lands on Back
@@ -219,10 +234,11 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     r.press(kEnter);
     CHECK(std::strcmp(r.menu.config().rom, "/g3macpi/rom/Mac OS ROM") == 0);
     CHECK(r.has("ROM file"));
-    r.press(kDown, 5);                                 // Start-up disk
+    REQUIRE(r.go("Start-up disk"));
     r.press(kRight);
     CHECK(r.menu.config().boot == MachineConfig::Boot::CdRom);
-    r.press(kDown);                                    // Screen
+    r.press(kDown);                                    // New hard disk...
+    r.press(kDown);                                    // Resolution
     r.press(kLeft);
     CHECK_EQ(r.menu.config().width, 800u);
     CHECK(r.has("800 x 600"));
@@ -246,7 +262,7 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     CHECK(!r.menu.config().wifi);
     r.press(kRight);
     CHECK(r.menu.config().wifi);
-    CHECK(r.has("WiFi (no network set: wifi_name in g3macpi.ini)"));
+    CHECK(r.has("WiFi (no network: set wifi_name)"));
     CHECK(r.has("On (through the Pi's WiFi)"));
     CHECK(r.has("changes when the Pi restarts"));
     {
@@ -274,18 +290,18 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);
     CHECK(!r.menu.config().autostart);
     CHECK(r.has("Show this menu"));
-    r.press(kDown);                                    // CPU emulation
-    CHECK(r.has("Interpreter: safe, slower"));
-    r.press(kRight);
-    CHECK(r.menu.config().jit);
-    CHECK(r.has("JIT: faster (new)"));
     r.press(kDown);                                    // Pi CPU speed
     CHECK(r.has("1.8 GHz (standard)"));
     r.press(kRight);
     CHECK(r.menu.config().pi_overclock);
-    CHECK(r.has("2.0 GHz (overclock"));
+    CHECK(r.has("2.0 GHz overclock"));
     CHECK(r.has("2.0 GHz: written to config.txt by Save settings"));
-    r.press(kDown);
+    REQUIRE(r.go("CPU emulation"));                    // in The Mac group
+    CHECK(r.has("Interpreter: safe, slower"));
+    r.press(kRight);
+    CHECK(r.menu.config().jit);
+    CHECK(r.has("JIT: faster (new)"));
+    REQUIRE(r.go("Save settings"));
     CHECK(r.press(kEnter) == ConfigMenu::Action::Save);
     r.menu.mark_saved();
     r.menu.set_status("Settings saved to /g3macpi/g3macpi.ini");
@@ -303,7 +319,7 @@ TEST_CASE("platform/menu/running_mac_cd_swap_and_restart_marks")
     CHECK(r.has("Resume the Mac"));
     CHECK(!r.menu.needs_restart());
     // Insert a CD while running: takes effect at once.
-    r.press(kDown, 2);
+    REQUIRE(r.go("CD bus master"));
     r.press(kEnter);
     r.press(kDown);
     r.press(kEnter);
@@ -327,7 +343,7 @@ TEST_CASE("platform/menu/running_mac_cd_swap_and_restart_marks")
     r.press(kLeft);
     CHECK(!r.menu.needs_restart());
     // A hard disk is never swapped live.
-    r.press(kDown, 4);                                 // Hard disk bus master
+    REQUIRE(r.go("Hard disk bus master"));
     r.press(kEnter);
     r.press(kRight);                                   // -> Hard disk
     r.press(kDown);
@@ -341,7 +357,7 @@ TEST_CASE("platform/menu/unreadable_folder")
 {
     Rig r;
     r.fs.dirs.erase("/g3macpi/disks");
-    r.press(kDown, 2);
+    REQUIRE(r.go("CD bus master"));
     r.press(kEnter);
     r.press(kDown);
     r.press(kEnter);
@@ -360,7 +376,8 @@ TEST_CASE("platform/menu/running_mac_hard_disk_image_needs_restart")
     REQUIRE(cfg.set_image(2, "/g3macpi/disks/zeta.img"));
     ConfigMenu menu(cfg, fs, "/g3macpi/disks", "/g3macpi/rom");
     menu.set_running(true);
-    menu.key(kDown); menu.key(kDown); menu.key(kDown); menu.key(kDown);  // Hard disk bus master
+    for (int k = 0; k < 5; ++k)
+        menu.key(kDown);                               // Memory, ROM, CPU, 2 CD -> Hard disk bus master
     menu.key(kEnter);
     menu.key(kDown);                                   // Disk image
     menu.key(kEnter);
@@ -389,7 +406,8 @@ TEST_CASE("platform/menu/long_file_names_keep_the_size_column")
                                  {std::string(70, 'x') + ".img", false, 1u << 20}};
     MachineConfig cfg;
     ConfigMenu menu(cfg, fs, "/g3macpi/disks", "/g3macpi/rom");
-    menu.key(kDown); menu.key(kDown);
+    for (int k = 0; k < 3; ++k)
+        menu.key(kDown);                               // CD bus master
     menu.key(kEnter);
     menu.key(kDown);
     menu.key(kEnter);
@@ -434,7 +452,7 @@ TEST_CASE("platform/menu/new_blank_hard_disk")
     r.fs.dirs["/g3macpi/hdd"] = {{"HD1.IMG", false, 1u << 30}, {"notes.txt", false, 10}};
     r.fs.dirs["/g3macpi/cd"] = {{"Mac OS 9.iso", false, 650u << 20}};
     r.menu.set_media_folders("/g3macpi/cd", "/g3macpi/hdd");
-    r.press(kDown, 4);                                 // Hard disk bus master: no drive
+    REQUIRE(r.go("Hard disk bus master"));             // no drive
     r.press(kEnter);
     // Only offered for hard disks.
     r.press(kRight);                                   // Type -> Hard disk
@@ -465,10 +483,15 @@ TEST_CASE("platform/menu/new_blank_hard_disk")
     CHECK(std::strcmp(r.menu.config().drive[2].image, "/g3macpi/hdd/hd2.img") == 0);
     CHECK(r.menu.config().drive[2].type == MachineConfig::DriveType::Disk);
     CHECK(!r.menu.config().drive[2].read_only);
-    CHECK(r.menu.dirty());
+    CHECK(r.menu.dirty());                             // (the Pi then saves them at once)
     CHECK(r.has("Drive Setup"));
+    // Back on the main page, on that drive's line, which shows the disk.
+    CHECK(r.selected().find("Hard disk bus master") != std::string::npos);
+    CHECK(r.selected().find("hd2.img") != std::string::npos);
+    r.press(kEnter);                                   // its page again
+    r.press(kDown, 3);                                 // Image, Remove, Read-only
     // A CD-ROM drive: the item can't be selected.
-    r.press(kUp, 4);                                   // Read-only, Remove, Image, Type
+    r.press(kUp, 3);                                   // Read-only, Remove, Image, Type
     CHECK(r.selected().find("Type") != std::string::npos);
     r.press(kRight);                                   // CD-ROM
     r.press(kDown, 3);                                 // Disc image, Read-only? no: Eject disabled too -> Back
@@ -486,7 +509,7 @@ TEST_CASE("platform/menu/hard_disk_picker_starts_in_the_hdd_folder")
     Rig r;
     r.fs.dirs["/g3macpi/hdd"] = {{"system.img", false, 1u << 30}};
     r.menu.set_media_folders("/g3macpi/cd", "/g3macpi/hdd");
-    r.press(kDown, 4);
+    REQUIRE(r.go("Hard disk bus master"));
     r.press(kEnter);
     r.press(kRight);                                   // Hard disk
     r.press(kDown);                                    // Disk image
@@ -498,7 +521,7 @@ TEST_CASE("platform/menu/hard_disk_picker_starts_in_the_hdd_folder")
     // No disks folder: creating a disk reports it.
     Rig q;
     q.menu.set_media_folders("/g3macpi/cd", "/nowhere");
-    q.press(kDown, 4);
+    REQUIRE(q.go("Hard disk bus master"));
     q.press(kEnter);
     q.press(kRight);
     q.press(kDown, 3);
@@ -664,9 +687,7 @@ TEST_CASE("platform/menu/new_hard_disk_shortcut")
     // "New hard disk...": the first free position, hard disk bus master
     // first, becomes a hard disk; its page opens on "New blank disk".
     Rig r;
-    r.press(kEnd);
-    r.press(kUp);
-    REQUIRE(r.selected().find("New hard disk") != std::string::npos);
+    REQUIRE(r.go("New hard disk"));
     CHECK(r.press(kEnter) == ConfigMenu::Action::None);
     CHECK(r.selected().find("New blank disk") != std::string::npos);
     CHECK(r.has("Hard disk bus master"));
@@ -679,9 +700,8 @@ TEST_CASE("platform/menu/new_hard_disk_shortcut")
         std::strcpy(d.image, "/g3macpi/hdd/x.img");
     }
     ConfigMenu m{full.cfg, full.fs, "/g3macpi/disks", "/g3macpi/rom"};
-    for (int i = 0; i < 40; ++i)
-        m.key(0x4D);  // End
-    m.key(0x52);      // Up
+    for (int i = 0; i < 8; ++i)
+        m.key(0x51);  // Down to New hard disk (past Memory, ROM, CPU, 4 drives, Start-up disk)
     m.key(0x28);      // Enter
     ConfigMenu::Screen sc;
     m.render(sc);

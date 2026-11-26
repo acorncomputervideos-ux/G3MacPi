@@ -27,6 +27,12 @@ bool is_mac_os_rom(const u8* data, u32 size);
 // there is none (or it is larger than cap, or not a CHRP boot file).
 u32 find_mac_os_rom(BlockDevice& disc, u8* buf, u32 cap);
 
+// The disk can start Mac OS: an HFS (Plus) volume (bare or in the first
+// Apple_HFS partition) with a blessed System Folder holding a 'tbxi' file,
+// which is what the firmware's boot path "\\:tbxi" opens. A blank disk,
+// or one only initialised by Drive Setup, has none.
+bool has_startup_system(BlockDevice& disk);
+
 } // namespace g3
 
 #endif // G3_PLATFORM_COMMON_ROM_FROM_DISC_H

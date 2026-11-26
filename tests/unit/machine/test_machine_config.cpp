@@ -297,6 +297,33 @@ TEST_CASE("machine/config/choose_boot_drive")
     CHECK_EQ(choose_boot_drive(c, img), MachineConfig::kDrives);
 }
 
+TEST_CASE("machine/config/choose_boot_drive_skips_blank_disks")
+{
+    // Mac OS on the hard disk bus slave, a new blank disk on the master and
+    // a CD: automatic start-up takes the disk with a system, not the blank
+    // one (which made the Mac start to a black screen).
+    MachineConfig c;
+    using T = MachineConfig::DriveType;
+    c.drive[0].type = T::CdRom;
+    c.drive[2].type = T::Disk;
+    c.drive[3].type = T::Disk;
+    bool img[4] = {true, false, true, true};
+    bool sys[4] = {false, false, false, true};
+    CHECK_EQ(choose_boot_drive(c, img, sys), 3u);
+    c.boot = MachineConfig::Boot::Disk;
+    CHECK_EQ(choose_boot_drive(c, img, sys), 3u);
+    // No disk has a system: the CD (installing), else a disk.
+    sys[3] = false;
+    c.boot = MachineConfig::Boot::Auto;
+    CHECK_EQ(choose_boot_drive(c, img, sys), 0u);
+    c.boot = MachineConfig::Boot::Disk;
+    CHECK_EQ(choose_boot_drive(c, img, sys), 2u);
+    // Two systems: the master position first.
+    sys[2] = sys[3] = true;
+    c.boot = MachineConfig::Boot::Auto;
+    CHECK_EQ(choose_boot_drive(c, img, sys), 2u);
+}
+
 TEST_CASE("machine/config/disk_in_the_cd_position_is_writable")
 {
     // ata0.master starts as the B&W's (read-only) CD position; a disk put

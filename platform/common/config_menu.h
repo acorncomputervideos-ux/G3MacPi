@@ -119,8 +119,11 @@ public:
 
 private:
     enum class Page : u8 { Main, Drive, Files, Wifi };
-    enum MainItem : u8 { kRam, kRom, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kMode,
-                         kDepth, kSound, kNetwork, kWifi, kModem, kAutostart, kJit, kPiSpeed, kSave, kStart, kSelfTest, kNewHardDisk, kRestartPi, kMainItems };
+    // In screen order, by group (The Mac, Drives, Screen, Network, The Pi),
+    // then the actions. kFloppy is not shown (the B&W has no floppy drive).
+    enum MainItem : u8 { kRam, kRom, kJit, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kNewHardDisk,
+                         kMode, kDepth, kSound, kNetwork, kWifi, kModem, kAutostart, kPiSpeed, kSelfTest,
+                         kSave, kStart, kRestartPi, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
     enum WifiItem : u8 { kWUse, kWName, kWPassword, kWCountry, kWKeyboard, kWBack, kWifiItems };
     static constexpr u8 kNotEditing = 0xFF;
@@ -146,6 +149,7 @@ private:
     Action request_new_disk();
     // A row: two spaces, `left`, and `right` starting at column `col`.
     void line(Screen& s, u32& row, Attr a, const char* left, const char* right = nullptr, u32 col = 26) const;
+    static constexpr u32 kGroupWidth = 10, kLabelWidth = 24;  // main page columns
     bool restart_differs(u32 main_item) const;
 
     MachineConfig cfg_, running_cfg_;

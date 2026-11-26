@@ -270,22 +270,26 @@ TEST_CASE("platform/session/start_up_disk_sets_chosen_bootpath")
 {
     // A CD (2048-byte-block map, as Apple CDs) on ata0 and a disk on ata1:
     // /chosen bootpath names the chosen drive, its HFS partition and \\:tbxi.
+    // The disk is blank (no System Folder): automatic start-up takes the CD;
+    // boot = disk takes the disk all the same.
     std::vector<u8> cd(65536 * 512, 0), hd(65536 * 512, 0);
     HfsFormatOptions opt;
     REQUIRE(format_apm_hfs(cd.data(), cd.size(), opt));
     REQUIRE(format_apm_hfs(hd.data(), hd.size(), opt));
     store_be16(&cd[2], 2048);
-    for (int boot = 0; boot < 3; ++boot) {
+    for (int boot = 0; boot < 4; ++boot) {
         Rig r;
         r.host.files["/d/cd.iso"] = cd;
         r.host.files["/d/hd.img"] = hd;
         r.cfg.drive[0].type = MachineConfig::DriveType::CdRom;
         REQUIRE(r.cfg.set_image(0, "/d/cd.iso"));
-        if (boot != 1) {
+        if (boot != 1) {  // 1: no disk
             r.cfg.drive[2].type = MachineConfig::DriveType::Disk;
             REQUIRE(r.cfg.set_image(2, "/d/hd.img"));
         }
-        r.cfg.boot = boot == 2 ? MachineConfig::Boot::CdRom : MachineConfig::Boot::Auto;
+        r.cfg.boot = boot == 2   ? MachineConfig::Boot::CdRom
+                     : boot == 3 ? MachineConfig::Boot::Disk
+                                 : MachineConfig::Boot::Auto;
         REQUIRE(r.start() == MacSession::Error::None);
         const of::DeviceTree& t = r.session.firmware()->tree();
         const of::BwNodes& n = r.session.firmware()->nodes();
@@ -293,7 +297,7 @@ TEST_CASE("platform/session/start_up_disk_sets_chosen_bootpath")
         u32 len = 0;
         REQUIRE(t.get_property(n.chosen, "bootpath", data, len));
         char want[256];
-        const u32 k = t.path_of(boot == 0 ? n.cmd646_disk : n.disk[0], want, sizeof want);
+        const u32 k = t.path_of(boot == 3 ? n.cmd646_disk : n.disk[0], want, sizeof want);
         std::strcpy(want + k, ":2,\\\\:tbxi");
         CHECK(std::string(reinterpret_cast<const char*>(data)) == want);
     }

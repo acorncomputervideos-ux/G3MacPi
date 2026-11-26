@@ -1368,6 +1368,11 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 				m_pMenu->new_disk_path (), (unsigned) (m_pMenu->new_disk_bytes () >> 20),
 				bOK ? "created" : pMessage);
 		m_pMenu->disk_created (bOK, bOK ? 0 : pMessage);
+		// Saved at once, so the new disk stays in its drive after a restart.
+		if (bOK && SaveSettings (m_pMenu->config ()))
+		{
+			m_pMenu->mark_saved ();
+		}
 		break; }
 
 	case g3::ConfigMenu::Action::None:

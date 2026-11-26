@@ -75,6 +75,7 @@ public:
         RomTooBig,       // it does not fit at load-base
         Firmware,        // Open Firmware failed to power on
         BootFailed,      // the boot script failed or did not start a client
+        SlaveDisk,       // the only Mac OS disk is on a slave position (see detail())
         NotMacOsRom,     // the ROM file is not a Mac OS ROM file, and no CD has one
     };
 

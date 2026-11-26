@@ -23,7 +23,13 @@ At start-up the emulator shows its settings menu, or, with "At power-on:
 Start the Mac", goes straight into the Mac (a black screen until the Mac
 draws; F12 opens the menu at any time). "Restart the Pi" at the bottom
 of the menu, or Ctrl+Alt+Delete, writes the Mac's disks and restarts.
-Mac OS's Shut Down stops the Mac and shows the menu. On first start it creates:
+Mac OS's Shut Down stops the Mac and shows the menu.
+
+Start-up disk "Automatic" (and "Hard disk") starts from a disk that has
+Mac OS on it (a System Folder with the Mac OS ROM file), so a new blank
+disk never gets in the way; with none, from the CD. Mac OS starts only
+from a master position (CD bus master or Hard disk bus master): a Mac OS
+disk on a slave position gives a message saying to move it. On first start it creates:
 
 | Folder / file | Put there |
 |---|---|
@@ -147,9 +153,10 @@ is reduced. `config.txt` has an optional overclock (2.0 GHz), commented out.
 
 ## A new hard disk
 
-In the menu, choose "New hard disk..." (near the bottom): it takes the
+In the menu, choose "New hard disk..." (in the Drives group): it takes the
 first free drive position (the hard disk bus first) and opens it on "New
-blank disk". Or open a drive position yourself, set Type to Hard disk,
+blank disk". After Enter the menu goes back to the main page with the disk
+in that drive, and the settings are saved. Or open a drive position yourself, set Type to Hard disk,
 then go to "New blank disk". Left/Right picks the size (256 MB to 4 GB; FAT32 files
 can't reach 4 GB), Enter creates `/g3macpi/hdd/hdN.img` and puts it in the
 drive. The disk is blank: start the Mac from the Mac OS CD, open Drive

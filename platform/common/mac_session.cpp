@@ -56,6 +56,7 @@ const char* MacSession::error_text(Error e)
     case Error::Firmware: return "Open Firmware failed to start";
     case Error::BootFailed: return "the Mac OS ROM file did not start Mac OS";
     case Error::NotMacOsRom: return "no Mac OS ROM file to start from";
+    case Error::SlaveDisk: return "Mac OS can only start from a master drive position";
     }
     return "unknown error";
 }
@@ -237,10 +238,20 @@ MacSession::Error MacSession::start(const MachineConfig& config, MacHost& host, 
     // The start-up disk (boot = auto/cdrom/disk): /chosen bootpath, and the
     // same path for the loaded file. Without one the Mac shows the "?" disk
     // (or Mac OS 9.2 reports that it cannot find its bootpath).
-    bool has_image[MachineConfig::kDrives];
-    for (u32 i = 0; i < MachineConfig::kDrives; ++i)
+    bool has_image[MachineConfig::kDrives], has_system[MachineConfig::kDrives];
+    for (u32 i = 0; i < MachineConfig::kDrives; ++i) {
         has_image[i] = image_[i] != nullptr;
-    const u32 boot = choose_boot_drive(config, has_image);
+        has_system[i] = image_[i] && !is_cd_[i] && has_startup_system(*image_[i]);
+    }
+    const u32 boot = choose_boot_drive(config, has_image, has_system);
+    // The firmware starts only from the two master positions (CD bus master,
+    // hard disk bus master): a system disk on a slave would start to a
+    // black screen, so say so instead.
+    if (boot < MachineConfig::kDrives && (boot == 1 || boot == 3) && has_system[boot])
+        return fail(Error::SlaveDisk, boot == 1 ? "move the Mac OS disk from the CD bus slave to a master position "
+                                                  "(CD bus master or Hard disk bus master)"
+                                                : "move the Mac OS disk from the Hard disk bus slave to the Hard "
+                                                  "disk bus master (or the CD bus master)");
     char boot_path[256];
     const bool booting = boot < MachineConfig::kDrives &&
                          fw_->set_boot_device(boot, *image_[boot], boot_path, sizeof boot_path);

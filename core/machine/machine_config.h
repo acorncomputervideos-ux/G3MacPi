@@ -129,7 +129,15 @@ void parse_machine_config(const char* text, u32 len, MachineConfig& config, Conf
 // boot = cdrom the first CD-ROM drive with a disc, with boot = disk the
 // first hard disk with an image, with auto a hard disk first, else a CD.
 // `has_image[i]`: drive i has a disc / image.
-u32 choose_boot_drive(const MachineConfig& config, const bool has_image[MachineConfig::kDrives]);
+//
+// has_system (optional): which images can start Mac OS (a blessed System
+// Folder with the ROM file, see rom_from_disc.h). With it, hard disks that
+// can come first, on the master positions (0, 2: the ones the firmware
+// starts from) before the slaves; a disk without a system (a new blank
+// one) is chosen only when nothing else can be, so adding one does not
+// stop the Mac from starting from its usual disk.
+u32 choose_boot_drive(const MachineConfig& config, const bool has_image[MachineConfig::kDrives],
+                      const bool* has_system = nullptr);
 
 // Writes the configuration as INI text (with a header comment). Returns the
 // length written, or 0 if `cap` is too small.
