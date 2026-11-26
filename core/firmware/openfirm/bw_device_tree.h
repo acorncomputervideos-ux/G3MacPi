@@ -58,6 +58,8 @@ struct BwMachine {
     u32 display_device = 0x10;
     u32 vram_bar = 0;
     u32 width = 0, height = 0, depth = 0, linebytes = 0;
+    // Its vertical-blank interrupt: Paddington input (0 = none).
+    u32 display_irq = 0;
     // Built-in sound and Ethernet (davbus/sound and ethernet nodes).
     bool sound = true;
     bool ethernet = true;

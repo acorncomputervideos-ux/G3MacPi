@@ -47,7 +47,7 @@ writes are ignored.
 | Offset | Name | Access | Meaning |
 |---|---|---|---|
 | 0x00 | ID | RO | 0x47334642 ('G3FB') |
-| 0x04 | VERSION | RO | 1 |
+| 0x04 | VERSION | RO | 2 (1: before the interrupt registers) |
 | 0x08 / 0x0C / 0x10 | WIDTH / HEIGHT / DEPTH | RW | staged mode |
 | 0x14 | PITCH | RO | bytes per row of the active mode |
 | 0x18 | ENABLE | RW | bit 0: show the picture |
@@ -57,11 +57,28 @@ writes are ignored.
 | 0x28 | STATUS | RO | 1 = the last APPLY was accepted |
 | 0x2C | APPLY | WO | staged mode becomes active, if valid |
 | 0x30 | FRAMES | RO | frames shown so far |
+| 0x34 | IRQ_ENABLE | RW | bit 0: vertical-blank interrupt on |
+| 0x38 | IRQ_STATUS | RO / write 1 to clear | bit 0: a vertical blank happened |
 
 A mode is valid if width ≤ 1920, height ≤ 1200, the depth is supported,
 and pitch × height fits in video memory. A rejected mode leaves the
 active one unchanged. The power-on palette is a grey ramp (0 black, 255
 white).
+
+## Vertical-blank interrupt
+
+While IRQ_ENABLE bit 0 is set, IRQ_STATUS bit 0 is set every 1/60 s of
+guest time (60 Hz is our choice; the next blank is planned from the last
+one, so the rate holds however late an event runs). The interrupt line is
+high while IRQ_STATUS & IRQ_ENABLE bit 0 is; writing 1 to IRQ_STATUS bit 0
+clears it. Clearing IRQ_ENABLE drops the line and stops the timer; the
+next enable gives a blank a full period later.
+
+The line is Paddington input 22 (our choice: no emulated device uses it;
+not a claim about a real B&W slot). The `display` node carries
+`interrupts = 22` and `interrupt-parent` = the interrupt controller, like
+the CMD646's, so Mac OS makes a `driver-ist` property for it and our
+driver installs its handler there (docs/guest/ndrv.md).
 
 ## Host side
 
@@ -71,27 +88,39 @@ bits by repeating their top bits, so full intensity gives 0xFF.
 
 ## Tests
 
+- The vertical-blank interrupt: none while off; the line rises at each
+  1/60 s and stays up until acknowledged (writing 0 clears nothing);
+  turning it off drops the line and stops the timer; on again, the next
+  blank is a full period later.
 - Byte order of the registers; read-only registers; valid modes and
   pitches; every rejection rule; the palette's auto-increment and wrap.
 - Pixels written by CPU-style bus accesses, converted in all three depths
   (8-bit through the palette, 15-bit channel expansion, 32-bit); a wider
   destination; overlapping mappings refused.
 
-## Known problem: 256 colours (open)
+## Solved: 256 colours stopping at "Starting Up"
 
-With our display driver (as on the Pi), Mac OS 9.2.1 started from a hard
-disk in 256 colours (`display = ...x8`) stops at "Starting Up" in most
-runs (4 of 5 in g3_host); thousands and millions of colours start
-normally. Without the driver it starts (in grey). What is known:
+With version 1 (no interrupt) our driver stood in for vertical blanking
+with a Driver Services timer re-armed from its own handler every 16 ms.
+Mac OS 9.2.1 started from a hard disk in 256 colours sometimes stopped at
+"Starting Up" for good (2 of 18 g3_host runs at different CPU speeds; on
+the Pi it depends on timing). What a trace showed (`G3_TIME` makes runs
+repeat exactly):
 
-- The driver keeps answering (the same requests as in millions of
-  colours, plus SetEntries/SetGray), and its 16 ms vertical-blanking timer
-  keeps running.
-- When stuck, Mac OS sits in its idle loop (MSR[POW], HID0 nap): timer
-  (decrementer) interrupts keep coming, but no device interrupts (Cuda
-  idle, no PIC events); the Ethernet driver's half-second polling stops
-  too, as if Mac OS's own timed tasks stopped being run.
-- Changing nothing but timing (extra debug writes in the driver) made a
-  run succeed: a race.
+- The Mac OS timer task (the one that runs interrupt timers) sleeps with
+  NanoKernel call 55 (MPDelayUntilSys, "delay until", per the
+  powermac-rom NanoKernel sources' labels) until the earliest timer.
+- At the moment of the stop it slept twice at the same instant, and from
+  then on it only ever waited for our VBL timer: every other timer was
+  gone. The Ticks counter (low memory 0x16A) stopped, the Ethernet
+  driver's polling stopped, and the main Mac OS task went idle waiting
+  for them.
+- The JIT is not involved (the same run stops with it off).
 
-Until it is found, the default depth is 32 (millions of colours).
+Why the other timers were lost is not known. Real Mac video cards signal
+vertical blanking with a hardware interrupt, not a timer, so version 2
+gives the device one (above) and the driver signals the 'vbl ' service
+from its interrupt handler; it no longer uses interrupt timers. Since
+then: 13 of 13 runs at the CPU speeds above reach the desktop in 256
+colours, as do thousands and millions; the pointer moves and menus open.
+

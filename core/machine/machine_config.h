@@ -62,9 +62,7 @@ struct MachineConfig {
     u32 ram_mb = 256;
     char rom[kPathMax] = "/g3macpi/rom/Mac OS ROM";
     Boot boot = Boot::Auto;
-    // Millions of colours by default: in 256 colours, Mac OS 9.2.1 with
-    // our display driver often stops at "Starting Up" (not yet understood:
-    // the Mac goes idle waiting for something; docs/hardware/framebuffer.md).
+    // Millions of colours by default (256 colours and thousands work too).
     u32 width = 1024, height = 768, depth = 32;
     // The CPU's decoded-block cache and AArch64 code generation
     // (docs/cpu/jit-a64.md). Off by default until measured on the Pi.

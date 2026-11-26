@@ -105,8 +105,7 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         // file's boot script draws a moment later): the screen looks like a
         // Mac's from the first frame instead of black for a second. Entry
         // 0x88 of the power-on palette (a grey ramp) is that grey; the
-        // palette itself is left as it is: with entry 0x80 changed, Mac OS
-        // 9.2.1 in 256 colours stopped at "Starting Up" for good.
+        // palette itself is left as it is.
         display_.fill(0x88, 0, 0, fb.width(), fb.height());
         fb.set_enabled(true);
         desc.vram_base = fb.vram_base();
@@ -114,6 +113,7 @@ BwFirmware::BwFirmware(YosemiteMachine& m, const Config& c)
         desc.regs_base = YosemiteMachine::kDisplayRegs;
         desc.regs_size = Framebuffer::kRegsSize;
         desc.display_device = YosemiteMachine::kDisplayDevfn >> 3;
+        desc.display_irq = YosemiteMachine::kDisplayIrq;
         desc.vram_bar = 16;  // a power of two covering video memory (as a PCI BAR would be)
         while (desc.vram_bar < fb.vram_size())
             desc.vram_bar <<= 1;

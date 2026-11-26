@@ -127,14 +127,30 @@ All of this needs a real Mac OS 9 boot:
 - **Vertical blanking.** Classic Mac OS moves the cursor in its VBL tasks,
   which run when the display driver signals its VBL interrupt service.
   Without one the pointer never moved (button clicks still arrived). The
-  device has no VBL interrupt, so the driver does what Apple's guide allows
-  ("If the hardware interrupt for vertical blanking is not provided, a
-  time management task may be installed", ch. 1): at initialisation it
-  creates a 'vbl ' service (VSLNewInterruptService) and arms a Driver
-  Services timer (SetInterruptTimer, 16 ms after UpTime +
-  DurationToAbsolute) whose handler calls VSLDoInterruptService and
-  re-arms; finalise cancels the timer and disposes of the service.
-  SetInterrupt/GetInterrupt (csCode 7) turn the signal off and on.
-  AbsoluteTime results come back through a hidden pointer in r3 (Mac OS's
-  PowerPC runtime for struct results); verified by Mac OS 9.2.1 moving the
-  pointer and opening menus with the mouse.
+  device raises a 60 Hz vertical-blank interrupt (docs/hardware/framebuffer.md,
+  version 2). At initialisation (task level) the driver reads the node's
+  `driver-ist` property (Mac OS makes it from `interrupts`; member 0 is the
+  chip's source), creates a 'vbl ' service (VSLNewInterruptService), gets
+  the functions already on that member (GetInterruptFunctions), installs
+  its handler with nil enabler and disabler (InstallInterruptFunctions:
+  nil keeps the installed ones), turns the device's interrupt on and calls
+  the existing enabler, as the guide's example does (Designing PCI Cards
+  and Drivers, ch. 9). The handler, called at hardware interrupt level
+  with the InterruptSetMember's two words in r3/r4, returns
+  kIsrIsNotComplete (-1) if IRQ_STATUS shows nothing, otherwise
+  acknowledges it, calls VSLDoInterruptService and returns kIsrIsComplete
+  (0). Finalise turns the interrupt off, puts the previous handler back
+  (handlers are never removed, ch. 9) and disposes of the service.
+  SetInterrupt/GetInterrupt (csCode 7) turn the signal off and on. With
+  no `driver-ist` or a version-1 device there is no VBL service.
+  The import library for GetInterruptFunctions and
+  InstallInterruptFunctions, DriverServicesLib, is not named by the
+  guide; Mac OS 9.2.1 resolving it and calling our handler 60 times a
+  second confirms it. Verified by Mac OS 9.2.1 moving the pointer and
+  opening menus with the mouse in 256 colours, thousands and millions.
+- **Before: a timer.** Version 1 of the device had no interrupt, so the
+  driver re-armed a Driver Services timer (SetInterruptTimer) every 16 ms
+  from its own handler, as the guide allows ("If the hardware interrupt
+  for vertical blanking is not provided, a time management task may be
+  installed", ch. 1). In 256 colours Mac OS 9.2.1 then sometimes lost its
+  other timers and stopped at "Starting Up" (docs/hardware/framebuffer.md).

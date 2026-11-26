@@ -36,6 +36,9 @@ YosemiteMachine::YosemiteMachine(const YosemiteConfig& c)
     cmd646_.set_irq([](void* pic, bool a) {
         static_cast<HeathrowPic*>(pic)->set_input(kCmd646Irq, a);
     }, &macio_.pic());
+    display_.attach_interrupt(sched_, [](void* pic, bool a) {
+        static_cast<HeathrowPic*>(pic)->set_input(kDisplayIrq, a);
+    }, &macio_.pic());
     macio_.pic().set_output([](void* cpu, bool a) {
         static_cast<ppc::Ppc750*>(cpu)->set_external_interrupt(a);
     }, &cpu_);

@@ -78,6 +78,9 @@ public:
     // slot): Mac OS maps it from the node's assigned-addresses. It has no
     // configuration space. docs/hardware/framebuffer.md.
     static constexpr u32 kDisplayDevfn = 0x10 << 3;
+    // Its vertical-blank interrupt: Paddington input 22 (our choice; no
+    // emulated device uses it).
+    static constexpr u32 kDisplayIrq = 22;
 
     explicit YosemiteMachine(const YosemiteConfig& config);
 

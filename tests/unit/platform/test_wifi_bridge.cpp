@@ -86,7 +86,7 @@ Frame snap(const u8* dst, const u8* src, const u8 oui[3], u32 type, u32 len)
     put16(f, 20, type);
     return f;
 }
-const u8 kApple[3] = {0x08, 0x00, 0x07}, kZero[3] = {0, 0, 0};
+const u8 kApple[3] = {0x08, 0x00, 0x07}, kZero[6] = {0, 0, 0, 0, 0, 0};  // an OUI (3 bytes) or a MAC address (6)
 Frame aarp(const u8* dst, const u8* src, u32 fn, const u8* sha, const u8* tha)
 {
     Frame f = snap(dst, src, kZero, 0x80F3, 60);

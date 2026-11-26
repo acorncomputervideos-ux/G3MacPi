@@ -13,6 +13,8 @@
 // are read from that file at the start (if valid) and written at the end.
 // G3_INPUT=s:dx:dy:b,...: at guest second s, move the mouse by (dx, dy) in
 // steps of at most 2 pixels per 10 ms, then set the button to b (0/1).
+// G3_TIME=n: the Mac's clock at power-on (Unix seconds) instead of now,
+// so runs repeat exactly.
 // G3_SIMLAN=1: the Mac's network is a small simulated one (sim_lan.h): a
 // router with DHCP, DNS and a web page. G3_MODEMWAV=file.wav: the dial-up
 // modem's speaker (modem = yes), in guest time. G3_WRITEBACK=1: disk
@@ -308,7 +310,9 @@ int main(int argc, char** argv)
     const auto start_t0 = std::chrono::steady_clock::now();
     const MacSession::Error e = session.start(config, host, mem, driver.empty() ? nullptr : driver.data(),
                                               static_cast<u32>(driver.size()),
-                                              static_cast<u64>(std::time(nullptr)), have_saved ? &saved : nullptr);
+                                              std::getenv("G3_TIME") ? std::strtoull(std::getenv("G3_TIME"), nullptr, 10)
+                                                                     : static_cast<u64>(std::time(nullptr)),
+                                              have_saved ? &saved : nullptr);
     std::printf("[g3_host] session start: %.0f ms\n",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_t0).count());
     if (e != MacSession::Error::None) {

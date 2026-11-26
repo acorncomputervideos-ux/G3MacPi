@@ -54,7 +54,7 @@ u32 Framebuffer::reg_read(u32 reg)
 {
     switch (reg) {
     case ID: return kId;
-    case VERSION: return 1;
+    case VERSION: return kVersion;
     case WIDTH: return staged_w_;
     case HEIGHT: return staged_h_;
     case DEPTH: return staged_d_;
@@ -69,6 +69,8 @@ u32 Framebuffer::reg_read(u32 reg)
     }
     case STATUS: return status_;
     case FRAMES: return frames_;
+    case IRQ_ENABLE: return irq_enable_;
+    case IRQ_STATUS: return irq_status_;
     default: return 0;
     }
 }
@@ -90,8 +92,65 @@ void Framebuffer::reg_write(u32 reg, u32 v)
         // rejected mode leaves the active mode (and the staged values) as they were.
         status_ = set_mode(staged_w_, staged_h_, staged_d_) ? 1 : 0;
         return;
+    case IRQ_ENABLE:
+        irq_enable_ = v & kIrqVbl;
+        if (irq_enable_)
+            arm_vbl();
+        else if (sched_ && vbl_ != Scheduler::kInvalidHandle) {
+            sched_->cancel(vbl_);
+            vbl_ = Scheduler::kInvalidHandle;
+        }
+        update_irq();
+        return;
+    case IRQ_STATUS:
+        irq_status_ &= ~(v & kIrqVbl);
+        update_irq();
+        return;
     default: return;  // read-only registers ignore writes
     }
+}
+
+void Framebuffer::attach_interrupt(Scheduler& sched, IrqFn irq, void* ctx)
+{
+    sched_ = &sched;
+    irq_ = irq;
+    irq_ctx_ = ctx;
+}
+
+void Framebuffer::update_irq()
+{
+    const bool now = irq_line();
+    if (now != line_) {
+        line_ = now;
+        if (irq_)
+            irq_(irq_ctx_, now);
+    }
+}
+
+// Vertical blanks come every kVblPs from when the interrupt was first
+// enabled; the next one is planned from the last, so the rate stays 60 Hz
+// however late an event runs.
+void Framebuffer::arm_vbl()
+{
+    if (!sched_ || vbl_ != Scheduler::kInvalidHandle)
+        return;
+    const u64 now = sched_->now();
+    if (next_vbl_ <= now)
+        next_vbl_ = now + kVblPs;
+    vbl_ = sched_->schedule_at(next_vbl_, vbl_event, this);
+}
+
+void Framebuffer::vbl_event(void* ctx, u64 now_ps)
+{
+    auto* fb = static_cast<Framebuffer*>(ctx);
+    fb->vbl_ = Scheduler::kInvalidHandle;
+    fb->irq_status_ |= kIrqVbl;
+    fb->update_irq();
+    fb->next_vbl_ += kVblPs;
+    if (fb->next_vbl_ <= now_ps)
+        fb->next_vbl_ = now_ps + kVblPs;
+    if (fb->irq_enable_)
+        fb->arm_vbl();
 }
 
 u32 Framebuffer::mmio_read(u32 offset, u32 size)

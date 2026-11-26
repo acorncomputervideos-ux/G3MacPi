@@ -38,7 +38,7 @@ TEST_CASE("devices/framebuffer/registers_and_modes")
     u16 h = 0;
     r.bus.read16(kRegs + 2, h);
     CHECK_EQ(h, 0x4642u);                                    // "FB"
-    CHECK_EQ(r.rd(Framebuffer::VERSION), 1u);
+    CHECK_EQ(r.rd(Framebuffer::VERSION), 2u);
     CHECK_EQ(r.rd(Framebuffer::VRAMSIZE), 4u << 20);
     r.wr(Framebuffer::ID, 0);                                // read-only
     CHECK_EQ(r.rd(Framebuffer::ID), Framebuffer::kId);
@@ -116,4 +116,61 @@ TEST_CASE("devices/framebuffer/pixels_written_by_the_cpu_convert")
     r.fb.convert(wide.data(), 10);
     CHECK_EQ(wide[10 + 2], 0x123456u);
     CHECK_EQ(wide[5], 0xDEADu);                              // beyond the width: untouched
+}
+
+TEST_CASE("devices/framebuffer/vertical_blank_interrupt")
+{
+    Rig r;
+    Scheduler sched;
+    struct Line { bool up = false; u32 rises = 0; } line;
+    r.fb.attach_interrupt(sched, [](void* c, bool a) {
+        auto* l = static_cast<Line*>(c);
+        if (a && !l->up)
+            ++l->rises;
+        l->up = a;
+    }, &line);
+    // Off: no events, nothing pending.
+    sched.advance_to(Framebuffer::kVblPs * 3);
+    CHECK_EQ(sched.pending_count(), 0u);
+    CHECK_EQ(r.rd(Framebuffer::IRQ_STATUS), 0u);
+    CHECK(!line.up);
+    // On: a vertical blank every 1/60 s raises the line until acknowledged.
+    const u64 t0 = sched.now();
+    r.wr(Framebuffer::IRQ_ENABLE, 1);
+    CHECK_EQ(r.rd(Framebuffer::IRQ_ENABLE), 1u);
+    sched.advance_to(t0 + Framebuffer::kVblPs - 1);
+    CHECK(!line.up);
+    sched.advance_to(t0 + Framebuffer::kVblPs);
+    CHECK(line.up);
+    CHECK_EQ(r.rd(Framebuffer::IRQ_STATUS), 1u);
+    r.wr(Framebuffer::IRQ_STATUS, 0);                  // writing 0 clears nothing
+    CHECK(line.up);
+    r.wr(Framebuffer::IRQ_STATUS, 1);                  // write 1 to clear
+    CHECK(!line.up);
+    CHECK_EQ(r.rd(Framebuffer::IRQ_STATUS), 0u);
+    // 60 a second, at a steady rate.
+    sched.advance_to(t0 + Framebuffer::kVblPs * 60);
+    CHECK_EQ(line.rises, 2u);                          // not acknowledged since: stays high
+    for (u32 i = 61; i <= 120; ++i) {
+        r.wr(Framebuffer::IRQ_STATUS, 1);
+        sched.advance_to(t0 + Framebuffer::kVblPs * i);
+    }
+    CHECK_EQ(line.rises, 62u);
+    // Turned off while pending: the line drops at once and the timer stops.
+    sched.advance_to(t0 + Framebuffer::kVblPs * 121);
+    CHECK(line.up);
+    r.wr(Framebuffer::IRQ_ENABLE, 0);
+    CHECK(!line.up);
+    CHECK_EQ(sched.pending_count(), 0u);
+    r.wr(Framebuffer::IRQ_STATUS, 1);
+    sched.advance_to(t0 + Framebuffer::kVblPs * 200);
+    CHECK(!line.up);
+    CHECK_EQ(r.rd(Framebuffer::IRQ_STATUS), 0u);
+    // On again: the next blank a full period later.
+    const u64 t1 = sched.now();
+    r.wr(Framebuffer::IRQ_ENABLE, 1);
+    sched.advance_to(t1 + Framebuffer::kVblPs - 1);
+    CHECK(!line.up);
+    sched.advance_to(t1 + Framebuffer::kVblPs);
+    CHECK(line.up);
 }

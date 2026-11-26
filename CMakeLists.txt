@@ -172,10 +172,8 @@ if(G3_PPC_GCC)
             --import imp_IOCommandIsComplete=DriverServicesLib:IOCommandIsComplete
             --import imp_RegistryPropertyGetSize=NameRegistryLib:RegistryPropertyGetSize
             --import imp_RegistryPropertyGet=NameRegistryLib:RegistryPropertyGet
-            --import imp_SetInterruptTimer=DriverServicesLib:SetInterruptTimer
-            --import imp_CancelTimer=DriverServicesLib:CancelTimer
-            --import imp_UpTime=DriverServicesLib:UpTime
-            --import imp_DurationToAbsolute=DriverServicesLib:DurationToAbsolute
+            --import imp_GetInterruptFunctions=DriverServicesLib:GetInterruptFunctions
+            --import imp_InstallInterruptFunctions=DriverServicesLib:InstallInterruptFunctions
             --import imp_VSLNewInterruptService=VideoServicesLib:VSLNewInterruptService
             --import imp_VSLDoInterruptService=VideoServicesLib:VSLDoInterruptService
             --import imp_VSLDisposeInterruptService=VideoServicesLib:VSLDisposeInterruptService

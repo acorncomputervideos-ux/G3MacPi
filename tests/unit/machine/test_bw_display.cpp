@@ -101,9 +101,12 @@ TEST_CASE("machine/bw-display/node_as_offb_reads_it")
     // No configuration space behind it (no vendor ID of ours).
     CHECK_EQ(r.m->grackle().pci_bus().config_read(YosemiteMachine::kDisplayDevfn, 0x00), 0xFFFFFFFFu);
     CHECK_EQ(t.find("screen"), d);
+    // Its vertical-blank interrupt: Paddington input 22, as Mac OS needs it
+    // to make the driver-ist property.
+    CHECK_EQ(r.prop(d, "interrupts"), YosemiteMachine::kDisplayIrq);
+    CHECK_EQ(r.prop(d, "interrupt-parent"), r.fw->nodes().pic);
     // Power-on picture: enabled, the Mac grey (entry 0x88 of the power-on
-    // grey-ramp palette, which stays untouched: Mac OS in 256 colours hung
-    // when an entry was changed).
+    // grey-ramp palette, which stays untouched).
     CHECK(r.m->display().enabled());
     CHECK_EQ(r.vram[0], 0x88u);
     CHECK_EQ(r.vram[640 * 480 - 1], 0x88u);

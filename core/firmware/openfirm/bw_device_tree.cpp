@@ -485,6 +485,13 @@ bool build_bw_device_tree(DeviceTree& t, const BwMachine& m, BwNodes& n)
         t.set_int(n.display, "height", m.height);
         t.set_int(n.display, "depth", m.depth);
         t.set_int(n.display, "linebytes", m.linebytes);
+        // Its vertical-blank interrupt, as the CMD646's: Mac OS makes the
+        // driver-ist property from these, and our driver installs its
+        // handler on it (docs/hardware/framebuffer.md).
+        if (m.display_irq) {
+            t.set_int(n.display, "interrupts", m.display_irq);
+            t.set_int(n.display, "interrupt-parent", n.pic);
+        }
     }
 
     // --- USB: a placeholder node (name and device_type "usb"), with no

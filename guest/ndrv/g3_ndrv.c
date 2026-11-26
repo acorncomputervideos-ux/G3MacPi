@@ -12,7 +12,11 @@
  *   ch. 8  DriverDescription, DoDriverIO, command codes and kinds,
  *          IOCommandIsComplete;
  *   ch. 10 RegistryPropertyGet / RegistryPropertyGetSize;
- *   ch. 11 SetInterruptTimer, CancelTimer, UpTime, DurationToAbsolute;
+ *   ch. 9  interrupt management: the driver-ist property (ISTProperty,
+ *          kISTChipInterruptSource 0), GetInterruptFunctions,
+ *          InstallInterruptFunctions (nil keeps the installed enabler and
+ *          disabler), the InterruptHandler / InterruptEnabler types,
+ *          kIsrIsComplete 0 / kIsrIsNotComplete -1;
  *   ch. 12 AAPL,address;
  *   ch. 13 graphics driver control and status calls, their records and
  *          constants; the Video Services Library's interrupt services
@@ -79,17 +83,17 @@ enum { kDisableHorizontalSyncBit = 0, kDisableVerticalSyncBit = 1, kNoSeparateSy
 enum {
     FB_ID = 0x00, FB_WIDTH = 0x08, FB_HEIGHT = 0x0C, FB_DEPTH = 0x10, FB_PITCH = 0x14, FB_ENABLE = 0x18,
     FB_VRAMSIZE = 0x1C, FB_PALINDEX = 0x20, FB_PALDATA = 0x24, FB_STATUS = 0x28, FB_APPLY = 0x2C,
+    FB_VERSION = 0x04, FB_IRQ_ENABLE = 0x34, FB_IRQ_STATUS = 0x38,
 };
+enum { FB_IRQ_VBL = 1, FB_VERSION_IRQ = 2 }; /* the vertical-blank interrupt: version 2 on */
 #define FB_MAGIC 0x47334642u /* 'G3FB' */
 
 /* --- imports --------------------------------------------------------------------- */
 extern struct cfm_tvector imp_IOCommandIsComplete;   /* DriverServicesLib */
 extern struct cfm_tvector imp_RegistryPropertyGetSize; /* NameRegistryLib */
 extern struct cfm_tvector imp_RegistryPropertyGet;     /* NameRegistryLib */
-extern struct cfm_tvector imp_SetInterruptTimer;       /* DriverServicesLib */
-extern struct cfm_tvector imp_CancelTimer;             /* DriverServicesLib */
-extern struct cfm_tvector imp_UpTime;                  /* DriverServicesLib */
-extern struct cfm_tvector imp_DurationToAbsolute;      /* DriverServicesLib */
+extern struct cfm_tvector imp_GetInterruptFunctions;     /* DriverServicesLib */
+extern struct cfm_tvector imp_InstallInterruptFunctions; /* DriverServicesLib */
 extern struct cfm_tvector imp_VSLNewInterruptService;  /* VideoServicesLib */
 extern struct cfm_tvector imp_VSLDoInterruptService;   /* VideoServicesLib */
 extern struct cfm_tvector imp_VSLDisposeInterruptService; /* VideoServicesLib */
@@ -178,16 +182,17 @@ static struct {
     u8 clut[256][3];                      /* as loaded into the hardware (gamma applied) */
     struct gamma gamma;
     /* Vertical blanking: Mac OS moves the cursor and runs VBL tasks when the
-       driver signals its 'vbl ' service. The device has no VBL interrupt,
-       so a Driver Services timer stands in (chapter 1: "If the hardware
-       interrupt for vertical blanking is not provided, a time management
-       task may be installed"). */
+       driver signals its 'vbl ' service. The device raises an interrupt 60
+       times a second; our handler, installed on the device's driver-ist
+       member, signals the service. (A Driver Services timer re-armed from
+       its own handler stood in before; with it Mac OS 9.2.1 sometimes lost
+       its other timers and stopped at "Starting Up": devlog 2026-11-26.) */
     u32 vbl_service;                      /* InterruptServiceId; 0 = none */
-    u32 vbl_timer[2];                     /* TimerID (room for 64 bits) */
-    u32 vbl_period[2];                    /* AbsoluteTime of kVblMs */
-    int vbl_running;                      /* the timer is armed */
     int vbl_disabled;                     /* SetInterrupt csMode 1 */
-    struct cfm_tvector vbl_tv;            /* our handler, as Mac OS calls it */
+    u32 ist_set, ist_member;              /* our InterruptSetMember */
+    int isr_installed;
+    u32 old_refcon, old_handler;          /* what was installed before ours */
+    struct cfm_tvector isr_tv;            /* our handler, as Mac OS calls it */
 } g;
 
 static void hw_w(u32 reg, u32 v)
@@ -284,58 +289,74 @@ static int program_mode(u32 id, u32 depth_mode)
 }
 
 /* --- vertical blanking --------------------------------------------------------------- */
-enum { kVblMs = 16, durationMillisecond = 1 };
 #define kVBLService 0x76626C20u /* 'vbl ' */
+enum { kIsrIsComplete = 0, kIsrIsNotComplete = -1, kISTChipInterruptSource = 0 };
 
-/* AbsoluteTime is a 64-bit struct; Mac OS routines that return one take a
-   pointer to the result as a hidden first argument (r3). */
-static void vbl_arm(void);
-
-static long vbl_handler(void *p1, void *p2)  /* SecondaryInterruptHandler2 */
+/* InterruptHandler, called at hardware interrupt level. Mac OS passes the
+   InterruptSetMember by value: in the AIX-derived convention its two words
+   arrive in r3 and r4, then refCon and theIntCount. */
+static long vbl_isr(u32 set, long member, void *refcon, u32 count)
 {
-    (void)p1;
-    (void)p2;
-    g.vbl_running = 0;
-    if (!g.vbl_service)
-        return noErr;
-    if (!g.vbl_disabled)
+    (void)set;
+    (void)member;
+    (void)refcon;
+    (void)count;
+    if (!(hw_r(FB_IRQ_STATUS) & FB_IRQ_VBL))
+        return kIsrIsNotComplete;  /* not ours */
+    hw_w(FB_IRQ_STATUS, FB_IRQ_VBL);
+    if (g.vbl_service && !g.vbl_disabled)
         cfm_call(&imp_VSLDoInterruptService, g.vbl_service);
-    vbl_arm();
-    return noErr;
+    return kIsrIsComplete;
 }
 
-static void vbl_arm(void)
-{
-    u32 now[2] = {0, 0};
-    cfm_call(&imp_UpTime, now);
-    u32 when[2];
-    when[1] = now[1] + g.vbl_period[1];
-    when[0] = now[0] + g.vbl_period[0] + (when[1] < now[1]);
-    g.vbl_tv.code = (unsigned long)vbl_handler;
-    g.vbl_tv.toc = 0;  /* our code doesn't use r2 */
-    if ((s32)cfm_call(&imp_SetInterruptTimer, when, &g.vbl_tv, 0, g.vbl_timer) == noErr)
-        g.vbl_running = 1;
-}
+static s32 get_cells(const void *entry, const char *name, u32 *cells, u32 max);
 
+/* At task level (Initialize). Without the device's interrupt (an older
+   emulator or no driver-ist), Mac OS gets no VBL service, as before VBL
+   support: everything works except VBL tasks. */
 static void vbl_start(const void *entry)
 {
+    u32 ist[6];
+    if (hw_r(FB_VERSION) < FB_VERSION_IRQ || get_cells(entry, "driver-ist", ist, 6) < 2)
+        return;
     u32 id = 0;
     if ((s32)cfm_call(&imp_VSLNewInterruptService, entry, kVBLService, &id) != noErr || id == 0)
-        return;  /* Mac OS then works without VBL tasks, as before */
+        return;
+    g.ist_set = ist[2 * kISTChipInterruptSource];
+    g.ist_member = ist[2 * kISTChipInterruptSource + 1];
+    u32 refcon = 0, handler = 0, enabler = 0, disabler = 0;
+    if ((s32)cfm_call(&imp_GetInterruptFunctions, g.ist_set, g.ist_member, &refcon, &handler, &enabler,
+                      &disabler) != noErr) {
+        cfm_call(&imp_VSLDisposeInterruptService, id);
+        return;
+    }
+    g.isr_tv.code = (unsigned long)vbl_isr;
+    g.isr_tv.toc = 0;  /* our code doesn't use r2 */
+    if ((s32)cfm_call(&imp_InstallInterruptFunctions, g.ist_set, g.ist_member, 0, &g.isr_tv, 0, 0) != noErr) {
+        cfm_call(&imp_VSLDisposeInterruptService, id);
+        return;
+    }
+    g.old_refcon = refcon;
+    g.old_handler = handler;
+    g.isr_installed = 1;
     g.vbl_service = id;
-    cfm_call(&imp_DurationToAbsolute, g.vbl_period, (u32)(kVblMs * durationMillisecond));
-    vbl_arm();
+    hw_w(FB_IRQ_STATUS, FB_IRQ_VBL);  /* nothing stale */
+    hw_w(FB_IRQ_ENABLE, FB_IRQ_VBL);
+    if (enabler)  /* the interrupt controller's input on (chapter 9's example) */
+        cfm_call((const struct cfm_tvector *)enabler, g.ist_set, g.ist_member, refcon);
 }
 
 static void vbl_stop(void)
 {
-    const u32 id = g.vbl_service;
-    g.vbl_service = 0;  /* a handler already running won't re-arm */
-    if (g.vbl_running) {
-        u32 remaining[2];
-        cfm_call(&imp_CancelTimer, g.vbl_timer[0], remaining);
-        g.vbl_running = 0;
+    if (g.isr_installed) {
+        hw_w(FB_IRQ_ENABLE, 0);
+        hw_w(FB_IRQ_STATUS, FB_IRQ_VBL);
+        /* Chapter 9: handlers are not removed; the previous one goes back. */
+        cfm_call(&imp_InstallInterruptFunctions, g.ist_set, g.ist_member, g.old_refcon, g.old_handler, 0, 0);
+        g.isr_installed = 0;
     }
+    const u32 id = g.vbl_service;
+    g.vbl_service = 0;
     if (id)
         cfm_call(&imp_VSLDisposeInterruptService, id);
 }
