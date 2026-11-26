@@ -1,0 +1,161 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// core/machine/machine_config.h — the user's machine configuration (RAM,
+// ROM file, drives, start-up disk, display mode), and its text form, the
+// g3macpi.ini file on the SD card.
+//
+// Freestanding: fixed-size buffers, no allocation.
+//
+// File format (docs/machine-config.md):
+//
+//   ; comment            # comment
+//   [machine]
+//   ram_mb = 256
+//   rom = /g3macpi/rom/Mac OS ROM
+//   boot = auto          ; auto | cdrom | disk
+//   display = 1024x768x32 ; width x height x depth (8, 16, 32)
+//   jit = no             ; yes: the CPU's block cache and generated code
+//   sound = yes          ; the built-in sound (DAV bus, Burgundy), played by the host
+//   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
+//   autostart = yes      ; at power-on start the Mac at once (no: show the menu)
+//   sharp_pixels = no    ; yes: whole-number scaling on the host screen (sharp, may leave borders)
+//   time_zone = +01:00   ; the Mac's local time, from UTC (with internet time; -12:00 to +14:00)
+//   web = yes            ; the web interface (platform/common/web_ui.h)
+//   web_password = text  ; needed by the web interface if set (no ; or # in it)
+//   wifi = no            ; yes: the Pi's WiFi instead of its Ethernet port
+//   wifi_name = My WiFi  ; the network to join (its SSID, up to 32 bytes)
+//   wifi_password = text ; WPA2 passphrase, 8-63 characters; none: an open network
+//   wifi_country = GB    ; two-letter country code (sets the allowed channels)
+//   keyboard = us        ; us | uk: the Pi keyboard's layout, for typing in the menu
+//   pi_overclock = no    ; yes: the Pi's ARM cores at 2.0 GHz (config.txt, from the next power-on)
+//   [ata0.master]
+//   type = cdrom         ; none | disk | cdrom
+//   image = /g3macpi/disks/Mac OS 9.iso
+//   readonly = yes       ; disks only; CD-ROMs are always read-only
+//
+// Drive positions, as on a real Blue & White: ata0 is the mac-io ATA
+// channel (the CD-ROM bus: CD-ROM as master, often a Zip as slave), ata1
+// the primary channel of the CMD646 Ultra ATA controller (the hard-disk
+// bus). The B&W has no floppy drive: a [floppy] section is accepted and
+// reported, but has no effect.
+
+#ifndef G3_CORE_MACHINE_MACHINE_CONFIG_H
+#define G3_CORE_MACHINE_MACHINE_CONFIG_H
+
+#include "core/common/types.h"
+
+namespace g3 {
+
+struct MachineConfig {
+    static constexpr u32 kPathMax = 160;   // bytes including the terminating zero
+    static constexpr u32 kDrives = 4;      // ata0.master, ata0.slave, ata1.master, ata1.slave
+
+    enum class DriveType : u8 { None, Disk, CdRom };
+    enum class Boot : u8 { Auto, CdRom, Disk };
+
+    struct Drive {
+        DriveType type = DriveType::None;
+        char image[kPathMax] = {};         // empty: no medium (an empty CD-ROM drive)
+        bool read_only = false;
+    };
+
+    u32 ram_mb = 256;
+    char rom[kPathMax] = "/g3macpi/rom/Mac OS ROM";
+    Boot boot = Boot::Auto;
+    // Millions of colours by default (256 colours and thousands work too).
+    u32 width = 1024, height = 768, depth = 32;
+    // The CPU's decoded-block cache and AArch64 code generation
+    // (docs/cpu/jit-a64.md). Off by default until measured on the Pi.
+    bool jit = false;
+    // Built-in sound and Ethernet (docs/hardware/davbus.md, bmac.md).
+    bool sound = true;
+    bool network = true;
+    // The virtual dial-up modem on the serial port (docs/devices/modem.md).
+    bool modem = false;
+    // The web interface, and its password (empty: none).
+    static constexpr u32 kPasswordMax = 64;
+    bool web = true;
+    // At power-on: start the Mac at once (the menu with F12 or Esc).
+    bool autostart = true;
+    // The host screen: the Mac's picture filled to the screen (no) or scaled
+    // by a whole number, every Mac pixel the same size (yes).
+    bool sharp_pixels = false;
+    // The Mac's clock is local time (it has no time zone of its own); the
+    // host's internet time (UTC) plus this many minutes.
+    s32 utc_offset_minutes = 0;
+    static constexpr s32 kMinUtcOffset = -12 * 60, kMaxUtcOffset = 14 * 60;
+    char web_password[kPasswordMax] = {};
+    // WiFi (the Pi's own radio) instead of the Ethernet port, for the Mac
+    // and the web interface (docs/wifi.md).
+    static constexpr u32 kWifiNameMax = 33;      // SSID: up to 32 bytes (IEEE 802.11)
+    static constexpr u32 kWifiPasswordMax = 64;  // WPA2 passphrase: 8 to 63 characters
+    bool wifi = false;
+    char wifi_name[kWifiNameMax] = {};
+    char wifi_password[kWifiPasswordMax] = {};
+    char wifi_country[3] = {};
+    // The layout of the Pi's keyboard, for text typed into the menu (the
+    // Mac has its own keyboard layout setting).
+    enum class Keyboard : u8 { Us, Uk };
+    Keyboard keyboard = Keyboard::Us;
+    // The Pi's own CPU speed: 2.0 GHz instead of 1.8 (a block in the
+    // firmware's config.txt: platform/common/pi_overclock.h).
+    bool pi_overclock = false;
+    Drive drive[kDrives];
+
+    MachineConfig();  // the defaults: 256 MB, a CD-ROM drive as ata0 master
+
+    // Choices offered (and accepted from the file).
+    static constexpr u32 kRamChoices[] = {64, 128, 192, 256, 384, 512};
+    struct Mode { u32 width, height; };
+    static constexpr Mode kModes[] = {{640, 480}, {800, 600}, {1024, 768}, {1152, 870},
+                                      {1280, 1024}, {1600, 1200}};
+    static constexpr u32 kDepths[] = {8, 16, 32};
+
+    static const char* drive_name(u32 i);        // "ata0.master" ...
+    static const char* drive_label(u32 i);       // "ATA 0 master" ...
+    static const char* type_name(DriveType t);   // "none" "disk" "cdrom"
+    static const char* boot_name(Boot b);        // "auto" "cdrom" "disk"
+    static bool valid_ram(u32 mb);
+    static bool valid_mode(u32 width, u32 height, u32 depth);
+
+    // Sets drive i's image (truncation is refused: false, unchanged).
+    bool set_image(u32 i, const char* path);
+};
+
+// Result of parsing: the file is applied as far as it is valid; every line
+// that was ignored is counted, and the first one is described.
+struct ConfigParseReport {
+    u32 ignored = 0;           // lines ignored (unknown, malformed or invalid)
+    u32 first_line = 0;        // line number (from 1) of the first ignored line
+    char first_reason[80] = {};
+    bool floppy = false;       // a [floppy] section was present (no drive on the B&W)
+};
+
+// Parses `len` bytes of INI text into `config` (which keeps its values for
+// anything the text does not set).
+void parse_machine_config(const char* text, u32 len, MachineConfig& config, ConfigParseReport& report);
+
+// The drive to start up from (0..kDrives-1), or kDrives if none: with
+// boot = cdrom the first CD-ROM drive with a disc, with boot = disk the
+// first hard disk with an image, with auto a hard disk first, else a CD.
+// `has_image[i]`: drive i has a disc / image.
+//
+// has_system (optional): which images can start Mac OS (a blessed System
+// Folder with the ROM file, see rom_from_disc.h). With it, hard disks that
+// can come first, on the master positions (0, 2: the ones the firmware
+// starts from) before the slaves; a disk without a system (a new blank
+// one) is chosen only when nothing else can be, so adding one does not
+// stop the Mac from starting from its usual disk.
+// "+hh:mm" / "-hh:mm" (7 characters and a NUL).
+void format_utc_offset(s32 minutes, char out[8]);
+
+u32 choose_boot_drive(const MachineConfig& config, const bool has_image[MachineConfig::kDrives],
+                      const bool* has_system = nullptr);
+
+// Writes the configuration as INI text (with a header comment). Returns the
+// length written, or 0 if `cap` is too small.
+u32 write_machine_config(const MachineConfig& config, char* out, u32 cap);
+
+} // namespace g3
+
+#endif // G3_CORE_MACHINE_MACHINE_CONFIG_H

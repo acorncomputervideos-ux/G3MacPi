@@ -1,0 +1,120 @@
+# Virtual dial-up modem
+
+A modem the Mac can dial out with, as with a real Blue & White's optional
+internal 56K modem: Remote Access dials, the dial-up sounds play, and the
+"provider" at the other end is the emulator itself, which connects the
+Mac's PPP link to the network the Pi is on. Nothing is modulated; what is
+reproduced is what the Mac sees.
+
+## Pieces
+
+| Piece | Code | State |
+|---|---|---|
+| Serial port (SCC receive, DCD/CTS, DTR/RTS, interrupts) | `core/devices/macio/escc.*` | done (docs/hardware/escc.md) |
+| Hayes AT modem | `core/devices/modem/hayes_modem.*` | done |
+| PPP framing (RFC 1662) | `platform/common/ppp_framer.*` | done |
+| PPP provider end (LCP, PAP, IPCP, IP) | `platform/common/ppp_server.*` | done |
+| The provider's network side (DHCP for the Mac, ARP, IP over Ethernet) | `platform/common/dialup_link.*` | done |
+| Dial-up sounds, generated | `platform/common/modem_sound.*` | done |
+| Put together on channel A, in the session (`modem = yes`) | `platform/common/dialup_modem.*`, `net_tee.*` | done |
+| The Pi: menu "Modem", speaker mixed into the HDMI sound on core 3 | `platform/common/config_menu.*`, `app/circle/kernel.cpp`, `mac_host.h` | built; not yet tried on a Pi |
+| g3_host: `G3_MODEMWAV` (speaker), `G3_MODEMLOG` (bytes, DTR, events) | `app/host/main.cpp` | done |
+
+## The modem (hayes_modem.h)
+
+Behaviour follows the Hayes command set as modems of the period
+implemented it (the header lists the commands, result codes and S-register
+defaults it uses). Timing of a call: dial tone 1.5 s, each DTMF digit S11
+(95 ms) plus the same gap, ',' S8 (2 s), pulse digits 100 ms per pulse and
+700 ms between digits, ringback 4 s, answer and training 12 s; then
+`CONNECT 53333` and carrier detect on (`&C1`). The sound generator follows
+the modem's events, so what is heard matches the timing.
+
+Not modelled: incoming calls (ATA answers NO CARRIER), stored numbers,
+real line speeds (data is passed as fast as the serial port takes it; a
+56K-like limit is planned as an option), V.42/V.44 negotiation reports.
+
+## Tests
+
+`tests/unit/devices/test_hayes_modem.cpp`: commands and results, the dial
+sequence and its timing (to the millisecond), carrier, data in both
+directions, the escape (including "+++" inside data and four pluses),
+DTR and remote hang-ups. Sabotage runs (escape without the leading
+silence, DCD ignoring &C, DTR drop ignored, line data passed in command
+mode, no DTMF gap, V0 ignored, a key not aborting the dial, four pluses
+accepted) each fail a test.
+
+## The PPP end (ppp_server.h)
+
+Started when the modem connects. It asks for PAP (any name and password
+are accepted: the "Welcome to G3MacPi" message), ACCM 0, a magic number
+and both header compressions; it acknowledges the Mac's MRU, ACCM, magic
+number and compressions and rejects anything else (asking us to
+authenticate to it, call-back, ...). IPCP starts once the provider knows
+the Mac's address: the Mac's request for address and DNS 0.0.0.0 gets a
+Nak with them, VJ compression and NBNS are rejected. After that, IP
+packets pass both ways; other protocols (ATCP for AppleTalk, CCP ...)
+get a Protocol-Reject. Restart timer 3 s, at most 10 requests, then the
+call is ended. Tests: `tests/unit/platform/test_ppp_server.cpp` (the
+test plays the Mac's side); 10 sabotage runs, two of which needed the
+last two tests.
+
+## The network side (dialup_link.h)
+
+When the call is up, it asks the network's DHCP server for an address
+as the Mac (the Mac's hardware address, the BROADCAST flag set), and gives
+the PPP end the address, the router (as the PPP peer) and up to two DNS
+servers. It renews at half the lease. The Mac's IPv4 packets go out in
+Ethernet frames under the Mac's hardware address: to the router, or to
+a host on the same subnet, after ARP (up to 3 requests a second apart;
+up to 8 packets held meanwhile). It answers ARP for the Mac's address.
+Only IPv4 to the Mac's address and hardware address goes back to the
+Mac. On the network, the dialled-in Mac is the same station as the Mac
+on Ethernet; Mac OS uses one or the other at a time. Tests:
+`tests/unit/platform/test_dialup_link.cpp`; 8 sabotage runs, all caught.
+
+## The sounds (modem_sound.h)
+
+Generated from published tone definitions, not recordings: dial tone
+350 + 440 Hz and ringback 440 + 480 Hz (2 s on, 4 s off; North American
+Precise Tone Plan, ITU-T E.180 Supplement 2), DTMF (ITU-T Q.23), pulse
+clicks at 10 a second. The handshake is an approximation of a V.90 call:
+ANSam (2100 Hz, 15 Hz AM, phase reversals every 450 ms; V.25/V.8) for
+2.5 s, V.21 FSK (980/1180 and 1650/1850 Hz at 300 bit/s) for 1 s, line
+probing (tones every 150 Hz, 150-3750 Hz) for 1.5 s, then band-limited
+noise (training) until CONNECT. ATM0 silences it, ATM1 (the default)
+stops at CONNECT, ATM2 leaves a quiet hiss; ATL0-3 set the volume. It
+is mixed into the audio output on the core that plays it, clipped, not
+wrapped. Tests measure each sound's frequencies (Goertzel); 8 sabotage
+runs, 7 caught; the eighth (not muting after CONNECT in render_add) is
+also guarded in the sound itself.
+
+## Put together (dialup_modem.h)
+
+`modem = yes` in `[machine]` attaches the modem to the SCC's channel A.
+The Mac's bytes and DTR go to the modem; the modem's output enters the
+SCC's receiver one character per character time at the port's baud rate;
+the modem drives DCD and CTS is on. The network side shares the host's
+link with the Ethernet card through `NetTee`, which pulls frames in even
+while the card's receiver is off. The speaker goes to the host's
+`ModemSound` (MacHost::modem_sound). Test:
+`tests/unit/platform/test_dialup_modem.cpp` drives it through the SCC's
+registers (AT, pacing, dialling, carrier, the provider's first PPP frame,
+DTR hang-up); 4 sabotage runs, all caught.
+
+## With Mac OS 9.2.1 (tried in g3_host)
+
+Remote Access, the Modem control panel's "Internal Modem" and Apple's
+"PowerMac G3 Internal 56K" script: the script sets the modem up, dials,
+gets `CONNECT 53333`, and PPP comes up (PAP with the typed name and
+password, the Mac gets its address and DNS); the status shows "Connected
+at: 53333 bps". What that needed, beyond the pieces above:
+
+- The device tree names channel A "Modem" (`slot-names`), or the Modem
+  panel shows "no serial ports available" (docs/firmware/bw-device-tree.md).
+- Mac OS's serial driver (SerialDMA) runs both directions through DBDMA,
+  and uses FLUSH to see partial receives (docs/hardware/dbdma.md).
+- RR0's CTS bit reads inverted on Macs (docs/hardware/escc.md).
+- S registers up to S255 (the script sets S95).
+- S25: a DTR drop counts only after 50 ms; Mac OS resets the SCC just
+  after CONNECT, which drops DTR for microseconds, and the script sets &D3.

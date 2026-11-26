@@ -1,0 +1,60 @@
+# Builds the portable emulator core on Linux and runs all unit tests.
+name: host-tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.compiler }}" = clang ]; then export CXX=clang++; else export CXX=g++; fi
+          cmake -S . -B build/host -DG3_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build/host -j"$(nproc)"
+
+      - name: Unit tests
+        run: ./build/host/g3_unit_tests
+
+      - name: Core portability rules
+        run: tools/check-core.sh
+
+  # Code that runs inside the emulated Mac (guest/) is built with a
+  # PowerPC cross-compiler. This job checks the toolchain on a smoke file.
+  guest-toolchain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the PowerPC cross-compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-powerpc-linux-gnu binutils-powerpc-linux-gnu
+          powerpc-linux-gnu-gcc --version | head -1
+
+      - name: Build the smoke file for the 750
+        run: |
+          powerpc-linux-gnu-gcc -m32 -mbig-endian -mcpu=750 -ffreestanding -fno-builtin -nostdlib -O2 \
+            -c guest/smoke/smoke.c -o smoke.o
+          powerpc-linux-gnu-objdump -f smoke.o | tee objdump.txt
+          grep -q "elf32-powerpc" objdump.txt
+          powerpc-linux-gnu-objdump -d smoke.o | head -30
+
+      - name: Run compiled guest code on the emulated 750
+        run: |
+          cmake -S . -B build/guest -DG3_SANITIZE=ON
+          cmake --build build/guest --target g3_guest_tests g3_guest_cfm g3_guest_ndrv -j"$(nproc)"
+          ./build/guest/g3_guest_tests build/guest/guest/kernels.elf
+          ./build/guest/g3_guest_cfm build/guest/guest/cfm_demo.pef build/guest/guest/cfm_demo.so
+          ./build/guest/g3_guest_ndrv build/guest/guest/g3_ndrv.pef

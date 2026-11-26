@@ -1,0 +1,1889 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The decoded-block cache (core/cpu/ppc750/block_cache.h) against the
+// interpreter. Two CPUs run the same program: one interprets, one uses the
+// block cache. After every slice of a random length their registers,
+// instruction counts and all of memory must be identical.
+//
+// The programs are random instruction mixes over the whole low 32 KB, the
+// exception vectors included: arithmetic, loads and stores (many of them
+// into the code itself), branches, CR operations, system calls, traps,
+// MSR and SPR writes, illegal words. Between slices both CPUs get the same
+// external-interrupt changes and time-base advances, so interrupts arrive
+// in the middle of blocks. Some runs have address translation on (BATs).
+
+#include "core/cpu/ppc750/block_cache.h"
+#include "core/cpu/ppc750/jit_worker.h"
+#include "core/cpu/ppc750/ppc750.h"
+#include "core/mem/flat_memory.h"
+#include "tests/framework/g3test.h"
+#include "tests/unit/cpu/ppc_asm.h"
+#include "tools/a64sim/a64_sim.h"
+#include "platform/common/jit_report.h"
+
+#include <cstdio>
+#include <cstring>
+#include <atomic>
+#include <chrono>
+#include <initializer_list>
+#include <memory>
+#include <thread>
+#include <vector>
+
+using namespace g3;
+using namespace g3::ppc;
+using namespace asm_ppc;
+
+namespace {
+
+constexpr u32 kRam = 1024 * 1024;
+constexpr u32 kCodeBytes = 0x8000;
+
+struct Rng {
+    u64 s;
+    explicit Rng(u64 seed) : s(seed * 0x9E3779B97F4A7C15ull + 1) {}
+    u32 next()
+    {
+        s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+        return static_cast<u32>(s >> 16);
+    }
+    u32 below(u32 n) { return next() % n; }
+};
+
+// Every test runs three times: "cpu/blocks/..." with the block cache,
+// "cpu/jit/..." with generated AArch64 code for the blocks as well (run on
+// the A64 simulator here; natively on an AArch64 host), and "cpu/jitbg/..."
+// with the code compiled by a JitWorker on another thread while the CPU
+// runs (jit_worker.h): when code arrives is then up to the scheduler, and
+// the results must still be identical.
+bool g_jit = false;
+bool g_jit_bg = false;
+u32 g_jit_words = 1u << 20;
+
+struct Machine {
+    std::vector<u8> ram = std::vector<u8>(kRam);
+    FlatMemory mem{ram.data(), kRam};
+    Ppc750 cpu{mem};
+    std::vector<u8> arena;
+    BlockCache cache;
+    std::vector<u32> code;
+    const void* range[2] = {};
+    explicit Machine(u32 arena_bytes)
+    {
+        if (arena_bytes) {
+            arena.resize(arena_bytes);
+            REQUIRE(cache.init(arena.data(), arena_bytes, kRam));
+            cpu.set_block_cache(&cache);
+            if (g_jit) {
+                code.resize(g_jit_words);
+                range[0] = code.data();
+                range[1] = code.data() + code.size();
+#if defined(__aarch64__)
+                REQUIRE(cpu.set_jit(code.data(), g_jit_words, nullptr, nullptr));
+#else
+                REQUIRE(cpu.set_jit(code.data(), g_jit_words, a64::simulate_jit_block, range));
+#endif
+                if (g_jit_bg) {
+                    worker = std::make_unique<JitWorker>(cpu);
+                    cpu.set_jit_worker(worker.get());
+                    thread = std::thread([this] {
+                        while (!stop.load(std::memory_order_acquire))
+                            if (!worker->poll())
+                                std::this_thread::yield();
+                    });
+                }
+            }
+        }
+    }
+    std::unique_ptr<JitWorker> worker;
+    std::thread thread;
+    std::atomic<bool> stop{false};
+    // Stops the worker thread; its statistics are then stable.
+    const JitWorker::Stats* stop_worker()
+    {
+        if (!worker)
+            return nullptr;
+        if (thread.joinable()) {
+            stop.store(true, std::memory_order_release);
+            thread.join();
+        }
+        return &worker->stats();
+    }
+    ~Machine() { stop_worker(); }
+};
+
+const u32 kOp31[] = {0, 32, 8, 10, 11, 19, 24, 26, 28, 40, 60, 75, 83, 104, 124, 136, 138, 144,
+                     200, 202, 232, 234, 235, 266, 284, 316, 339, 371, 412, 444, 459, 476, 491,
+                     512, 536, 792, 824, 922, 954,
+                     // loads/stores (indexed)
+                     23, 55, 87, 119, 151, 183, 215, 247, 279, 311, 343, 375, 407, 439,
+                     534, 662, 790, 918, 20, 150, 597, 725, 1014, 54, 86, 246, 278, 982, 598, 854};
+const u32 kSafeSpr[] = {1, 8, 9, 26, 27, 272, 273, 274, 275, 22};
+
+u32 random_insn(Rng& r, bool allow_mtmsr)
+{
+    const u32 rd = r.below(32), ra = r.below(32), rb = r.below(32);
+    const u32 pick = r.below(100);
+    if (pick < 22) {  // D-form arithmetic, compare, logical
+        static const u32 ops[] = {7, 8, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29};
+        return D(ops[r.below(14)], rd, ra, r.next() & 0xFFFF);
+    }
+    if (pick < 30)  // rotates
+        return M(r.below(2) ? 21 : (r.below(2) ? 20 : 23), rd, ra, rb, r.below(32), r.below(32), r.below(2));
+    if (pick < 48) {  // op31, random OE/Rc
+        const u32 xo = kOp31[r.below(sizeof kOp31 / sizeof kOp31[0])];
+        if (xo == 339)
+            return mfspr(rd, kSafeSpr[r.below(10)]);
+        if (xo == 144)
+            return mtcrf(r.below(256), rd);
+        // Indexed accesses: base 0 (absolute) most of the time, so they land
+        // in the program and its data.
+        const bool mem = (xo & 3) == 3 || xo == 20 || xo == 150 || xo >= 534 || xo == 1014 || xo == 982 ||
+                         xo == 54 || xo == 86 || xo == 246 || xo == 278;
+        return X(31, rd, mem && r.below(4) ? 0 : ra, rb, xo, r.below(2)) | (r.below(8) == 0 ? 0x400u : 0);
+    }
+    if (pick < 68) {  // D-form loads and stores, absolute into the low 32 KB (code included)
+        const u32 op = 32 + r.below(16);
+        u32 d = r.below(kCodeBytes);
+        if (op == 40 || op == 41 || op == 42 || op == 43 || op == 44 || op == 45) d &= ~1u;
+        if (op < 40 || op == 46 || op == 47) d &= ~3u;
+        return D(op, op >= 46 ? 24 + r.below(8) : rd, r.below(5) ? 0 : ra, d);
+    }
+    if (pick < 76) {  // relative branches nearby (sometimes linking)
+        const int32_t disp = (static_cast<int32_t>(r.below(129)) - 64) * 4;
+        if (r.below(2))
+            return b(disp, false, r.below(4) == 0);
+        static const u32 bos[] = {4, 12, 16, 18, 20, 0, 2, 8, 10};
+        return bc(bos[r.below(9)], r.below(32), disp, false, r.below(4) == 0);
+    }
+    if (pick < 79) {  // bclr / bcctr: LR and CTR mostly hold small addresses here
+        return r.below(2) ? bclr(r.below(2) ? 20 : 12, r.below(32), r.below(3) == 0)
+                          : X(19, r.below(2) ? 20 : 12, r.below(32), 0, 528, r.below(3) == 0);
+    }
+    if (pick < 85) {  // CR logical, mcrf
+        static const u32 xos[] = {33, 129, 193, 225, 257, 289, 417, 449};
+        return r.below(4) ? crop(xos[r.below(8)], rd, ra, rb) : mcrf(r.below(8), r.below(8));
+    }
+    if (pick < 87)
+        return mtspr(kSafeSpr[r.below(10)], rd);
+    if (pick < 88)
+        return sc();
+    if (pick < 89)
+        return twi(r.below(32), ra, r.next() & 0xFFFF);
+    if (pick < 90)
+        return allow_mtmsr ? mtmsr(rd) : isync();
+    if (pick < 91)
+        return r.below(3) ? isync() : rfi();
+    if (pick < 93)  // FP (unavailable unless MSR[FP]): exceptions
+        return D(48 + r.below(8), rd, 0, r.below(kCodeBytes) & ~7u);
+    if (pick < 95)
+        return 0x00000000u;  // illegal
+    return r.next();         // anything at all
+}
+
+void load_program(Machine& m, Rng& r, bool allow_mtmsr)
+{
+    for (u32 a = 0; a < kCodeBytes; a += 4)
+        store_be32(m.ram.data() + a, random_insn(r, allow_mtmsr));
+}
+
+void setup_state(Machine& m, Rng& r, bool translate)
+{
+    CpuState& s = m.cpu.state();
+    for (u32 i = 0; i < 32; ++i)
+        s.gpr[i] = r.below(3) ? r.below(kCodeBytes) & ~3u : r.next();
+    s.lr() = r.below(kCodeBytes) & ~3u;
+    s.ctr() = r.below(64);
+    s.pc = 0x100 + 4 * r.below(256);
+    s.msr = msr::ME;
+    if (translate) {
+        // BAT 0 maps EA 0..1 MB to PA 0 read/write; BAT 1 maps EA 0x10000000 to PA 0.
+        s.spr[spr::IBAT0U] = s.spr[spr::DBAT0U] = 0x0000001Fu;
+        s.spr[spr::IBAT0U + 1] = s.spr[spr::DBAT0U + 1] = 0x00000002u;
+        s.spr[spr::IBAT0U + 2] = s.spr[spr::DBAT0U + 2] = 0x1000001Fu;
+        s.spr[spr::IBAT0U + 3] = s.spr[spr::DBAT0U + 3] = 0x00000002u;
+        s.msr |= msr::IR | msr::DR;
+        m.cpu.flush_tlb();
+    }
+}
+
+bool same(Machine& a, Machine& b, const char* what, int run, u32 slice)
+{
+    const CpuState& x = a.cpu.state();
+    const CpuState& y = b.cpu.state();
+    const char* bad = nullptr;
+    if (std::memcmp(x.gpr, y.gpr, sizeof x.gpr)) bad = "gpr";
+    else if (std::memcmp(x.fpr, y.fpr, sizeof x.fpr)) bad = "fpr";
+    else if (x.cr != y.cr) bad = "cr";
+    else if (x.fpscr != y.fpscr) bad = "fpscr";
+    else if (x.msr != y.msr) bad = "msr";
+    else if (x.pc != y.pc) bad = "pc";
+    else if (std::memcmp(x.sr, y.sr, sizeof x.sr)) bad = "sr";
+    else if (std::memcmp(x.spr, y.spr, sizeof x.spr)) bad = "spr";
+    else if (x.tb != y.tb) bad = "tb";
+    else if (x.reservation_valid != y.reservation_valid ||
+             (x.reservation_valid && x.reservation_addr != y.reservation_addr)) bad = "reservation";
+    else if (a.cpu.instructions_executed() != b.cpu.instructions_executed()) bad = "instruction count";
+    else if (a.cpu.checkstopped() != b.cpu.checkstopped()) bad = "checkstop";
+    else if (a.ram != b.ram) bad = "memory";
+    if (bad)
+        std::printf("    %s run %d slice %u: %s differs (pc %08X vs %08X, count %llu vs %llu)\n", what, run,
+                    slice, bad, x.pc, y.pc, static_cast<unsigned long long>(a.cpu.instructions_executed()),
+                    static_cast<unsigned long long>(b.cpu.instructions_executed()));
+    return bad == nullptr;
+}
+
+struct Totals {
+    u64 hits = 0, built = 0, invalidations = 0, flushes = 0, executed = 0;
+    u64 jit_runs = 0, jit_native = 0, jit_resets = 0;
+};
+
+// One random program on an interpreter and a block-cache CPU; false on
+// the first difference.
+bool differential_run(int seed, bool translate, u32 arena_bytes, Totals& t)
+{
+    Machine interp(0), blocks(arena_bytes);
+    Rng r(static_cast<u64>(seed));
+    load_program(interp, r, translate);
+    std::memcpy(blocks.ram.data(), interp.ram.data(), kRam);
+    Rng rs(static_cast<u64>(seed) + 1000);
+    setup_state(interp, rs, translate);
+    Rng rs2(static_cast<u64>(seed) + 1000);
+    setup_state(blocks, rs2, translate);
+
+    Rng ev(static_cast<u64>(seed) + 5000);
+    bool irq = false;
+    for (u32 slice = 0; slice < 400; ++slice) {
+        const u32 n = 1 + ev.below(ev.below(4) ? 64 : 2000);
+        interp.cpu.run(n);
+        blocks.cpu.run(n);
+        if (!same(interp, blocks, translate ? "translated" : "real", seed, slice))
+            return false;
+        if (interp.cpu.checkstopped())
+            break;
+        // Same events for both, between slices (so mid-block for the cache).
+        if (ev.below(8) == 0)
+            irq = !irq;
+        const u32 ticks = ev.below(16) == 0 ? ev.below(40) : 0;
+        for (Machine* m : {&interp, &blocks}) {
+            m->cpu.set_external_interrupt(irq);
+            if (ticks)
+                m->cpu.advance_timebase(ticks);
+            // Keep the programs alive: an occasional enable of EE/ME.
+            if (slice % 50 == 49)
+                m->cpu.state().msr |= msr::EE | msr::ME;
+        }
+    }
+    const BlockCache::Stats& st = blocks.cache.stats();
+    t.hits += st.hits;
+    t.built += st.built;
+    t.invalidations += st.invalidations;
+    t.flushes += st.flushes;
+    t.executed += blocks.cpu.instructions_executed();
+    t.jit_runs += blocks.cpu.jit_stats().runs;
+    t.jit_native += blocks.cpu.jit_stats().native_ops;
+    t.jit_resets += blocks.cpu.jit_stats().resets;
+    if (const JitWorker::Stats* ws = blocks.stop_worker())
+        t.jit_resets += ws->resets;
+    return true;
+}
+
+} // namespace
+
+// Defines the test body once and registers it in both modes.
+#define BOTH(name)                                                                        \
+    static void name##_body();                                                            \
+    TEST_CASE("cpu/blocks/" #name)                                                        \
+    {                                                                                     \
+        g_jit = false;                                                                    \
+        name##_body();                                                                    \
+    }                                                                                     \
+    TEST_CASE("cpu/jit/" #name)                                                           \
+    {                                                                                     \
+        g_jit = true;                                                                     \
+        name##_body();                                                                    \
+        g_jit = false;                                                                    \
+    }                                                                                     \
+    TEST_CASE("cpu/jitbg/" #name)                                                         \
+    {                                                                                     \
+        g_jit = g_jit_bg = true;                                                          \
+        name##_body();                                                                    \
+        g_jit = g_jit_bg = false;                                                         \
+    }                                                                                     \
+    static void name##_body()
+
+BOTH(differential_real_mode)
+{
+    Totals t;
+    int failed = 0;
+    for (int seed = 1; seed <= 300 && failed < 3; ++seed)
+        failed += !differential_run(seed, false, 4u << 20, t);
+    CHECK_EQ(failed, 0);
+    std::printf("    real mode: %llu instructions, %llu blocks built, %llu hits, %llu page invalidations\n",
+                static_cast<unsigned long long>(t.executed), static_cast<unsigned long long>(t.built),
+                static_cast<unsigned long long>(t.hits), static_cast<unsigned long long>(t.invalidations));
+    // The test means something only if blocks were reused and code was rewritten.
+    CHECK(t.hits > t.built);
+    CHECK(t.invalidations > 100);
+    if (g_jit) {
+        std::printf("    jit: %llu block runs in generated code, %llu instructions compiled natively\n",
+                    static_cast<unsigned long long>(t.jit_runs), static_cast<unsigned long long>(t.jit_native));
+        CHECK(t.jit_runs > t.built);
+        CHECK(t.jit_native > 10000);
+    }
+}
+
+BOTH(differential_translated)
+{
+    Totals t;
+    int failed = 0;
+    for (int seed = 1001; seed <= 1200 && failed < 3; ++seed)
+        failed += !differential_run(seed, true, 4u << 20, t);
+    CHECK_EQ(failed, 0);
+    CHECK(t.hits > t.built);
+}
+
+BOTH(differential_tiny_cache)
+{
+    // A cache with the smallest pool init() accepts: it fills and is flushed
+    // over and over while running.
+    Totals t;
+    int failed = 0;
+    const u32 arena = 4 * (kRam >> 12) * 5 + 4 * (1u << BlockCache::kMinTableBits) + 64 * BlockCache::block_bytes(BlockCache::kMaxOps) + 64;
+    for (int seed = 2001; seed <= 2100 && failed < 3; ++seed)
+        failed += !differential_run(seed, seed & 1, arena, t);
+    CHECK_EQ(failed, 0);
+    CHECK(t.flushes > 100);
+}
+
+BOTH(self_modifying_loop)
+{
+    // A loop that rewrites the instruction it runs next: "addi r3,r3,1" is
+    // replaced with "addi r3,r3,100" by the loop itself, in the same block.
+    Machine m(4u << 20);
+    u8* ram = m.ram.data();
+    const u32 base = 0x2000;
+    const u32 prog[] = {
+        li(4, 10),               // 2000  counter
+        lis(5, 0x3863),          // 2004  r5 = addi r3,r3,100 = 0x38630064
+        ori(5, 5, 0x0064),       // 2008
+        stw(5, 0x2014, 0),       // 200C  overwrite the instruction at 2014 ...
+        addi(4, 4, -1),          // 2010
+        addi(3, 3, 1),           // 2014  ... which runs right after, in the same block
+        cmpwi(0, 4, 0),          // 2018
+        bne(-0x10),              // 201C  back to 200C
+        0x00000000u,             // 2020  illegal: stops (program exception)
+    };
+    for (u32 i = 0; i < sizeof prog / 4; ++i)
+        store_be32(ram + base + 4 * i, prog[i]);
+    m.cpu.state().pc = base;
+    m.cpu.state().msr = msr::ME;
+    m.cpu.run(3 + 10 * 5);
+    // Every pass ran the rewritten instruction: 10 * 100.
+    CHECK_EQ(m.cpu.state().gpr[3], 1000u);
+    CHECK_EQ(m.cpu.state().pc, base + 0x20);
+    CHECK(m.cache.stats().invalidations >= 1);
+}
+
+BOTH(dma_write_through_bus_observer)
+{
+    // A block is built, then the code is changed behind the CPU's back
+    // (as DMA would) and reported with note_write: the next run must use
+    // the new code.
+    Machine m(4u << 20);
+    u8* ram = m.ram.data();
+    store_be32(ram + 0x3000, li(3, 1));
+    store_be32(ram + 0x3004, b(-4));
+    m.cpu.state().pc = 0x3000;
+    m.cpu.run(10);
+    CHECK_EQ(m.cpu.state().gpr[3], 1u);
+    store_be32(ram + 0x3000, li(3, 2));
+    m.cache.note_write(0x3000, 4);
+    m.cpu.state().pc = 0x3000;
+    m.cpu.run(1);
+    CHECK_EQ(m.cpu.state().gpr[3], 2u);
+}
+
+BOTH(interrupt_mid_block)
+{
+    // The decrementer fires in the middle of a long block: the exception
+    // must be taken at the same instruction as the interpreter's.
+    for (u32 cut = 1; cut < 40; ++cut) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            for (u32 i = 0; i < 64; ++i)
+                store_be32(m->ram.data() + 0x4000 + 4 * i, addi(3, 3, 1));
+            store_be32(m->ram.data() + 0x900, 0x00000000u);
+            m->cpu.state().pc = 0x4000;
+            m->cpu.state().msr = msr::ME | msr::EE;
+            m->cpu.state().spr[spr::DEC] = 1;
+            m->cpu.run(cut);
+            m->cpu.advance_timebase(2);  // DEC 1 -> 0xFFFFFFFF: pending
+            m->cpu.run(1);  // takes the interrupt
+        }
+        CHECK_EQ(c.cpu.state().gpr[3], a.cpu.state().gpr[3]);
+        CHECK_EQ(c.cpu.state().pc, a.cpu.state().pc);
+        CHECK_EQ(c.cpu.state().spr[spr::SRR0], a.cpu.state().spr[spr::SRR0]);
+        CHECK_EQ(c.cpu.state().spr[spr::SRR0], 0x4000u + 4 * cut);
+    }
+}
+
+namespace {
+// Runs `prog` at `base` on an interpreter and on a block-cache CPU with
+// the same setup, `count` instructions in slices of `slice`; checks the
+// states agree. `prep` adjusts each machine first.
+template <typename Prep>
+void run_both(const u32* prog, u32 words, u32 base, u32 count, u32 slice, Prep prep, Machine& a, Machine& c)
+{
+    for (Machine* m : {&a, &c}) {
+        for (u32 i = 0; i < words; ++i)
+            store_be32(m->ram.data() + base + 4 * i, prog[i]);
+        m->cpu.state().pc = base;
+        m->cpu.state().msr = msr::ME;
+        prep(*m);
+        for (u32 done = 0; done < count; done += slice)
+            m->cpu.run(slice);
+    }
+    CHECK(same(a, c, "directed", 0, 0));
+}
+} // namespace
+
+BOTH(interrupt_raised_inside_block)
+{
+    // mftb calls the time hook, which advances the time base far enough
+    // for the decrementer to fire: the interrupt becomes pending in the
+    // middle of a block and must be taken right after the mftb, as the
+    // interpreter does.
+    const u32 prog[] = {addi(3, 3, 1), addi(3, 3, 1), mftb(5, 268), addi(3, 3, 1), addi(3, 3, 1),
+                        addi(3, 3, 1), b(-24)};
+    Machine a(0), c(4u << 20);
+    run_both(prog, 7, 0x4000, 60, 60, [](Machine& m) {
+        m.cpu.state().msr |= msr::EE;
+        m.cpu.state().spr[spr::DEC] = 1;
+        store_be32(m.ram.data() + 0x900, addi(7, 7, 1));  // the handler: count, then loop forever
+        store_be32(m.ram.data() + 0x904, b(0));
+        m.cpu.set_time_hook([](void* cpu) { static_cast<Ppc750*>(cpu)->advance_timebase(4); }, &m.cpu);
+    }, a, c);
+    CHECK_EQ(c.cpu.state().spr[spr::SRR0], 0x400Cu);  // after the mftb
+    CHECK_EQ(c.cpu.state().gpr[7], 1u);
+}
+
+namespace {
+// Places (address, word) pairs in both machines' memory.
+struct Word { u32 addr, insn; };
+void place(Machine& m, std::initializer_list<Word> words)
+{
+    for (const Word& w : words)
+        store_be32(m.ram.data() + w.addr, w.insn);
+}
+u32 call(u32 from, u32 to) { return b(static_cast<int32_t>(to - from), false, true); }
+void map_bats(Machine& m)
+{
+    CpuState& s = m.cpu.state();
+    s.spr[spr::IBAT0U] = s.spr[spr::DBAT0U] = 0x0000001Fu;  // EA 0..1 MB = PA, read/write
+    s.spr[spr::IBAT0U + 1] = s.spr[spr::DBAT0U + 1] = 0x00000002u;
+    s.msr |= msr::IR | msr::DR;
+    m.cpu.flush_tlb();
+}
+} // namespace
+
+BOTH(page_crossing_and_reserved_stores_into_code)
+{
+    // With data translation on, a word store that straddles a page edge is
+    // done byte by byte, and stwcx. has its own write path: both rewrite
+    // code that already has blocks.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, li(3, 0)},           {0x5004, call(0x5004, 0x6000)},  // r3 = 1
+            {0x5008, li(4, 0x3880)},      {0x500C, stw(4, 0x5FFE, 0)},     // 0x6000 becomes li r4,1
+            {0x5010, li(3, 0)},           {0x5014, call(0x5014, 0x6000)},  // r4 = 1, r3 stays 0
+            {0x5018, li(9, 0x7000)},      {0x501C, call(0x501C, 0x7000)},  // r5 = 5
+            {0x5020, lis(10, 0x38A0)},    {0x5024, ori(10, 10, 7)},        // r10 = li r5,7
+            {0x5028, lwarx(11, 0, 9)},    {0x502C, stwcx(10, 0, 9)},
+            {0x5030, li(5, 0)},           {0x5034, call(0x5034, 0x7000)},  // r5 = 7
+            {0x5038, 0x00000000u},
+            {0x6000, li(3, 1)},           {0x6004, blr()},
+            {0x7000, li(5, 5)},           {0x7004, blr()},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        map_bats(*m);
+        m->cpu.run(22);
+    }
+    CHECK(same(a, c, "page crossing", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 0u);
+    CHECK_EQ(c.cpu.state().gpr[4], 1u);
+    CHECK_EQ(c.cpu.state().gpr[5], 7u);
+    CHECK_EQ(c.cpu.state().pc, 0x5038u);
+}
+
+BOTH(block_ends_at_page_end)
+{
+    // A subroutine that runs over a page edge, whose second page is then
+    // rewritten: blocks stop at the page end, so the new code is seen.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, call(0x5000, 0x5FF8)},                            // r5 = 3
+            {0x5004, lis(6, 0x38A0)},  {0x5008, ori(6, 6, 9)},         // li r5,9
+            {0x500C, stw(6, 0x6000, 0)},
+            {0x5010, li(5, 0)},        {0x5014, call(0x5014, 0x5FF8)}, // r5 = 9
+            {0x5018, 0x00000000u},
+            {0x5FF8, li(3, 1)}, {0x5FFC, li(4, 2)}, {0x6000, li(5, 3)}, {0x6004, blr()},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.run(14);
+    }
+    CHECK(same(a, c, "page end", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 9u);
+    CHECK_EQ(c.cpu.state().pc, 0x5018u);
+}
+
+BOTH(code_watch_same_as_interpreter)
+{
+    // The code watch reports page entries: the same ones, in the same
+    // order, with or without the cache.
+    struct Log {
+        u32 pcs[64] = {};
+        u32 n = 0;
+    };
+    Log logs[2];
+    Machine a(0), c(4u << 20);
+    Machine* ms[2] = {&a, &c};
+    for (u32 k = 0; k < 2; ++k) {
+        Machine& m = *ms[k];
+        place(m, {
+            {0x5000, li(7, 5)},  {0x5004, mtspr(9, 7)},                // ctr = 5
+            {0x5008, call(0x5008, 0x6010)}, {0x500C, bdnz(-4)},
+            {0x5010, 0x00000000u},
+            {0x6010, addi(3, 3, 1)}, {0x6014, blr()},
+        });
+        m.cpu.state().pc = 0x5000;
+        m.cpu.state().msr = msr::ME;
+        m.cpu.set_code_watch(0x6000, 0x6FFF, [](void* ctx, u32 pc) {
+            Log* l = static_cast<Log*>(ctx);
+            if (l->n < 64)
+                l->pcs[l->n++] = pc;
+        }, &logs[k]);
+        m.cpu.run(22);
+    }
+    CHECK(same(a, c, "watch", 0, 0));
+    CHECK_EQ(logs[0].n, 5u);
+    CHECK_EQ(logs[1].n, logs[0].n);
+    CHECK(std::memcmp(logs[0].pcs, logs[1].pcs, sizeof logs[0].pcs) == 0);
+    CHECK_EQ(c.cpu.state().pc, 0x5010u);
+}
+
+BOTH(break_run_and_checkstop_inside_block)
+{
+    // break_run() from the time hook (as the machine does after a DEC
+    // write) ends run() right after that instruction; a machine check with
+    // MSR[ME] = 0 stops the CPU at once. Same as the interpreter.
+    const u32 prog[] = {addi(3, 3, 1), mftb(5, 268), addi(3, 3, 1), addi(3, 3, 1),
+                        lwz(6, 0, 7),  // r7 = 0x80000000: outside RAM, machine check
+                        addi(3, 3, 1), b(-24)};
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {});
+        for (u32 i = 0; i < 7; ++i)
+            store_be32(m->ram.data() + 0x4000 + 4 * i, prog[i]);
+        m->cpu.state().pc = 0x4000;
+        m->cpu.state().msr = 0;  // ME = 0
+        m->cpu.state().gpr[7] = 0x80000000u;
+        m->cpu.set_time_hook([](void* cpu) { static_cast<Ppc750*>(cpu)->break_run(); }, &m->cpu);
+        m->cpu.run(100);
+        CHECK_EQ(m->cpu.instructions_executed(), 2u);  // stopped after the mftb
+        m->cpu.run(100);
+        CHECK(m->cpu.checkstopped());
+    }
+    CHECK(same(a, c, "break/checkstop", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 3u);
+}
+
+BOTH(external_interrupt_raised_inside_block)
+{
+    // A device raises the external interrupt during an instruction (here
+    // from the time hook, as an MMIO write would): it must be taken right
+    // after that instruction, as the interpreter does.
+    const u32 prog[] = {addi(3, 3, 1), mftb(5, 268), addi(3, 3, 1), addi(3, 3, 1), addi(3, 3, 1), b(-20)};
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        for (u32 i = 0; i < 6; ++i)
+            store_be32(m->ram.data() + 0x4000 + 4 * i, prog[i]);
+        place(*m, {{0x500, addi(7, 7, 1)}, {0x504, b(0)}});
+        m->cpu.state().pc = 0x4000;
+        m->cpu.state().msr = msr::ME | msr::EE;
+        m->cpu.set_time_hook([](void* cpu) { static_cast<Ppc750*>(cpu)->set_external_interrupt(true); }, &m->cpu);
+        m->cpu.run(40);
+    }
+    CHECK(same(a, c, "external", 0, 0));
+    CHECK_EQ(c.cpu.state().spr[spr::SRR0], 0x4008u);  // after the mftb
+    CHECK_EQ(c.cpu.state().gpr[3], 1u);
+}
+
+BOTH(code_buffer_runs_out)
+{
+    // A code buffer of the smallest size set_jit accepts: it fills again
+    // and again; each time everything is flushed and compiled afresh.
+    const u32 saved = g_jit_words;
+    g_jit_words = 1024;
+    Totals t;
+    int failed = 0;
+    for (int seed = 3001; seed <= 3040 && failed < 3; ++seed)
+        failed += !differential_run(seed, seed & 1, 4u << 20, t);
+    g_jit_words = saved;
+    CHECK_EQ(failed, 0);
+    if (g_jit)
+        CHECK(t.jit_resets > 20);
+}
+
+namespace {
+// BATs for the memory tests: BAT0 maps EA 0..1 MB to PA 0, supervisor and
+// user, read/write; BAT1 maps EA 0x10000000.. (128 KB) to PA 0x40000,
+// supervisor only, read-only (BATL PP = 01).
+void map_test_bats(Machine& m)
+{
+    CpuState& s = m.cpu.state();
+    s.spr[spr::IBAT0U] = s.spr[spr::DBAT0U] = 0x0000001Fu;
+    s.spr[spr::IBAT0U + 1] = s.spr[spr::DBAT0U + 1] = 0x00000002u;
+    s.spr[spr::DBAT0U + 2] = 0x10000002u;               // BEPI 0x10000000, 128 KB, Vs only
+    s.spr[spr::DBAT0U + 3] = 0x00040001u;               // BRPN 0x40000, PP = read-only
+    s.msr |= msr::IR | msr::DR;
+    m.cpu.flush_tlb();
+}
+} // namespace
+
+BOTH(unaligned_and_page_crossing_accesses)
+{
+    // Word and halfword accesses at every offset around a page edge, in
+    // real mode and translated: those that cross go the slow way.
+    for (int translated = 0; translated < 2; ++translated) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            u32 at = 0x5000;
+            for (u32 off = 0x1FF8; off <= 0x2004; ++off) {
+                const u32 words[] = {lwz(3, off, 0), stw(4, off, 0), lhz(5, off, 0), sth(6, off, 0),
+                                     lbz(7, off, 0), stb(8, off, 0), addi(4, 4, 0x111), addi(6, 6, 0x22)};
+                for (u32 w : words) {
+                    store_be32(m->ram.data() + at, w);
+                    at += 4;
+                }
+            }
+            store_be32(m->ram.data() + at, 0x00000000u);
+            for (u32 k = 0; k < 64; ++k)
+                m->ram[0x1FE0 + k] = static_cast<u8>(k * 7 + 1);
+            m->cpu.state().pc = 0x5000;
+            m->cpu.state().msr = msr::ME;
+            m->cpu.state().gpr[4] = 0xA1B2C3D4u;
+            m->cpu.state().gpr[6] = 0x5566u;
+            m->cpu.state().gpr[8] = 0x99u;
+            if (translated)
+                map_test_bats(*m);
+            m->cpu.run((at - 0x5000) / 4);
+        }
+        CHECK(same(a, c, "page edge", translated, 0));
+        CHECK_EQ(c.cpu.state().pc, 0x5000u + 13 * 32);
+    }
+}
+
+BOTH(read_only_and_user_mode_translations)
+{
+    // A supervisor load through read-only BAT1 puts an entry in the data
+    // TLB; a store through it must still fault (DSI), and so must a user
+    // load (BAT1 is supervisor-only) although a supervisor entry exists.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lwz(3, 0, 4)},        // supervisor load: TLB entry, not writable
+            {0x5004, lwz(3, 4, 4)},        // again, a hit
+            {0x5008, stw(5, 0, 4)},        // store: DSI
+            {0x500C, 0x00000000u},
+            // DSI handler: count, then go to user mode at 0x6000.
+            {0x300, addi(30, 30, 1)},
+            {0x304, cmpwi(0, 30, 1)},
+            {0x308, bne(0x10)},            // second DSI: to 0x318
+            {0x30C, mtspr(26, 20)},        // SRR0 = r20 (0x6000)
+            {0x310, mtspr(27, 21)},        // SRR1 = r21 (user, IR, DR, ME)
+            {0x314, rfi()},
+            {0x318, b(0)},                 // stop here
+            {0x6000, lwz(6, 0, 4)},        // user load through BAT1: DSI
+            {0x6004, 0x00000000u},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[4] = 0x10000000u;
+        m->cpu.state().gpr[5] = 0xDEADBEEFu;
+        m->cpu.state().gpr[20] = 0x6000u;
+        m->cpu.state().gpr[21] = msr::PR | msr::IR | msr::DR | msr::ME;
+        store_be32(m->ram.data() + 0x40000, 0x11223344u);
+        store_be32(m->ram.data() + 0x40004, 0x55667788u);
+        map_test_bats(*m);
+        m->cpu.run(40);
+    }
+    CHECK(same(a, c, "read-only/user", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 0x55667788u);
+    CHECK_EQ(c.cpu.state().gpr[30], 2u);           // two DSIs
+    CHECK_EQ(c.cpu.state().gpr[6], 0u);            // the user load did not happen
+    CHECK_EQ(load_be32(c.ram.data() + 0x40000), 0x11223344u);  // nor the store
+    CHECK_EQ(c.cpu.state().pc, 0x318u);
+}
+
+BOTH(generated_loads_and_stores_take_the_fast_path)
+{
+    // A loop of loads and stores to RAM, translated (through BAT1's
+    // read-only window for loads and BAT0 for stores) and in real mode:
+    // after the first TLB fills, every access is done in generated code.
+    for (int translated = 0; translated < 2; ++translated) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            place(*m, {
+                {0x5000, li(7, 100)},
+                {0x5004, mtspr(9, 7)},
+                {0x5008, lwz(3, 0, 4)},
+                {0x500C, lhz(5, 6, 4)},
+                {0x5010, lbz(6, 9, 4)},
+                {0x5014, stwu(3, 4, 8)},
+                {0x5018, sth(5, 2, 8)},
+                {0x501C, stb(6, 1, 8)},
+                {0x5020, bdnz(-0x18)},
+                {0x5024, 0x00000000u},
+            });
+            m->cpu.state().pc = 0x5000;
+            m->cpu.state().msr = msr::ME;
+            m->cpu.state().gpr[4] = translated ? 0x10000000u : 0x40000u;
+            m->cpu.state().gpr[8] = 0x8000u;
+            for (u32 k = 0; k < 16; ++k)
+                m->ram[0x40000 + k] = static_cast<u8>(0xA0 + k);
+            if (translated)
+                map_test_bats(*m);
+            if (g_jit_bg && m->worker) {
+                // The first passes queue the blocks (the set-up with the
+                // first pass, then the loop body from its top: mtctr does
+                // not end a block); give the worker time to compile them,
+                // as a real second core would have had.
+                m->cpu.run(2 + 7 + 7);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                m->cpu.run(98 * 7);
+            } else {
+                m->cpu.run(2 + 100 * 7);
+            }
+        }
+        CHECK(same(a, c, "fast path", translated, 0));
+        CHECK_EQ(c.cpu.state().pc, 0x5024u);
+        if (g_jit) {
+            // 600 accesses; only the first of each kind may miss the TLB.
+            CHECK(c.cpu.jit_stats().memory_slow <= 8);
+            // Each pass runs the loop block in generated code: entered from
+            // run_blocks or straight from the previous pass (chained).
+            // (entered from run_blocks, chained, or through a direct link):
+            // nothing after the first passes runs without code.
+            CHECK(c.cpu.jit_stats().interpreted <= (g_jit_bg ? 3u * 7u + 2u : 2u));
+            if (!g_jit_bg)
+                CHECK(c.cpu.jit_stats().linked >= 1);  // the loop's bdnz is linked to its own block
+            if (g_jit_bg)
+                CHECK(c.cpu.jit_stats().installed >= 1);
+        }
+    }
+}
+
+BOTH(page_crossing_access_needs_both_pages)
+{
+    // A word that crosses out of BAT1's window must fault (DSI) although
+    // its first byte is mapped; a real-mode store whose last bytes fall on
+    // a page with compiled code must drop that code.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x6000, call(0x6000, 0x5000)},   // r3 = 1: block at 0x5000 built (and compiled)
+            {0x6004, stw(11, 0, 10)},         // [0x4FFE] = 00 00 38 80: 0x5000 becomes li r4,1
+            {0x6008, call(0x6008, 0x5000)},   // r4 = 1
+            {0x600C, 0x00000000u},
+            {0x5000, li(3, 1)},
+            {0x5004, blr()},
+            {0x700, b(0)},                    // program exception: stop
+        });
+        m->cpu.state().pc = 0x6000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[10] = 0x4FFE;
+        m->cpu.state().gpr[11] = 0x00003880u;
+        m->cpu.run(7);
+    }
+    CHECK(same(a, c, "crossing store", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 1u);
+    CHECK_EQ(c.cpu.state().pc, 0x600Cu);
+
+    Machine a2(0), c2(4u << 20);
+    for (Machine* m : {&a2, &c2}) {
+        place(*m, {
+            {0x5000, lwz(3, static_cast<u32>(-2) & 0xFFFF, 9)},  // EA 0x1001FFFE: crosses out of BAT1
+            {0x5004, 0x00000000u},
+            {0x300, addi(30, 30, 1)},
+            {0x304, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[9] = 0x10020000u;
+        m->cpu.state().gpr[3] = 0x77u;
+        map_test_bats(*m);
+        m->cpu.run(4);
+    }
+    CHECK(same(a2, c2, "crossing load", 0, 0));
+    CHECK_EQ(c2.cpu.state().gpr[30], 1u);   // DSI
+    CHECK_EQ(c2.cpu.state().gpr[3], 0x77u); // not loaded
+}
+
+BOTH(branch_forms)
+{
+    // bcctr with BO[2] = 0 (an invalid form: the interpreter does not
+    // decrement CTR), bclrl (target is the old LR), absolute bc/b, and a
+    // decrementing bc that falls through when CTR reaches zero.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, X(19, 0, 0, 0, 528)},            // bcctr BO=0 (CR bit 0 clear: taken), CTR kept
+            {0x6000, mtspr(8, 12)},                   // LR = 0x7000
+            {0x6004, X(19, 20, 0, 0, 16, 1)},         // bclrl: to 0x7000, LR = 0x6008
+            {0x7000, mfspr(13, 8)},                   // r13 = 0x6008
+            {0x7004, bc(20, 0, 0x7100, true)},        // bca always: 0x7100
+            {0x7100, li(14, 2)},
+            {0x7104, mtspr(9, 14)},                   // CTR = 2
+            {0x7108, addi(15, 15, 1)},
+            {0x710C, bc(16, 0, -4)},                  // bdnz back to 0x7108 while CTR != 0
+            {0x7110, b(0x7200, true)},                // ba 0x7200
+            {0x7200, 0x00000000u},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().ctr() = 0x6000;
+        m->cpu.state().gpr[12] = 0x7000;
+        m->cpu.run(1);
+        CHECK_EQ(m->cpu.state().ctr(), 0x6000u);
+        m->cpu.run(11);
+    }
+    CHECK(same(a, c, "branches", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[13], 0x6008u);
+    CHECK_EQ(c.cpu.state().gpr[15], 2u);
+    CHECK_EQ(c.cpu.state().pc, 0x7200u);
+}
+
+TEST_CASE("cpu/step_hook_sees_every_instruction")
+{
+    // The debugging step hook runs after each instruction, also when a
+    // block cache is set (which is then not used), and costs nothing unset.
+    Machine m(4u << 20);
+    place(m, {{0x5000, li(3, 0)}, {0x5004, addi(3, 3, 1)}, {0x5008, b(-4)}});
+    m.cpu.state().pc = 0x5000;
+    struct Count { u32 n = 0; u32 last_r3 = 0; } c;
+    m.cpu.set_step_hook([](void* ctx, const CpuState& s) {
+        auto* k = static_cast<Count*>(ctx);
+        ++k->n;
+        k->last_r3 = s.gpr[3];
+    }, &c);
+    m.cpu.run(101);
+    CHECK_EQ(c.n, 101u);
+    CHECK_EQ(c.last_r3, 50u);
+    CHECK_EQ(m.cache.stats().built, 0u);
+    m.cpu.set_step_hook(nullptr, nullptr);
+    m.cpu.run(10);
+    CHECK_EQ(c.n, 101u);
+    CHECK(m.cache.stats().built > 0);
+}
+
+TEST_CASE("cpu/jitbg/stale_code_is_never_installed")
+{
+    // A result made before a cache flush must not reach a block built
+    // after it, even one at the same pool address for the same physical
+    // address. Set up exactly that, polling the worker by hand:
+    //  1. P0 (0x2000) then A (0x1000) are built; their requests wait.
+    //  2. The cache is flushed; P0' and B (new code at the same addresses)
+    //     are built in the same pool slots; their requests wait too.
+    //  3. The worker compiles only the two old requests (A's code: r3 = 1).
+    //  4. The CPU runs B again: A's code must not be installed into B's
+    //     block (B sets r3 = 100).
+    g_jit = true;
+    Machine m(4u << 20);
+    g_jit = false;
+    JitWorker w(m.cpu);
+    m.cpu.set_jit_worker(&w);
+    auto program = [&](u32 p0_first, u32 r3) {
+        place(m, {
+            {0x2000, p0_first},
+            {0x2004, b(0x1000 - 0x2004)},
+            {0x1000, li(3, r3)},
+            {0x1004, li(4, r3 + 1)},
+            {0x1008, b(0x3000 - 0x1008)},
+            {0x3000, b(0x2000 - 0x3000)},
+        });
+    };
+    auto run_from = [&](u32 pc, u32 n) {
+        m.cpu.state().pc = pc;
+        m.cpu.state().msr = msr::ME;
+        m.cpu.run(n);
+    };
+    program(li(5, 7), 1);  // P0 natively compiled (short code)
+    run_from(0x2000, 6);   // P0, A, the block at 0x3000
+    m.cache.flush();
+    program(mfcr(5), 100);  // P0': a handler call (longer code), then B
+    run_from(0x2000, 6);
+    CHECK_EQ(m.cpu.state().gpr[3], 100u);
+    CHECK_EQ(w.poll(3), 3u);  // the three old requests only
+    for (int i = 0; i < 5; ++i)
+        run_from(0x2000, 6);  // picks up the old results: all must be dropped
+    CHECK_EQ(m.cpu.state().gpr[3], 100u);
+    CHECK_EQ(m.cpu.state().gpr[4], 101u);
+    CHECK(m.cpu.jit_stats().stale >= 3);
+    CHECK_EQ(m.cpu.jit_stats().installed, 0u);
+    // Now the new requests: B gets its own code and still sets 100.
+    w.poll();
+    for (int i = 0; i < 5; ++i)
+        run_from(0x2000, 6);
+    CHECK(m.cpu.jit_stats().installed >= 2);
+    CHECK(m.cpu.jit_stats().runs > 0);
+    CHECK_EQ(m.cpu.state().gpr[3], 100u);
+    CHECK_EQ(m.cpu.state().gpr[4], 101u);
+}
+
+BOTH(chained_blocks_stop_where_run_blocks_would)
+{
+    // Two blocks calling each other in a loop: with generated code, each
+    // goes on into the other without returning to run_blocks, but stops at
+    // the same instruction as the interpreter for every budget, at an
+    // mtspr DEC (break_run_ alone), at an interrupt EE lets in, and when
+    // the code it would jump to is rewritten.
+    for (u32 budget : {1u, 2u, 3u, 7u, 40u, 41u, 1000u}) {
+        Machine a(0), c(4u << 20);
+        for (Machine* m : {&a, &c}) {
+            place(*m, {
+                {0x5000, li(7, 60)},
+                {0x5004, mtspr(9, 7)},           // CTR = 60
+                {0x5008, addi(3, 3, 1)},         // block A
+                {0x500C, b(0x100)},              //   -> block B at 0x510C
+                {0x510C, addi(4, 4, 2)},         // block B
+                {0x5110, bdnz(-0x108)},          //   -> A while CTR
+                {0x5114, mtspr(22, 7)},          // DEC = 60: ends run()
+                {0x5118, addi(5, 5, 1)},
+                {0x511C, b(0)},
+            });
+            m->cpu.state().pc = 0x5000;
+            m->cpu.state().msr = msr::ME;
+        }
+        // Several runs of `budget`, comparing after each.
+        for (u32 k = 0; k < 400 / budget + 3; ++k) {
+            a.cpu.run(budget);
+            c.cpu.run(budget);
+            if (!same(a, c, "chained", static_cast<int>(budget), static_cast<int>(k)))
+                break;
+        }
+        CHECK(same(a, c, "chained", static_cast<int>(budget), 999));
+        CHECK_EQ(c.cpu.state().gpr[3], 60u);
+        CHECK_EQ(c.cpu.state().gpr[4], 120u);
+        if (g_jit && !g_jit_bg && budget >= 40)
+            CHECK(c.cpu.jit_stats().chained >= 50);  // the loop ran chained
+    }
+}
+
+BOTH(chaining_follows_an_msr_change)
+{
+    // mtmsr turns instruction translation on; the next instruction has the
+    // same effective address but, through IBAT0, another physical one. Its
+    // real-mode block exists (with code), so a chained jump that kept the
+    // old fetch page would run it.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, mtmsr(9)},               // IR on
+            {0x5004, addi(3, 3, 1)},          // real mode (PA 0x5004)
+            {0x5008, b(-8)},                  //   -> 0x5000
+            {0x25004, addi(3, 3, 100)},       // translated: EA 0x5004 -> PA 0x25004
+            {0x25008, b(0)},                  // stays here
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;      // BEPI 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;  // BRPN 0x20000, read/write
+        s.gpr[9] = msr::ME | msr::IR;
+        s.pc = 0x5004;
+        s.msr = msr::ME;
+        m->cpu.flush_tlb();
+        for (int k = 0; k < 10; ++k)
+            m->cpu.run(7);
+    }
+    CHECK(same(a, c, "msr change", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 101u);
+    CHECK_EQ(c.cpu.state().pc, 0x5008u);
+}
+
+TEST_CASE("cpu/jit/profile_counts_handler_calls")
+{
+    // jit_op_id: primary opcodes, and the extended ones where they matter.
+    CHECK_EQ(Ppc750::jit_op_id(addi(3, 3, 1)), 14u);
+    CHECK_EQ(Ppc750::jit_op_id(mtspr(9, 7)), 64u + 1024u + 467u);
+    CHECK_EQ(Ppc750::jit_op_id(rfi()), 64u + 50u);
+    CHECK(Ppc750::jit_op_id(0xFC00002Au) == 64u + 3u * 1024u + 21u);  // fadd: A-form, xo 21
+    CHECK(Ppc750::jit_op_id(0xFC2000AAu) == 64u + 3u * 1024u + 21u);  // with FRC bits: still fadd
+    CHECK(Ppc750::jit_op_id(0xEC00002Au) == 64u + 2u * 1024u + 21u);  // fadds
+    CHECK(Ppc750::jit_op_id(0xFC000090u) == 64u + 3u * 1024u + 72u);  // fmr: X-form
+    for (u32 insn : {0u, 0xFFFFFFFFu, 0x7FFFFFFFu, 0x4FFFFFFFu})
+        CHECK(Ppc750::jit_op_id(insn) < Ppc750::kJitOpIds);
+
+    // A loop whose body has one instruction generated code hands to its
+    // handler (mullw): the profile counts each pass, and keeps the word.
+    g_jit = true;
+    Machine c(4u << 20);
+    place(c, {
+        {0x5000, li(7, 50)},
+        {0x5004, mtspr(9, 7)},
+        {0x5008, mullw(3, 4, 5)},
+        {0x500C, addi(4, 4, 1)},
+        {0x5010, bdnz(-8)},
+        {0x5014, b(0)},
+    });
+    c.cpu.state().pc = 0x5000;
+    c.cpu.state().msr = msr::ME;
+    c.cpu.run(2 + 50 * 3);
+    g_jit = false;
+    const u32 id = Ppc750::jit_op_id(mullw(3, 4, 5));
+    // The first pass may run before its code exists (interpreted).
+    CHECK(c.cpu.jit_profile()[id] >= 49u);
+    CHECK(c.cpu.jit_profile()[id] + c.cpu.jit_stats().interpreted >= 50u);
+    CHECK_EQ(c.cpu.jit_profile_sample(id), mullw(3, 4, 5));
+    CHECK_EQ(c.cpu.jit_profile()[Ppc750::jit_op_id(addi(4, 4, 1))], 0u);  // native: not counted
+
+    // The report: shares add up; mullw is the most handled kind.
+    JitReport rep;
+    make_jit_report(c.cpu, rep);
+    CHECK_EQ(rep.total, c.cpu.instructions_executed());
+    CHECK_EQ(rep.native + rep.handlers + rep.interpreted, rep.total);
+    CHECK(rep.ntop >= 1);
+    CHECK(std::strcmp(rep.top[0].name, "mullw") == 0);
+    char line[200];
+    const u32 n = format_jit_report(rep, line, sizeof line);
+    CHECK_EQ(std::strlen(line), n);
+    std::printf("    %s\n", line);
+    CHECK(std::strncmp(line, "JIT: ", 5) == 0);
+    CHECK(std::strstr(line, "most handled: mullw ") != nullptr);
+    char tiny[8];
+    format_jit_report(rep, tiny, sizeof tiny);
+    CHECK_EQ(std::strlen(tiny), 7u);  // cut, still terminated
+}
+
+TEST_CASE("platform/jitreport/top_list_order")
+{
+    // Five kinds and more, in a fresh CPU's profile? Build one by hand.
+    JitReport r;
+    r.total = 1000;
+    const char* names[] = {"a", "b", "c"};
+    for (u32 k = 0; k < 3; ++k) {
+        std::strcpy(r.top[k].name, names[k]);
+        r.top[k].count = 100 - 10 * k;
+    }
+    r.ntop = 3;
+    r.handlers = 270;
+    r.native = 730;
+    char line[200];
+    format_jit_report(r, line, sizeof line);
+    CHECK(std::strcmp(line, "JIT: 73.0% native, 27.0% handlers, 0.0% interpreted; most handled: a 10.0%, b 9.0%, c 8.0%") == 0);
+    JitReport empty;
+    CHECK_EQ(format_jit_report(empty, line, sizeof line), 0u);
+    CHECK_EQ(line[0], 0);
+}
+
+BOTH(dozing_stops_until_an_interrupt)
+{
+    // The idle loop sets MSR[POW] with HID0[DOZE]: run() then executes
+    // nothing (in every mode, chained code included) until an interrupt
+    // MSR[EE] lets in is pending; taking it clears POW.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, mtmsr(10)},          // POW | EE | ME: doze
+            {0x5008, isync()},
+            {0x500C, b(-0xC)},            // back to the top
+            {0x500, addi(4, 4, 1)},       // external interrupt handler
+            {0x504, rfi()},               // back (SRR1 has no POW)
+        });
+        CpuState& s = m->cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[10] = msr::POW | msr::EE | msr::ME;
+        s.spr[spr::HID0] = hid0::DOZE;
+    }
+    for (int round = 0; round < 6; ++round) {
+        for (Machine* m : {&a, &c}) {
+            m->cpu.run(500);
+            CHECK(m->cpu.dozing());
+            const u64 n = m->cpu.instructions_executed();
+            m->cpu.run(500);                 // asleep: nothing runs
+            CHECK_EQ(m->cpu.instructions_executed(), n);
+            m->cpu.set_external_interrupt(true);
+            CHECK(!m->cpu.dozing());         // an interrupt can be taken
+            m->cpu.run(2);                   // taken, then the handler's addi
+            m->cpu.set_external_interrupt(false);
+        }
+        CHECK(same(a, c, "doze", round, 0));
+    }
+    CHECK_EQ(c.cpu.state().gpr[4], 6u);      // woken six times
+    CHECK(c.cpu.state().gpr[3] >= 6u);
+}
+
+TEST_CASE("cpu/jit/register_cache_keeps_values_in_registers")
+{
+    // A block of n "addi r3,r3,1": with r3 in a host register each one is
+    // one AArch64 instruction (it was three: load, add, store). The code
+    // for 17 of them is at most ~1.5 words per extra addi longer than for 1.
+    auto words_for = [](u32 n) {
+        g_jit = true;
+        Machine c(4u << 20);
+        std::vector<std::pair<u32, u32>> code;
+        for (u32 k = 0; k < n; ++k)
+            code.push_back({0x5000 + 4 * k, addi(3, 3, 1)});
+        code.push_back({0x5000 + 4 * n, b(0)});
+        for (auto& w : code)
+            store_be32(c.ram.data() + w.first, w.second);
+        c.cpu.state().pc = 0x5000;
+        c.cpu.state().msr = msr::ME;
+        c.cpu.run(n + 1);
+        g_jit = false;
+        CHECK_EQ(c.cpu.state().gpr[3], n);
+        return c.cpu.jit_stats().code_words;
+    };
+    const u64 one = words_for(1), many = words_for(17);
+    std::printf("    code words: 1 addi %llu, 17 addi %llu\n", static_cast<unsigned long long>(one),
+                static_cast<unsigned long long>(many));
+    CHECK(many > one);
+    CHECK(many - one <= 24u);  // 16 more addi: ~1 word each (48 without the cache)
+}
+
+BOTH(chained_static_target_slot_collision)
+{
+    // The block table is indexed by (pa >> 2) mod 2^15: blocks 128 KB apart
+    // share a slot. A block at 0x25010 fills the slot that 0x5010 would
+    // use; then code at 0x5000 jumps to 0x5010 (a target known when it is
+    // compiled). The chained jump must see that the slot holds another
+    // block and not run it.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25010, addi(4, 4, 100)},   // the block in the shared slot
+            {0x25014, b(-0x20018)},       // -> 0x4FFC
+            {0x4FFC, 0x60000000u},       // nop
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, b(0xC)},             // -> 0x5010: same page, known target
+            {0x5010, addi(5, 5, 1)},      // the real target (no block yet)
+            {0x5014, b(0)},
+        });
+        m->cpu.state().pc = 0x25010;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.run(100);  // long enough that 0x5000's block chains on (no budget stop)
+    }
+    CHECK(same(a, c, "slot collision", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 100u);
+    CHECK_EQ(c.cpu.state().gpr[3], 1u);
+    CHECK(c.cpu.state().gpr[5] >= 1u);
+    if (g_jit && !g_jit_bg)
+        CHECK_EQ(c.cpu.state().pc, 0x5014u);
+}
+
+TEST_CASE("cpu/jitbg/dropped_requests_are_asked_again")
+{
+    // 400 new blocks at once overflow the worker's request queue (256):
+    // the requests that did not fit are dropped. Those blocks must still
+    // get code later (asked again after Ppc750::kJitRetry instructions),
+    // not run through their handlers for good.
+    g_jit = true;
+    Machine m(4u << 20);
+    g_jit = false;
+    JitWorker w(m.cpu);
+    m.cpu.set_jit_worker(&w);
+    constexpr u32 kBlocks = 400, kBase = 0x10000;
+    for (u32 k = 0; k < kBlocks; ++k) {
+        const u32 at = kBase + 8 * k;
+        const u32 next = k + 1 < kBlocks ? at + 8 : kBase;
+        store_be32(m.ram.data() + at, addi(3, 3, 1));
+        store_be32(m.ram.data() + at + 4, b(static_cast<int32_t>(next) - static_cast<int32_t>(at + 4)));
+    }
+    m.cpu.state().pc = kBase;
+    m.cpu.state().msr = msr::ME;
+    m.cpu.run(2 * kBlocks);                        // every block built and asked for once
+    CHECK(m.cpu.jit_stats().queue_full > 0);      // the queue overflowed
+    // Now the worker keeps up; run long enough for the retries.
+    for (int round = 0; round < 40; ++round) {
+        while (w.poll(64)) {
+        }
+        m.cpu.run(100000);
+    }
+    while (w.poll(64)) {
+    }
+    m.cpu.run(2 * kBlocks);                        // collect the last results
+    CHECK(m.cpu.jit_stats().retried > 0);
+    // Every block has code now: one more lap runs nothing interpreted.
+    const u64 before = m.cpu.jit_stats().interpreted;
+    m.cpu.run(2 * kBlocks * 3);
+    CHECK_EQ(m.cpu.jit_stats().interpreted, before);
+    CHECK_EQ(m.cpu.state().gpr[3], static_cast<u32>(m.cpu.instructions_executed() / 2));
+}
+
+TEST_CASE("cpu/blocks/table_grows_with_the_arena")
+{
+    // An eighth of the arena for the table, within 2^15..2^22 slots.
+    for (u32 mb : {1u, 4u, 8u, 64u, 256u}) {
+        std::vector<u8> arena(static_cast<size_t>(mb) << 20);
+        BlockCache c;
+        REQUIRE(c.init(arena.data(), static_cast<u32>(arena.size()), kRam));
+        const u64 table_bytes = 4ull * c.table_slots();
+        CHECK(c.table_slots() >= (1u << BlockCache::kMinTableBits));
+        CHECK(c.table_slots() <= (1u << BlockCache::kMaxTableBits));
+        CHECK((c.table_slots() & (c.table_slots() - 1)) == 0);
+        if (c.table_slots() > (1u << BlockCache::kMinTableBits))
+            CHECK(table_bytes <= arena.size() / 8);
+        if (c.table_slots() < (1u << BlockCache::kMaxTableBits))
+            CHECK(table_bytes * 2 > arena.size() / 8);
+    }
+}
+
+BOTH(condition_register_moves)
+{
+    // mfcr and mtcrf with every field mask, compared with the interpreter
+    // (random programs rarely produce a valid mfcr: its other fields must
+    // be zero).
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        std::vector<std::pair<u32, u32>> code;
+        u32 at = 0x5000;
+        for (u32 fxm = 0; fxm < 256; fxm += 17) {
+            code.push_back({at, mtcrf(fxm, 5)});
+            code.push_back({at + 4, mfcr(6)});
+            code.push_back({at + 8, add(7, 7, 6)});
+            code.push_back({at + 12, addi(5, 5, 0x1357)});
+            at += 16;
+        }
+        code.push_back({at, b(0)});
+        for (auto& w : code)
+            store_be32(m->ram.data() + w.first, w.second);
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().gpr[5] = 0x89ABCDEFu;
+        m->cpu.state().cr = 0x12345678u;
+        m->cpu.run(16 * 4 + 1);
+    }
+    CHECK(same(a, c, "cr moves", 0, 0));
+    CHECK(c.cpu.state().gpr[7] != 0u);
+}
+
+BOTH(supervisor_spr_read_in_user_mode)
+{
+    // mfspr SRR0 is privileged: in user mode it raises a program exception
+    // (and leaves rD alone); in supervisor mode it reads the register.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, mfspr(3, 26)},       // supervisor: r3 = SRR0
+            {0x5004, mtmsr(9)},           // to user mode
+            {0x5008, isync()},
+            {0x500C, mfspr(4, 272)},      // user: privileged -> 0x700
+            {0x5010, b(0)},
+            {0x700, addi(5, 5, 1)},
+            {0x704, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().spr[spr::SRR0] = 0x1234;
+        m->cpu.state().spr[spr::SPRG0] = 0x5678;
+        m->cpu.state().gpr[4] = 0xAAAA;
+        m->cpu.state().gpr[9] = msr::ME | msr::PR;
+        m->cpu.run(20);  // one slice: the user-mode mfspr runs in generated code
+    }
+    CHECK(same(a, c, "user mfspr", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 0x1234u);
+    CHECK_EQ(c.cpu.state().gpr[4], 0xAAAAu);   // not read
+    CHECK_EQ(c.cpu.state().gpr[5], 1u);        // the program exception handler ran
+}
+
+BOTH(far_links_loop_between_pages)
+{
+    // A loop whose two blocks are in different pages: the b and the bdnz
+    // are linked directly (another page), and results match the interpreter.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, b(0x6000 - 0x5004)},
+            {0x6000, addi(4, 4, 1)},
+            {0x6004, bdnz(0x5000 - 0x6004)},
+            {0x6008, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().ctr() = 50;
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "far loop", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 50u);
+    CHECK_EQ(c.cpu.state().gpr[4], 50u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().linked_far >= 2);
+}
+
+BOTH(far_link_target_page_rewritten)
+{
+    // The loop rewrites the instruction its far link jumps to: the link
+    // must be undone (the target's page dropped) and the new code run.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, cmpwi(0, 3, 20)},
+            {0x5008, bne(0x8)},          // -> 0x5010
+            {0x500C, stw(10, 0, 11)},    // r3 == 20: rewrite 0x6000
+            {0x5010, b(0x6000 - 0x5010)},
+            {0x6000, addi(4, 4, 1)},
+            {0x6004, bdnz(0x5000 - 0x6004)},
+            {0x6008, b(0)},
+        });
+        m->cpu.state().pc = 0x5000;
+        m->cpu.state().msr = msr::ME;
+        m->cpu.state().ctr() = 40;
+        m->cpu.state().gpr[10] = addi(4, 4, 100);
+        m->cpu.state().gpr[11] = 0x6000;
+        m->cpu.run(2000);
+    }
+    CHECK(same(a, c, "far rewrite", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 19u + 21u * 100u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().unlinked_far >= 1);
+}
+
+BOTH(far_link_translation_changed)
+{
+    // Translated fetch: the source through IBAT0, the far target (EA
+    // 0x40000) through IBAT1. After 19 passes the loop remaps IBAT1 to
+    // other code: a link made under the old translation must not be used.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, addi(3, 3, 1)},
+            {0x25004, cmpwi(0, 3, 20)},
+            {0x25008, bne(0xC)},                // -> 0x5014
+            {0x2500C, mtspr(531, 12)},          // IBAT1L: EA 0x40000 -> PA 0x80000
+            {0x25010, isync()},
+            {0x25014, cmpwi(0, 3, 40)},
+            {0x25018, beq(0x10)},               // -> 0x5028: done
+            {0x2501C, b(0x40000 - 0x501C)},     // far: EA 0x40000
+            {0x25028, b(0)},
+            {0x60000, addi(4, 4, 1)},           // EA 0x40000 before the remap
+            {0x60004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},         // ... and after
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // IBAT1U: EA 0x40000, 128 KB, Vs
+        s.spr[spr::IBAT0U + 3] = 0x00060002u;   // IBAT1L: -> PA 0x60000
+        s.gpr[12] = 0x00080002u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "far translation", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 19u + 20u * 100u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().linked_far >= 2);  // made again under the new layout's ID
+}
+
+BOTH(far_link_mode_changes)
+{
+    // A far link made in real mode must not be taken once instruction
+    // translation is on: the same effective target is other code then.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, cmpwi(0, 3, 10)},
+            {0x5008, bne(0xC)},            // -> 0x5014
+            {0x500C, mtmsr(9)},            // IR on at r3 == 10
+            {0x5010, isync()},
+            {0x5014, cmpwi(0, 3, 20)},
+            {0x5018, beq(0x10)},           // -> 0x5028: done
+            {0x501C, b(0x40000 - 0x501C)},
+            {0x5028, b(0)},
+            {0x40000, addi(4, 4, 1)},      // real mode: PA 0x40000
+            {0x40004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},    // translated: IBAT1 -> PA 0x80000
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0 -> PA 0, 128 KB
+        s.spr[spr::IBAT0U + 1] = 0x00000002u;
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // EA 0x40000 -> PA 0x80000
+        s.spr[spr::IBAT0U + 3] = 0x00080002u;
+        s.gpr[9] = msr::ME | msr::IR;
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "far mode", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 9u + 10u * 100u);
+}
+
+TEST_CASE("cpu/jit/far_link_records_die_with_a_flush")
+{
+    // Links recorded before a cache flush point into code that is dead and
+    // whose space new code reuses: a later translation change must not
+    // patch them (it would overwrite the new code).
+    g_jit = true;
+    Machine c(4u << 20);
+    Machine a(0);
+    g_jit = false;
+    auto far_loop = [](Machine& m) {
+        place(m, {
+            {0x5000, addi(3, 3, 1)},
+            {0x5004, b(0x6000 - 0x5004)},
+            {0x6000, addi(4, 4, 1)},
+            {0x6004, bdnz(0x5000 - 0x6004)},
+            {0x6008, b(0)},
+        });
+        m.cpu.state().pc = 0x5000;
+        m.cpu.state().msr = msr::ME;
+        m.cpu.state().ctr() = 30;
+        m.cpu.run(200);
+    };
+    far_loop(c);
+    far_loop(a);
+    REQUIRE(c.cpu.jit_stats().linked_far >= 1);
+    c.cache.flush();  // the old code is dead; new code reuses its space
+    // New code: one long block (where the old blocks' link slots were) and
+    // a loop around it.
+    std::vector<std::pair<u32, u32>> code;
+    for (u32 k = 0; k < 24; ++k)
+        code.push_back({0x9000 + 4 * k, addi(5, 5, static_cast<u32>(k + 1))});
+    code.push_back({0x9000 + 4 * 24, bdnz(-4 * 24)});
+    code.push_back({0x9000 + 4 * 25, b(0)});
+    for (Machine* m : {&a, &c}) {
+        for (auto& w : code)
+            store_be32(m->ram.data() + w.first, w.second);
+        m->cpu.state().pc = 0x9000;
+        m->cpu.state().ctr() = 20;
+        m->cpu.run(25);                 // compiled, one pass
+        m->cpu.flush_tlb();             // a translation change: undoes far links
+        m->cpu.run(25 * 19 + 1);
+    }
+    CHECK(same(a, c, "stale far links", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 20u * 300u);
+}
+
+BOTH(computed_branch_links)
+{
+    // A function in another page, called from two sites in a loop: its
+    // blr returns to two different places (the site's link holds the first;
+    // the other must take dispatch), and a bctr alternates between targets.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, b(0x6000 - 0x5000, false, true)},   // bl func
+            {0x5004, addi(3, 3, 1)},
+            {0x5008, b(0x6000 - 0x5008, false, true)},   // bl func again
+            {0x500C, addi(3, 3, 10)},
+            {0x5010, D(28, 3, 8, 1)},                    // andi. r8, r3, 1
+            {0x5014, beq(0xC)},                          // even: target A
+            {0x5018, mtspr(9, 20)},                      // odd: CTR = r20 (0x7000)
+            {0x501C, b(0x8)},
+            {0x5020, mtspr(9, 21)},                      // CTR = r21 (0x7100)
+            {0x5024, X(19, 20, 0, 0, 528)},              // bctr
+            {0x6000, addi(4, 4, 1)},                     // func
+            {0x6004, bclr(20, 0)},                       // blr
+            {0x7000, addi(5, 5, 1)},
+            {0x7004, b(0x5040 - 0x7004)},
+            {0x7100, addi(6, 6, 1)},
+            {0x7104, b(0x5040 - 0x7104)},
+            {0x5040, addi(30, 30, -1)},                  // the loop counter: r30
+            {0x5044, cmpwi(0, 30, 0)},
+            {0x5048, bne(0x5000 - 0x5048)},
+            {0x504C, b(0)},
+        });
+        CpuState& s = m->cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[30] = 60;
+        s.gpr[20] = 0x7000;
+        s.gpr[21] = 0x7100;
+        m->cpu.run(3000);
+    }
+    CHECK(same(a, c, "computed links", 0, 0));
+    CHECK(c.cpu.state().gpr[4] > 10u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().linked_far >= 2);
+}
+
+BOTH(fast_store_to_a_page_that_becomes_code)
+{
+    // Stores to page 0x6000 while it holds no code (the fast table may
+    // then let them through), a call into it (it gets a block), and a
+    // store that rewrites it: that store must be seen, so the second call
+    // runs the new instruction.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lis(5, 0x3863)},
+            {0x5004, ori(5, 5, 0x0001)},        // r5 = addi r3,r3,1
+            {0x5008, lis(6, 0x4E80)},
+            {0x500C, ori(6, 6, 0x0020)},        // r6 = blr
+            {0x5010, stw(5, 0, 4)},
+            {0x5014, stw(6, 4, 4)},
+            {0x5018, stw(5, 0, 4)},             // again: a hit, if the first filled the entry
+            {0x501C, mtspr(9, 4)},
+            {0x5020, 0x4E800421u},              // bctrl: r3 += 1, page 0x6000 gets a block
+            {0x5024, ori(5, 5, 0x0064)},        // r5 = addi r3,r3,101
+            {0x5028, stw(5, 0, 4)},             // rewrites the code
+            {0x502C, 0x4E800421u},              // bctrl: r3 += 101
+            {0x5030, b(0)},
+        });
+        CpuState& s = m->cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[4] = 0x6000;
+        m->cpu.run(40);
+    }
+    CHECK(same(a, c, "store into new code", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[3], 102u);
+}
+
+BOTH(fast_load_after_data_translation_changes)
+{
+    // Loads through DBAT0 (EA 0x10000000 -> PA 0x40000); after 10 passes
+    // the loop remaps it to PA 0x60000: the loads must follow.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lwz(3, 0, 4)},
+            {0x5004, add(5, 5, 3)},
+            {0x5008, addi(7, 7, 1)},
+            {0x500C, cmpwi(0, 7, 10)},
+            {0x5010, bne(0xC)},                 // -> 0x501C
+            {0x5014, mtspr(537, 12)},           // DBAT0L: -> PA 0x60000
+            {0x5018, isync()},
+            {0x501C, cmpwi(0, 7, 20)},
+            {0x5020, bne(0x5000 - 0x5020)},
+            {0x5024, b(0)},
+        });
+        store_be32(m->ram.data() + 0x40000, 1);
+        store_be32(m->ram.data() + 0x60000, 100);
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000002u;       // BEPI 0x10000000, 128 KB, Vs
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000, read/write
+        s.gpr[4] = 0x10000000u;
+        s.gpr[12] = 0x00060002u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR;
+        m->cpu.flush_tlb();
+        m->cpu.run(300);
+    }
+    CHECK(same(a, c, "data remap", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 10u * 1u + 10u * 100u);
+}
+
+BOTH(fast_load_crossing_into_an_unmapped_page)
+{
+    // DBAT0 maps 128 KB at EA 0x10000000; a word load at its last word
+    // fills the fast entry for that page, then a load 2 bytes further
+    // crosses into EA 0x10020000, which nothing maps: a DSI, though the
+    // physical RAM behind it would be there.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x0300, b(0)},                     // DSI
+            {0x5000, lwz(3, 0xFFC, 4)},
+            {0x5004, addi(7, 7, 1)},
+            {0x5008, cmpwi(0, 7, 3)},
+            {0x500C, bne(0x5000 - 0x500C)},
+            {0x5010, lwz(3, 0xFFE, 4)},
+            {0x5014, b(0)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000002u;       // BEPI 0x10000000, 128 KB, Vs
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000, read/write
+        s.gpr[4] = 0x1001F000u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR;
+        m->cpu.flush_tlb();
+        m->cpu.run(60);
+    }
+    CHECK(same(a, c, "crossing into unmapped", 0, 0));
+    CHECK_EQ(c.cpu.state().pc, 0x300u);
+}
+
+BOTH(fast_entries_kept_apart_by_privilege)
+{
+    // EA 0x10000000 is PA 0x40000 in user mode (DBAT0, Vp only) and PA
+    // 0x60000 in supervisor mode (DBAT1, Vs only). User code loads it
+    // (filling its entry), then sc: the supervisor's load must not use
+    // the user's entry.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x0C00, mfmsr(9)},
+            {0x0C04, ori(9, 9, 0x10)},          // MSR[DR]
+            {0x0C08, mtmsr(9)},
+            {0x0C0C, isync()},
+            {0x0C10, lwz(6, 0, 4)},
+            {0x0C14, b(0)},
+            {0x5000, lwz(3, 0, 4)},
+            {0x5004, add(5, 5, 3)},
+            {0x5008, addi(7, 7, 1)},
+            {0x500C, cmpwi(0, 7, 3)},
+            {0x5010, bne(0x5000 - 0x5010)},
+            {0x5014, sc()},
+        });
+        store_be32(m->ram.data() + 0x40000, 1);
+        store_be32(m->ram.data() + 0x60000, 100);
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000001u;       // BEPI 0x10000000, 128 KB, Vp
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000
+        s.spr[spr::DBAT0U + 2] = 0x10000002u;   // DBAT1: the same, Vs
+        s.spr[spr::DBAT0U + 3] = 0x00060002u;   // -> PA 0x60000
+        s.gpr[4] = 0x10000000u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR | msr::PR;
+        m->cpu.flush_tlb();
+        m->cpu.run(60);
+    }
+    CHECK(same(a, c, "privilege", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 3u);
+    CHECK_EQ(c.cpu.state().gpr[6], 100u);
+}
+
+BOTH(code_watch_sees_entries_through_the_jump_cache)
+{
+    // The calls run once with no watch (links and remembered jumps are
+    // made), then again with the watch set. Inside the watched page a
+    // computed jump (6028 -> 6030) goes through dispatch while the watch
+    // is set; later a call from outside lands on 6030 directly. Every
+    // entry into the page must be reported, as without the cache.
+    struct Log {
+        u32 pcs[64] = {};
+        u32 n = 0;
+    };
+    Log logs[2];
+    Machine a(0), c(4u << 20);
+    Machine* ms[2] = {&a, &c};
+    for (u32 k = 0; k < 2; ++k) {
+        Machine& m = *ms[k];
+        place(m, {
+            {0x5000, li(8, 0x6020)}, {0x5004, mtspr(8, 8)}, {0x5008, blrl()},   // call 6020
+            {0x500C, li(8, 0x6030)}, {0x5010, mtspr(8, 8)}, {0x5014, blrl()},   // call 6030
+            {0x5018, addi(7, 7, -1)}, {0x501C, cmpwi(0, 7, 0)}, {0x5020, bne(0x5000 - 0x5020)},
+            {0x5024, b(0)},
+            {0x6020, li(10, 0x6030)}, {0x6024, mtspr(9, 10)}, {0x6028, bctr()},  // -> 6030, same page
+            {0x6030, addi(3, 3, 1)}, {0x6034, blr()},
+        });
+        CpuState& s = m.cpu.state();
+        s.pc = 0x5000;
+        s.msr = msr::ME;
+        s.gpr[7] = 3;
+        m.cpu.run(200);                         // no watch yet
+        CHECK_EQ(s.pc, 0x5024u);
+        s.pc = 0x5000;
+        s.gpr[7] = 3;
+        m.cpu.set_code_watch(0x6000, 0x6FFF, [](void* ctx, u32 pc) {
+            Log* l = static_cast<Log*>(ctx);
+            if (l->n < 64)
+                l->pcs[l->n++] = pc;
+        }, &logs[k]);
+        m.cpu.run(200);
+    }
+    CHECK(same(a, c, "watch through jumps", 0, 0));
+    CHECK_EQ(a.cpu.state().gpr[3], 12u);
+    CHECK_EQ(logs[0].n, 6u);
+    CHECK_EQ(logs[1].n, logs[0].n);
+    CHECK(std::memcmp(logs[0].pcs, logs[1].pcs, sizeof logs[0].pcs) == 0);
+}
+
+
+BOTH(far_link_layouts_alternate)
+{
+    // Each pass switches IBAT1 between two layouts (EA 0x40000 -> PA
+    // 0x60000 or 0x80000, different code) and jumps there: links made under
+    // one layout's translation ID must never be taken under the other's, and
+    // a layout seen before gets its ID back.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, D(28, 3, 5, 1)},             // andi. r5, r3, 1
+            {0x25004, bne(0xC)},                // odd pass -> 0x5010
+            {0x25008, mtspr(531, 12)},          // IBAT1L: -> PA 0x80000
+            {0x2500C, b(0x8)},                  // -> 0x5014
+            {0x25010, mtspr(531, 11)},          // IBAT1L: -> PA 0x60000
+            {0x25014, isync()},
+            {0x25018, addi(3, 3, 1)},
+            {0x2501C, cmpwi(0, 3, 21)},
+            {0x25020, beq(0x8)},                // -> 0x5028: done
+            {0x25024, b(0x40000 - 0x5024)},     // far: EA 0x40000
+            {0x25028, b(0)},
+            {0x60000, addi(4, 4, 1)},
+            {0x60004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // IBAT1U: EA 0x40000, 128 KB, Vs
+        s.spr[spr::IBAT0U + 3] = 0x00060002u;   // IBAT1L: -> PA 0x60000
+        s.gpr[11] = 0x00060002u;
+        s.gpr[12] = 0x00080002u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "alternating layouts", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 10u * 100u + 10u * 1u);
+    if (g_jit && !g_jit_bg)
+        CHECK(c.cpu.jit_stats().xlat_reused >= 10);
+}
+
+BOTH(far_link_page_table_changed)
+{
+    // A far jump to EA 0x403000, mapped by the page table (SDR1 0x10000,
+    // SR0 VSID 0x123: PTEG 0x14800, PTE word 0 0x80009181) to PA 0x60000.
+    // After 19 passes the loop points the PTE at PA 0x80000 and does tlbie,
+    // then switches DBAT3 away and back: the layout of SRs and BATs is as
+    // before, but the page table is not, so its old ID (and the links made
+    // under it) must not come back.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, addi(3, 3, 1)},
+            {0x25004, cmpwi(0, 3, 20)},
+            {0x25008, bne(0x1C)},               // -> 0x5024
+            {0x2500C, stw(12, 4, 14)},          // PTE word 1: -> PA 0x80000
+            {0x25010, X(31, 0, 0, 15, 306)},    // tlbie r15
+            {0x25014, mtspr(542, 16)},          // DBAT3U: another layout ...
+            {0x25018, mtspr(542, 17)},          // ... and back
+            {0x2501C, isync()},
+            {0x25020, b(0x4)},
+            {0x25024, cmpwi(0, 3, 40)},
+            {0x25028, beq(0xC)},                // -> 0x5034: done
+            {0x2502C, b(0x403000 - 0x502C)},    // far: EA 0x403000
+            {0x25030, b(0)},
+            {0x25034, b(0)},
+            {0x60000, addi(4, 4, 1)},
+            {0x60004, b(0x5000 - 0x403004)},
+            {0x80000, addi(4, 4, 100)},
+            {0x80004, b(0x5000 - 0x403004)},
+        });
+        store_be32(m->ram.data() + 0x14800, 0x80009181u);
+        store_be32(m->ram.data() + 0x14804, 0x00060002u);   // RPN 0x60000, PP = read/write
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::SDR1] = 0x00010000u;
+        s.sr[0] = 0x123u;
+        s.gpr[12] = 0x00080002u;
+        s.gpr[14] = 0x14800u;
+        s.gpr[15] = 0x403000u;
+        s.gpr[16] = 0x70000002u;
+        s.gpr[17] = 0;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "page table changed", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 19u + 20u * 100u);
+}
+
+
+BOTH(fast_entries_past_the_list_are_dropped_too)
+{
+    // 60 pages read through DBAT0 (256 KB at EA 0x10000000 -> PA 0x40000)
+    // twice, which fills more fast-table and TLB entries than the lists of
+    // touched ones hold; then DBAT0 points at PA 0x80000 and they are read
+    // again: every load must see the new mapping.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x5000, lwz(3, 0, 4)},
+            {0x5004, add(5, 5, 3)},
+            {0x5008, addi(4, 4, 0x1000)},
+            {0x500C, bdnz(0x5000 - 0x500C)},
+            {0x5010, addi(7, 7, 1)},
+            {0x5014, cmpwi(0, 7, 2)},
+            {0x5018, bne(0xC)},                 // -> 0x5024
+            {0x501C, mtspr(537, 12)},           // DBAT0L: -> PA 0x80000
+            {0x5020, isync()},
+            {0x5024, cmpwi(0, 7, 3)},
+            {0x5028, beq(0x14)},                // -> 0x503C: done
+            {0x502C, lis(4, 0x1000)},
+            {0x5030, li(6, 60)},
+            {0x5034, mtspr(9, 6)},
+            {0x5038, b(0x5000 - 0x5038)},
+            {0x503C, b(0)},
+        });
+        for (u32 k = 0; k < 60; ++k) {
+            store_be32(m->ram.data() + 0x40000 + k * 0x1000, 1);
+            store_be32(m->ram.data() + 0x80000 + k * 0x1000, 100);
+        }
+        CpuState& s = m->cpu.state();
+        s.spr[spr::DBAT0U] = 0x10000006u;       // BEPI 0x10000000, 256 KB, Vs
+        s.spr[spr::DBAT0U + 1] = 0x00040002u;   // -> PA 0x40000, read/write
+        s.gpr[4] = 0x10000000u;
+        s.gpr[12] = 0x00080002u;
+        s.ctr() = 60;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::DR;
+        m->cpu.flush_tlb();
+        m->cpu.run(2000);
+    }
+    CHECK(same(a, c, "past the lists", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[5], 60u + 60u + 60u * 100u);
+    CHECK_EQ(c.cpu.state().pc, 0x503Cu);
+}
+
+BOTH(far_link_relinked_then_target_rewritten)
+{
+    // The far jump at 0x502C is linked under IBAT1 -> PA 0x60000, then
+    // under IBAT1 -> PA 0x80000 (the same slot, now into another page);
+    // then the code at PA 0x80000 is rewritten: the link must be undone
+    // with that page's blocks, so the new instruction runs.
+    Machine a(0), c(4u << 20);
+    for (Machine* m : {&a, &c}) {
+        place(*m, {
+            {0x25000, addi(3, 3, 1)},
+            {0x25004, cmpwi(0, 3, 5)},
+            {0x25008, bne(0xC)},                // -> 0x5014
+            {0x2500C, mtspr(531, 12)},          // IBAT1L: -> PA 0x80000
+            {0x25010, isync()},
+            {0x25014, cmpwi(0, 3, 10)},
+            {0x25018, bne(0xC)},                // -> 0x5024
+            {0x2501C, stw(13, 0, 14)},          // rewrites PA 0x80000
+            {0x25020, isync()},
+            {0x25024, cmpwi(0, 3, 15)},
+            {0x25028, beq(0xC)},                // -> 0x5034: done
+            {0x2502C, b(0x40000 - 0x502C)},     // far: EA 0x40000
+            {0x25034, b(0)},
+            {0x60000, addi(4, 4, 1)},
+            {0x60004, b(0x5000 - 0x40004)},
+            {0x80000, addi(4, 4, 100)},
+            {0x80004, b(0x5000 - 0x40004)},
+        });
+        CpuState& s = m->cpu.state();
+        s.spr[spr::IBAT0U] = 0x00000002u;       // EA 0, 128 KB, Vs
+        s.spr[spr::IBAT0U + 1] = 0x00020002u;   // -> PA 0x20000
+        s.spr[spr::IBAT0U + 2] = 0x00040002u;   // IBAT1U: EA 0x40000, 128 KB, Vs
+        s.spr[spr::IBAT0U + 3] = 0x00060002u;   // IBAT1L: -> PA 0x60000
+        s.gpr[12] = 0x00080002u;
+        s.gpr[13] = addi(4, 4, 1000);
+        s.gpr[14] = 0x80000u;
+        s.pc = 0x5000;
+        s.msr = msr::ME | msr::IR;
+        m->cpu.flush_tlb();
+        m->cpu.run(1000);
+    }
+    CHECK(same(a, c, "relinked, rewritten", 0, 0));
+    CHECK_EQ(c.cpu.state().gpr[4], 4u * 1u + 5u * 100u + 5u * 1000u);
+}

@@ -1,0 +1,28 @@
+# G3MacPi - Raspberry Pi firmware configuration (Raspberry Pi 400, AArch64)
+# Based on Circle's boot/config64.txt, reduced to the Pi 4 family.
+
+arm_64bit=1
+kernel_address=0x80000
+initial_turbo=0
+# No 1-second pause in the Pi's firmware before the kernel loads (the
+# default boot_delay is 1).
+boot_delay=0
+# No rainbow screen at power-on: straight to G3MacPi.
+disable_splash=1
+
+[pi4]
+armstub=armstub8-rpi4.bin
+kernel=kernel8-rpi4.img
+max_framebuffers=2
+
+[all]
+# UART on GPIO14 (TX, pin 8) / GPIO15 (RX, pin 10), 115200 8N1, 3.3 V levels.
+enable_uart=1
+
+# Optional overclock (off by default; at your own risk). The Pi 400 runs
+# the ARM cores at 1.8 GHz. Many Pi 400s run 2.0 GHz or more with extra
+# voltage; the Pi 400's large heatsink helps. If the Pi becomes unstable,
+# put the # back. See Raspberry Pi's config.txt documentation
+# (overclocking: arm_freq, over_voltage). Remove the # from both lines:
+#arm_freq=2000
+#over_voltage=6
