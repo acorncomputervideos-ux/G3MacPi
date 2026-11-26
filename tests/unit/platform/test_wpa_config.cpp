@@ -26,6 +26,9 @@ TEST_CASE("platform/wpaconfig/text")
     CHECK(std::strstr(out, "\tssid=4d652022233122\n") != nullptr);  // hex of: Me "#1"
     CHECK(std::strstr(out, "\tpsk=\"pa ss#word\"\n") != nullptr);
     CHECK(std::strstr(out, "key_mgmt=WPA-PSK") != nullptr);
+    // 2.4 GHz channels 1 to 13 only.
+    CHECK(std::strstr(out, "\tfreq_list=2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462 2467 2472\n") !=
+          nullptr);
     CHECK(std::strstr(out, "network={\n") != nullptr);
     CHECK(out[n - 2] == '}');
     // Open network, no country.

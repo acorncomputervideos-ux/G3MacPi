@@ -48,6 +48,10 @@ u32 write_wpa_config(const MachineConfig& cfg, char* out, u32 cap)
         o.c(kHex[b & 15]);
     }
     o.s("\n\tscan_ssid=1\n");  // also finds a hidden network
+    // 2.4 GHz only (channels 1-13): on a Pi 400 the join of a dual-band
+    // router's 5 GHz access point (a DFS channel, 5290 MHz) failed every
+    // time, and the retries kept the Mac's core busy (docs/wifi.md).
+    o.s("\tfreq_list=2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462 2467 2472\n");
     if (cfg.wifi_password[0]) {
         o.s("\tpsk=\"");
         o.s(cfg.wifi_password);

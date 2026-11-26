@@ -37,6 +37,10 @@ interface and the Mac's Ethernet (BMAC+, docs/hardware/bmac.md).
 - **Configuration**: the settings `wifi_name`, `wifi_password`,
   `wifi_country` are written as `/g3macpi/wpa_supplicant.conf` each start
   (platform/common/wpa_config.h); the name in hex, so any name works.
+  `freq_list` limits it to 2.4 GHz (channels 1-13): on the user's Pi 400
+  the supplicant chose a dual-band router's 5 GHz access point (5290 MHz,
+  a DFS channel) and Circle's driver reported "wifi join: failed" every
+  time (2026-11-26). A 5 GHz-only network can't be joined.
 - **Frame switch**: a task on core 0 (`CWifiSwitch`, app/circle/web.h). The
   Ethernet switch runs on core 3, but Circle's WLAN driver does its SDIO
   work in core 0's scheduler tasks and may block, so it is only called
