@@ -14,10 +14,15 @@
 //    the size, Enter asks the front end to create it; Action::CreateDisk),
 //    back.
 //  - File picker: directories first, ".." to go up; Enter picks a file.
-//  - WiFi network (Enter on "Network port"): WiFi on/off, the network's
-//    name, password and country typed in (Enter starts typing, Enter ends,
-//    Esc cancels, Backspace deletes; key() then needs the Shift state),
-//    and the keyboard's layout (US/UK) for typing them.
+//  - WiFi network (Enter on "Network port"): WiFi on/off, "Search for
+//    networks", the network's name, password and country typed in (Enter
+//    starts typing, Enter ends, Esc cancels, Backspace deletes; key() then
+//    needs the Shift state), and the keyboard's layout (US/UK) for typing
+//    them.
+//  - Networks found (after "Search for networks"): the menu returns
+//    Action::ScanWifi and shows "Searching..."; the front end scans and
+//    calls wifi_scan_done(). Enter on a network takes its name, turns
+//    WiFi on and, for a WPA/WPA2 network, starts typing its password.
 //
 // Keys: Up/Down (and PageUp/PageDown/Home/End) move, Left/Right change a
 // value, Enter opens or activates, Esc goes back (on the main page it means
@@ -33,6 +38,7 @@
 
 #include "core/common/types.h"
 #include "core/machine/machine_config.h"
+#include "platform/common/wifi_scan.h"
 
 namespace g3 {
 
@@ -70,7 +76,7 @@ public:
         char text[kRows][kCols + 1];
         Attr attr[kRows];
     };
-    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest, CreateDisk, RestartPi };
+    enum class Action : u8 { None, Save, Start, MediaChanged, SelfTest, CreateDisk, RestartPi, ScanWifi };
 
     // `disks_dir`/`rom_dir`: where the file pickers start (e.g. "/g3macpi/disks").
     ConfigMenu(const MachineConfig& config, DirectoryLister& lister, const char* disks_dir,
@@ -117,21 +123,29 @@ public:
     static constexpr u32 kDiskSizes = 5;
     static u32 disk_size_mb(u32 index);  // 256, 512, 1024, 2048, 4095
 
+    // After Action::ScanWifi: the networks found, or why the search failed
+    // (error non-null; the list is then empty).
+    void wifi_scan_done(const WifiScanList& found, const char* error);
+    bool wifi_searching() const { return page_ == Page::WifiList && searching_; }
+
 private:
-    enum class Page : u8 { Main, Drive, Files, Wifi };
+    enum class Page : u8 { Main, Drive, Files, Wifi, WifiList };
     // In screen order, by group (The Mac, Drives, Screen, Network, The Pi),
     // then the actions. kFloppy is not shown (the B&W has no floppy drive).
     enum MainItem : u8 { kRam, kRom, kJit, kDrive0, kFloppy = kDrive0 + MachineConfig::kDrives, kBoot, kNewHardDisk,
                          kMode, kDepth, kScale, kSound, kNetwork, kWifi, kModem, kAutostart, kTimeZone, kPiSpeed, kSelfTest,
                          kSave, kStart, kRestartPi, kMainItems };
     enum DriveItem : u8 { kType, kImage, kEject, kReadOnly, kNewDisk, kBack, kDriveItems };
-    enum WifiItem : u8 { kWUse, kWName, kWPassword, kWCountry, kWKeyboard, kWBack, kWifiItems };
+    enum WifiItem : u8 { kWUse, kWSearch, kWName, kWPassword, kWCountry, kWKeyboard, kWBack, kWifiItems };
     static constexpr u8 kNotEditing = 0xFF;
 
     Action key_main(u8 usage);
     Action key_drive(u8 usage);
     Action key_files(u8 usage);
     Action key_wifi(u8 usage);
+    Action key_wifi_list(u8 usage);
+    void pick_network(const WifiNetwork& n);
+    bool list_enabled(u32) const { return true; }
     void key_edit(u8 usage, u8 modifiers);
     void start_edit(u8 item);
     bool wifi_enabled(u32) const { return true; }
@@ -163,6 +177,11 @@ private:
     u8 editing_ = kNotEditing;   // the WiFi item being typed
     char edit_[MachineConfig::kWifiPasswordMax] = {};
     mutable u32 file_top_ = 0;  // first visible file (render scrolls)
+    WifiScanList networks_;     // the last search's results
+    u32 list_sel_ = 0;          // networks, then "Search again", "Back"
+    mutable u32 list_top_ = 0;
+    bool searching_ = false;
+    char scan_error_[kCols + 1] = {};
     u32 drive_ = 0;          // drive being edited
     bool picking_rom_ = false;
     bool running_ = false;

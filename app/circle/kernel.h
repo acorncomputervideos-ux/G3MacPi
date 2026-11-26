@@ -148,6 +148,8 @@ private:
 	// our stand-in port, the switch on core 3, the web interface.
 	void StartNetwork (void);
 	void StartWifi (void);		// StartNetwork's part with wifi = yes
+	// The menu's "Search for networks": the networks the radio hears, or why not.
+	void ScanWifi (g3::WifiScanList *pFound, const char **ppError);
 	void CheckWebAddress (void);
 	static void WebStatus (void *pContext, g3::WebStatus &Out);
 	static boolean WebInUse (void *pContext, const char *pPath);
@@ -158,7 +160,8 @@ private:
 	CNetSubSystem		*m_pNet = 0;
 	CPiNetPort		m_PiPort;
 	CCircleWebHost		*m_pWebHost = 0;
-	CBcm4343Device		*m_pWLAN = 0;	// with wifi = yes
+	CBcm4343Device		*m_pWLAN = 0;	// with wifi = yes, or started for a search
+	boolean			m_bWLANFailed = FALSE;	// the radio did not start: don't try again
 	CWPASupplicant		*m_pSupplicant = 0;
 	CString			m_Port;		// the Pi's connection, for the web page
 	boolean			m_bWebAddressShown = FALSE;

@@ -493,6 +493,73 @@ void CKernel::StartWifi (void)
 #endif
 }
 
+// The menu's "Search for networks" (platform/common/wifi_scan.h). The radio
+// is started here if WiFi isn't in use (wifi = no, or no network name yet);
+// it then only listens, and the network stays on Ethernet until a restart.
+// "escan N" makes Circle's driver scan every N seconds until "escan 0"
+// (addon/wlan/ether4330.c); each pass sends the networks it found in
+// messages, then one with none. The driver scans the 2.4 GHz channels
+// (1-14) only. While the WPA supplicant is running unconnected, it scans
+// too and takes the results it finds queued, so a search can come back
+// short then; searching again helps.
+void CKernel::ScanWifi (g3::WifiScanList *pFound, const char **ppError)
+{
+#if defined (G3_QEMU_DRAWTEST) || defined (G3_QEMU_BOOT)
+	*ppError = "No WiFi radio here.";
+#else
+	if (m_pWLAN == 0)
+	{
+		if (m_bWLANFailed || !m_bSDMounted)
+		{
+			*ppError = "The Pi's WiFi did not start: are the firmware files in /firmware on the SD card?";
+			return;
+		}
+		CBcm4343Device *pWLAN = new CBcm4343Device (G3_WLAN_FIRMWARE);
+		if (pWLAN == 0 || !pWLAN->Initialize ())
+		{
+			m_bWLANFailed = TRUE;	// (the half-started driver is left alone)
+			*ppError = "The Pi's WiFi did not start: are the firmware files in /firmware on the SD card?";
+			return;
+		}
+		m_pWLAN = pWLAN;
+		m_Logger.Write (FromKernel, LogNotice, "WiFi: radio started for a search");
+	}
+
+	static u8 Buffer[FRAME_BUFFER_SIZE];
+	unsigned nLength;
+	while (m_pWLAN->ReceiveScanResult (Buffer, &nLength))
+	{
+		// results of an earlier scan
+	}
+	if (!m_pWLAN->Control ("escan 10"))
+	{
+		*ppError = "The WiFi radio would not search. Try again.";
+		return;
+	}
+	// Up to 8 s: the first pass starts within a second and takes a few.
+	// Done at the end of a pass that found something, or of a second pass.
+	const unsigned nStart = CTimer::GetClockTicks ();
+	unsigned nPasses = 0;
+	while (CTimer::GetClockTicks () - nStart < 8 * CLOCKHZ && nPasses < 2)
+	{
+		while (m_pWLAN->ReceiveScanResult (Buffer, &nLength))
+		{
+			if (pFound->add_message (Buffer, nLength) == 0 && nLength >= 12
+			    && Buffer[10] == 0 && Buffer[11] == 0)
+			{
+				++nPasses;	// the pass's last message
+				if (pFound->count () > 0)
+				{
+					nPasses = 2;
+				}
+			}
+		}
+		m_Scheduler.MsSleep (50);	// other tasks (the stack, the supplicant) run
+	}
+	m_pWLAN->Control ("escan 0");
+#endif
+}
+
 // Once DHCP has given the Pi an address: show the web interface's address
 // in the menu and the log.
 void CKernel::CheckWebAddress (void)
@@ -1454,6 +1521,24 @@ void CKernel::HandleMenuKey (u8 ucUsage)
 		{
 			m_pMenu->mark_saved ();
 		}
+		break; }
+
+	case g3::ConfigMenu::Action::ScanWifi: {
+		// Show "Searching..." first: a search takes a few seconds.
+		g3::ConfigMenu::Screen Screen;
+		m_pMenu->render (Screen);
+		DrawSettings (&m_Screen, Screen);
+		static g3::WifiScanList Found;
+		Found.clear ();
+		const char *pError = 0;
+		ScanWifi (&Found, &pError);
+		m_Logger.Write (FromKernel, pError ? LogWarning : LogNotice, "WiFi search: %s",
+				pError ? pError : "done");
+		if (!pError)
+		{
+			m_Logger.Write (FromKernel, LogNotice, "WiFi search: %u network(s)", Found.count ());
+		}
+		m_pMenu->wifi_scan_done (Found, pError);
 		break; }
 
 	case g3::ConfigMenu::Action::None:

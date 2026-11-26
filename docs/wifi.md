@@ -20,6 +20,20 @@ interface and the Mac's Ethernet (BMAC+, docs/hardware/bmac.md).
 - **Menu**: Enter on "Network port" opens a WiFi page where the name,
   password and country are typed (platform/common/key_text.h maps keys to
   characters for US and UK keyboards).
+- **Search for networks** (platform/common/wifi_scan.h, `CKernel::ScanWifi`):
+  the menu asks the front end to search (Action::ScanWifi). The radio is
+  started for it if WiFi isn't in use yet (the network stays on Ethernet
+  until a restart). Circle's driver command `escan 10` scans every 10 s
+  until `escan 0`; the scan's messages are read for up to 8 s, until a
+  pass that found something ends (an empty message). Broadcom's BSS
+  records give the name, signal (dBm), channel and, from the information
+  elements, the security; one entry per name (the strongest), strongest
+  first, hidden networks left out. Circle's driver scans channels 1-14
+  only (2.4 GHz). Picking a network takes its name and turns WiFi on; for
+  WPA/WPA2 the password is typed next; WEP and WPA3-only are refused (the
+  supplicant here does WPA-PSK). While the supplicant is running and not
+  connected it scans too and may take queued results: a search can come
+  back short, and searching again helps. Not yet tried on a Pi.
 - **Configuration**: the settings `wifi_name`, `wifi_password`,
   `wifi_country` are written as `/g3macpi/wpa_supplicant.conf` each start
   (platform/common/wpa_config.h); the name in hex, so any name works.

@@ -166,6 +166,7 @@ ConfigMenu::Action ConfigMenu::key(u8 usage, u8 modifiers)
     case Page::Drive: return key_drive(usage);
     case Page::Files: return key_files(usage);
     case Page::Wifi: return key_wifi(usage);
+    case Page::WifiList: return key_wifi_list(usage);
     }
     return Action::None;
 }
@@ -188,7 +189,9 @@ ConfigMenu::Action ConfigMenu::key_wifi(u8 usage)
         return Action::None;
     case menu_key::kLeft:
     case menu_key::kRight:
-        if (wifi_sel_ == kWUse) {
+        if (wifi_sel_ == kWSearch) {
+            return Action::None;
+        } else if (wifi_sel_ == kWUse) {
             toggle_wifi();
         } else if (wifi_sel_ == kWKeyboard) {
             cfg_.keyboard = cfg_.keyboard == MachineConfig::Keyboard::Us ? MachineConfig::Keyboard::Uk
@@ -200,6 +203,8 @@ ConfigMenu::Action ConfigMenu::key_wifi(u8 usage)
     case menu_key::kSpace:
         if (wifi_sel_ == kWBack)
             page_ = Page::Main;
+        else if (wifi_sel_ == kWSearch)
+            return key_wifi_list(menu_key::kF12);  // (a search, as "Search again")
         else if (wifi_sel_ == kWName || wifi_sel_ == kWPassword || wifi_sel_ == kWCountry)
             start_edit(static_cast<u8>(wifi_sel_));
         else
@@ -209,6 +214,109 @@ ConfigMenu::Action ConfigMenu::key_wifi(u8 usage)
         move(usage, wifi_sel_, kWifiItems, &ConfigMenu::wifi_enabled);
         return Action::None;
     }
+}
+
+// --- networks found -------------------------------------------------------------------
+
+ConfigMenu::Action ConfigMenu::key_wifi_list(u8 usage)
+{
+    const u32 n = networks_.count();
+    const bool search = usage == menu_key::kF12 ||  // from the WiFi page
+                        ((usage == menu_key::kEnter || usage == menu_key::kSpace) && !searching_ && list_sel_ == n);
+    if (search) {
+        page_ = Page::WifiList;
+        searching_ = true;
+        networks_.clear();
+        list_sel_ = list_top_ = 0;
+        scan_error_[0] = 0;
+        status_[0] = 0;
+        return Action::ScanWifi;
+    }
+    if (searching_)
+        return Action::None;  // the front end is busy searching
+    switch (usage) {
+    case menu_key::kEscape:
+    case menu_key::kBackspace:
+        page_ = Page::Wifi;
+        return Action::None;
+    case menu_key::kEnter:
+    case menu_key::kSpace:
+        if (list_sel_ < n)
+            pick_network(networks_.at(list_sel_));
+        else
+            page_ = Page::Wifi;  // Back
+        return Action::None;
+    default:
+        move(usage, list_sel_, n + 2, &ConfigMenu::list_enabled);
+        return Action::None;
+    }
+}
+
+void ConfigMenu::wifi_scan_done(const WifiScanList& found, const char* error)
+{
+    networks_ = found;
+    searching_ = false;
+    list_sel_ = list_top_ = 0;
+    scopy(scan_error_, sizeof scan_error_, error ? error : "");
+}
+
+void ConfigMenu::pick_network(const WifiNetwork& n)
+{
+    using Sec = WifiNetwork::Security;
+    if (n.security == Sec::Wep) {
+        set_status("WEP networks can't be joined: WPA, WPA2 or open networks only.");
+        return;
+    }
+    if (n.security == Sec::Wpa3) {
+        set_status("This network needs WPA3, which isn't supported: WPA, WPA2 or open networks only.");
+        return;
+    }
+    // The name must survive g3macpi.ini: no control characters, no spaces
+    // at either end, no # or ; first or after a space (a comment there).
+    const u32 len = slen(n.ssid);
+    bool ok = len > 0 && n.ssid[0] != ' ' && n.ssid[len - 1] != ' ';
+    for (u32 i = 0; ok && i < len; ++i) {
+        const u8 c = static_cast<u8>(n.ssid[i]);
+        if (c < 0x20 || c == 0x7F || ((c == '#' || c == ';') && (i == 0 || n.ssid[i - 1] == ' ')))
+            ok = false;
+    }
+    if (!ok) {
+        set_status("That network's name can't be kept in g3macpi.ini (spaces at the ends, a control "
+                   "character, or # or ; after a space).");
+        return;
+    }
+    const bool same = seq(cfg_.wifi_name, n.ssid);
+    if (!same) {
+        scopy(cfg_.wifi_name, sizeof cfg_.wifi_name, n.ssid);
+        cfg_.wifi_password[0] = 0;  // the old network's password
+        dirty_ = true;
+    }
+    if (!cfg_.wifi) {
+        cfg_.wifi = true;
+        dirty_ = true;
+    }
+    page_ = Page::Wifi;
+    char shown[40];
+    WifiScanList::printable(n.ssid, shown, sizeof shown);
+    char msg[3 * kCols + 1];
+    if (n.security == Sec::Open) {
+        if (cfg_.wifi_password[0]) {
+            cfg_.wifi_password[0] = 0;
+            dirty_ = true;
+        }
+        wifi_sel_ = kWName;
+        scopy(msg, sizeof msg, "\"");
+        scat(msg, sizeof msg, shown);
+        scat(msg, sizeof msg, "\" chosen (an open network). Save the settings; WiFi changes apply when the Pi restarts.");
+        set_status(msg);
+        return;
+    }
+    wifi_sel_ = kWPassword;
+    start_edit(kWPassword);
+    scopy(msg, sizeof msg, "Type the password for \"");
+    scat(msg, sizeof msg, shown);
+    scat(msg, sizeof msg, "\", then Enter.");
+    set_status(msg);
 }
 
 void ConfigMenu::start_edit(u8 item)
@@ -912,7 +1020,9 @@ void ConfigMenu::render(Screen& s) const
                 scopy(value, sizeof value, edit_);
                 scat(value, sizeof value, "_");
             }
-            if (i == kWUse) {
+            if (i == kWSearch) {
+                line(s, row, a, "Search for networks", "Enter: list the networks around the Pi");
+            } else if (i == kWUse) {
                 line(s, row, a, "Use WiFi", cfg_.wifi ? "Yes: the Pi's WiFi instead of its Ethernet port"
                                                        : "No: the Pi's Ethernet port");
             } else if (i == kWName) {
@@ -944,6 +1054,49 @@ void ConfigMenu::render(Screen& s) const
         ++row;
         line(s, row, Attr::Dim, "WPA2 or open networks. The password shows while you type it.");
         line(s, row, Attr::Dim, "Changes apply when the Pi restarts (Save settings on the main page).");
+    } else if (page_ == Page::WifiList) {
+        line(s, row, Attr::Title, "WiFi networks around the Pi");
+        ++row;
+        const u32 n = networks_.count();
+        if (searching_)
+            line(s, row, Attr::Dim, "Searching for networks... (a few seconds)");
+        else if (scan_error_[0])
+            line(s, row, Attr::Dim, scan_error_);
+        else if (n == 0)
+            line(s, row, Attr::Dim, "(no networks found)");
+        else
+            line(s, row, Attr::Dim, "Network name", "Signal   Security  Channel", 36);
+        const u32 visible = kRows - row - 7;  // room for the two actions, status and help
+        u32 top = list_top_;
+        if (list_sel_ < n) {
+            if (list_sel_ < top) top = list_sel_;
+            if (list_sel_ >= top + visible) top = list_sel_ - visible + 1;
+        }
+        list_top_ = top;
+        constexpr u32 kNameMax = 32, kInfoCol = 36;
+        for (u32 i = top; i < n && i < top + visible; ++i) {
+            const WifiNetwork& w = networks_.at(i);
+            char name[kNameMax + 1];
+            WifiScanList::printable(w.ssid, name, sizeof name);
+            // Signal as bars, then the security and channel in columns.
+            const u32 bars = WifiScanList::bars(w.rssi);
+            char info[kCols + 1] = "[";
+            for (u32 b = 0; b < 4; ++b)
+                scat(info, sizeof info, b < bars ? "#" : ".");
+            scat(info, sizeof info, "]   ");
+            scat(info, sizeof info, WifiScanList::security_name(w.security));
+            while (slen(info) < 19)
+                scat(info, sizeof info, " ");
+            sappend_num(info, sizeof info, w.channel);
+            if (seq(w.ssid, cfg_.wifi_name))
+                scat(info, sizeof info, "   (chosen)");
+            line(s, row, i == list_sel_ ? Attr::Selected : Attr::Normal, name, info, kInfoCol);
+        }
+        ++row;
+        if (!searching_) {
+            line(s, row, list_sel_ == n ? Attr::Selected : Attr::Normal, "Search again");
+            line(s, row, list_sel_ == n + 1 ? Attr::Selected : Attr::Normal, "Back");
+        }
     } else {
         line(s, row, Attr::Title, picking_rom_ ? "Choose the Mac OS ROM file" : "Choose an image file");
         line(s, row, Attr::Dim, dir_);
@@ -1029,6 +1182,7 @@ void ConfigMenu::render(Screen& s) const
     ++row;
     line(s, row, Attr::Dim, editing_ != kNotEditing ? "Type the text   Backspace: delete   Enter: done   Esc: cancel"
                             : page_ == Page::Files ? "Up/Down: select   Enter: open/choose   Esc: cancel"
+                            : page_ == Page::WifiList ? "Up/Down: select   Enter: choose this network   Esc: back"
                             : "Up/Down: select   Left/Right: change   Enter: open   Esc: back");
 }
 

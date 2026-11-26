@@ -5,7 +5,8 @@
 // at the design without a Pi.
 //
 //   g3_menu_preview <out-prefix> [width height]
-// writes <prefix>-main.ppm, -drive.ppm, -files.ppm, -wifi.ppm, -running.ppm, -splash.ppm.
+// writes <prefix>-main.ppm, -drive.ppm, -files.ppm, -wifi.ppm, -wifilist.ppm, -running.ppm,
+// -splash.ppm.
 
 #include "platform/common/config_menu.h"
 #include "platform/common/menu_painter.h"
@@ -114,6 +115,27 @@ int main(int argc, char** argv)
     }
     menu.key(menu_key::kEnter);
     menu.key(menu_key::kEnter);   // Use WiFi: yes
+    // "Search for networks", with sample results.
+    menu.key(menu_key::kDown);
+    menu.key(menu_key::kEnter);
+    WifiScanList found;
+    const struct { const char* name; s16 rssi; u8 ch; WifiNetwork::Security sec; } nets[] = {
+        {"Home Network", -42, 6, WifiNetwork::Security::Wpa2},
+        {"BT-7XK2QF", -63, 11, WifiNetwork::Security::Wpa2},
+        {"Cafe Guest", -71, 1, WifiNetwork::Security::Open},
+        {"NEWROUTER", -58, 1, WifiNetwork::Security::Wpa3},
+        {"Old Linksys", -88, 3, WifiNetwork::Security::Wep}};
+    for (const auto& n : nets) {
+        WifiNetwork net;
+        std::strcpy(net.ssid, n.name);
+        net.rssi = n.rssi;
+        net.channel = n.ch;
+        net.security = n.sec;
+        found.add(net);
+    }
+    menu.wifi_scan_done(found, nullptr);
+    shot("wifilist");
+    menu.key(menu_key::kEscape);
     menu.key(menu_key::kDown);
     menu.key(menu_key::kEnter);   // type the name
     const u8 typed[][2] = {{0x10, 0x02}, {0x1C, 0}, {0x2C, 0}, {0x1A, 0x02}, {0x0C, 0x02}, {0x09, 0x02}, {0x0C, 0x02}};

@@ -89,10 +89,14 @@ Both are new and not yet working end to end in Mac OS: see
 docs/hardware/davbus.md and docs/hardware/bmac.md.
 
 WiFi instead of the Ethernet cable: in the menu, select "Network port"
-and press Enter. On that page, set "Use WiFi" to Yes and type the
-network's name, password and country (Enter starts typing, Enter ends it;
-set "Keyboard" to UK first on a UK keyboard so symbols come out right).
-Then "Save settings" and restart the Pi. Or set it in the settings file
+and press Enter. On that page, choose "Search for networks": after a few
+seconds the networks around the Pi are listed with their signal and
+security. Pick yours with Enter, type its password, Enter. (Or set "Use
+WiFi" to Yes and type the network's name yourself, e.g. for a hidden
+network.) Set "Country" too (e.g. GB), and set "Keyboard" to UK first on
+a UK keyboard so symbols come out right. Then "Save settings" and restart
+the Pi. The search lists 2.4 GHz networks; WEP and WPA3-only networks
+are shown but can't be joined. Or set it in the settings file
 `g3macpi/g3macpi.ini` (or on the web page's Settings):
 
     wifi = yes

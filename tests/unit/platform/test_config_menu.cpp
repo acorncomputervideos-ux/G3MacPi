@@ -614,7 +614,7 @@ TEST_CASE("platform/menu/wifi_page_typing")
     r.press(kEnter);                                   // Use WiFi: yes
     CHECK(r.menu.config().wifi);
     CHECK(r.menu.dirty());
-    r.press(kDown);                                    // Network name
+    r.press(kDown, 2);                                 // past "Search for networks" to Network name
     CHECK(r.has("(none) - press Enter to type it"));
     r.press(kEnter);
     CHECK(r.menu.typing());
@@ -724,4 +724,196 @@ TEST_CASE("platform/menu/new_hard_disk_shortcut")
     for (const auto& row : sc.text)
         hint = hint || std::strstr(row, "All four drive positions are in use") != nullptr;
     CHECK(hint);
+}
+
+namespace {
+// One BSS record as the Pi's radio sends it (wifi_scan.h): version 109,
+// its length, capability, name, chanspec, RSSI and information elements.
+std::vector<u8> bss(const char* ssid, s16 rssi, u8 channel, u16 caps, const std::vector<u8>& ies)
+{
+    std::vector<u8> b(128, 0);
+    auto put16 = [&](u32 at, u32 v) { b[at] = static_cast<u8>(v); b[at + 1] = static_cast<u8>(v >> 8); };
+    auto put32 = [&](u32 at, u32 v) { put16(at, v & 0xFFFF); put16(at + 2, v >> 16); };
+    put32(0, 109);
+    put16(16, caps);
+    const u32 n = static_cast<u32>(std::strlen(ssid));
+    b[18] = static_cast<u8>(n);
+    std::memcpy(&b[19], ssid, n);
+    put16(72, 0x1000u | channel);
+    put16(78, static_cast<u16>(rssi));
+    put16(116, 128);
+    put32(120, static_cast<u32>(ies.size()));
+    b.insert(b.end(), ies.begin(), ies.end());
+    put32(4, static_cast<u32>(b.size()));
+    return b;
+}
+std::vector<u8> message(const std::vector<std::vector<u8>>& records)
+{
+    std::vector<u8> m(12, 0);
+    for (const auto& r : records)
+        m.insert(m.end(), r.begin(), r.end());
+    const u32 len = static_cast<u32>(m.size());
+    m[0] = static_cast<u8>(len); m[1] = static_cast<u8>(len >> 8);
+    m[10] = static_cast<u8>(records.size());
+    return m;
+}
+// Information elements (IEEE 802.11): RSN with one AKM suite, and WPA's vendor element.
+std::vector<u8> rsn(u8 akm)
+{
+    return {48, 20, 1, 0, 0x00, 0x0F, 0xAC, 4, 1, 0, 0x00, 0x0F, 0xAC, 4, 1, 0, 0x00, 0x0F, 0xAC, akm, 0, 0};
+}
+const std::vector<u8> kWpaIe = {221, 8, 0x00, 0x50, 0xF2, 1, 1, 0, 0, 0};
+const std::vector<u8> kOtherVendorIe = {221, 4, 0x00, 0x10, 0x18, 2};
+} // namespace
+
+TEST_CASE("platform/wifi/scan_results_parsed")
+{
+    WifiScanList l;
+    const auto m = message({bss("Home", -48, 6, 0x0011, rsn(2)),            // WPA2-PSK
+                            bss("Cafe", -72, 11, 0x0001, kOtherVendorIe),   // open
+                            bss("Old", -80, 1, 0x0011, kWpaIe),             // WPA
+                            bss("Wep", -66, 3, 0x0011, {}),                 // privacy, no WPA: WEP
+                            bss("New", -55, 36, 0x0011, rsn(8)),            // SAE only: WPA3
+                            bss("", -40, 1, 0x0011, rsn(2))});              // hidden: left out
+    CHECK_EQ(l.add_message(m.data(), static_cast<u32>(m.size())), 6u);
+    REQUIRE(l.count() == 5);
+    // Strongest first.
+    CHECK(std::strcmp(l.at(0).ssid, "Home") == 0);
+    CHECK(std::strcmp(l.at(1).ssid, "New") == 0);
+    CHECK(std::strcmp(l.at(2).ssid, "Wep") == 0);
+    CHECK(std::strcmp(l.at(3).ssid, "Cafe") == 0);
+    CHECK(std::strcmp(l.at(4).ssid, "Old") == 0);
+    CHECK(l.at(0).security == WifiNetwork::Security::Wpa2);
+    CHECK(l.at(1).security == WifiNetwork::Security::Wpa3);
+    CHECK(l.at(2).security == WifiNetwork::Security::Wep);
+    CHECK(l.at(3).security == WifiNetwork::Security::Open);
+    CHECK(l.at(4).security == WifiNetwork::Security::Wpa);
+    CHECK_EQ(l.at(0).rssi, -48);
+    CHECK_EQ(l.at(0).channel, 6u);
+    CHECK_EQ(l.at(1).channel, 36u);
+    // RSN with SAE and PSK both: WPA2 (PSK works).
+    WifiScanList mixed;
+    std::vector<u8> both = rsn(8);
+    both[1] = 24; both[18] = 2;                        // two AKM suites
+    both.insert(both.end() - 2, {0x00, 0x0F, 0xAC, 2});
+    const auto m2 = message({bss("Mixed", -50, 1, 0x0011, both)});
+    mixed.add_message(m2.data(), static_cast<u32>(m2.size()));
+    REQUIRE(mixed.count() == 1);
+    CHECK(mixed.at(0).security == WifiNetwork::Security::Wpa2);
+    // The same name from two access points: one entry, the stronger.
+    const auto m3 = message({bss("Home", -30, 1, 0x0011, rsn(2))});
+    l.add_message(m3.data(), static_cast<u32>(m3.size()));
+    CHECK_EQ(l.count(), 5u);
+    CHECK_EQ(l.at(0).rssi, -30);
+    CHECK_EQ(l.at(0).channel, 1u);
+    const auto m4 = message({bss("Cafe", -90, 1, 0x0001, {})});
+    l.add_message(m4.data(), static_cast<u32>(m4.size()));
+    CHECK_EQ(l.count(), 5u);
+    CHECK_EQ(l.at(3).rssi, -72);
+    // The last message (no networks), cut-off and wrong-version records.
+    const auto end = message({});
+    CHECK_EQ(l.add_message(end.data(), static_cast<u32>(end.size())), 0u);
+    auto cut = message({bss("Cut", -40, 1, 0, {})});
+    CHECK_EQ(l.add_message(cut.data(), static_cast<u32>(cut.size()) - 10), 0u);
+    auto bad = message({bss("Bad", -40, 1, 0, {})});
+    bad[12] = 108;
+    CHECK_EQ(l.add_message(bad.data(), static_cast<u32>(bad.size())), 0u);
+    CHECK_EQ(l.add_message(bad.data(), 5), 0u);
+    CHECK_EQ(l.count(), 5u);
+    // Full: the weakest goes.
+    WifiScanList full;
+    for (u32 i = 0; i < WifiScanList::kMax + 5; ++i) {
+        WifiNetwork n;
+        n.ssid[0] = static_cast<char>('A' + i % 26);
+        n.ssid[1] = static_cast<char>('a' + i / 26);
+        n.rssi = static_cast<s16>(-30 - static_cast<int>(i));
+        full.add(n);
+    }
+    CHECK_EQ(full.count(), WifiScanList::kMax);
+    CHECK_EQ(full.at(WifiScanList::kMax - 1).rssi, -30 - static_cast<int>(WifiScanList::kMax) + 1);
+    // Display helpers.
+    CHECK_EQ(WifiScanList::bars(-45), 4u);
+    CHECK_EQ(WifiScanList::bars(-65), 2u);
+    CHECK_EQ(WifiScanList::bars(-90), 0u);
+    char shown[8];
+    WifiScanList::printable("a\x01\xC3\xA9z", shown, sizeof shown);
+    CHECK(std::strcmp(shown, "a???z") == 0);
+}
+
+TEST_CASE("platform/menu/wifi_search_and_pick")
+{
+    Rig r;
+    while (r.selected().find("Network port") == std::string::npos)
+        r.press(kDown);
+    r.press(kEnter);
+    r.press(kDown);
+    CHECK(r.selected().find("Search for networks") != std::string::npos);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::ScanWifi);
+    CHECK(r.menu.wifi_searching());
+    CHECK(r.has("Searching for networks"));
+    CHECK(r.press(kDown) == ConfigMenu::Action::None);  // keys wait while searching
+    // A failed search says why.
+    r.menu.wifi_scan_done(WifiScanList{}, "The Pi's WiFi did not start.");
+    CHECK(!r.menu.wifi_searching());
+    CHECK(r.has("The Pi's WiFi did not start."));
+    CHECK(r.selected().find("Search again") != std::string::npos);
+    CHECK(r.press(kEnter) == ConfigMenu::Action::ScanWifi);  // Search again
+    // Results: strongest first, with signal, security and channel.
+    WifiScanList found;
+    auto net = [](const char* name, s16 rssi, u8 ch, WifiNetwork::Security sec) {
+        WifiNetwork n;
+        std::strcpy(n.ssid, name);
+        n.rssi = rssi;
+        n.channel = ch;
+        n.security = sec;
+        return n;
+    };
+    found.add(net("Cafe Free", -70, 11, WifiNetwork::Security::Open));
+    found.add(net("Home", -45, 6, WifiNetwork::Security::Wpa2));
+    found.add(net("Old Router", -60, 3, WifiNetwork::Security::Wep));
+    found.add(net("Bad # name", -80, 1, WifiNetwork::Security::Wpa2));
+    r.menu.wifi_scan_done(found, nullptr);
+    CHECK(r.has("Signal   Security  Channel"));
+    CHECK(r.selected().find("Home") != std::string::npos);
+    CHECK(r.selected().find("[####]   WPA2      6") != std::string::npos);
+    CHECK(r.has("[##..]   Open      11"));
+    // WEP: refused, still on the list.
+    r.press(kDown);
+    r.press(kEnter);
+    CHECK(r.has("WEP networks can't be joined"));
+    CHECK(r.menu.config().wifi_name[0] == 0);
+    // A name g3macpi.ini can't keep: refused.
+    r.press(kDown, 2);
+    r.press(kEnter);
+    CHECK(r.has("can't be kept in g3macpi.ini"));
+    // Open: chosen, WiFi on, no password, back on the WiFi page.
+    r.press(kUp);
+    r.press(kEnter);
+    CHECK(std::strcmp(r.menu.config().wifi_name, "Cafe Free") == 0);
+    CHECK(r.menu.config().wifi);
+    CHECK(r.menu.config().wifi_password[0] == 0);
+    CHECK(r.menu.dirty());
+    CHECK(!r.menu.typing());
+    CHECK(r.has("WiFi network"));
+    CHECK(r.has("an open network"));
+    // WPA2: chosen and the password typed at once.
+    r.press(kUp);                                      // to "Search for networks"
+    CHECK(r.press(kEnter) == ConfigMenu::Action::ScanWifi);
+    r.menu.wifi_scan_done(found, nullptr);
+    CHECK(r.has("(chosen)"));
+    r.press(kEnter);                                   // Home
+    CHECK(std::strcmp(r.menu.config().wifi_name, "Home") == 0);
+    CHECK(r.menu.typing());
+    CHECK(r.has("Type the password for \"Home\""));
+    for (u8 k : {0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B})  // abcdefgh
+        r.menu.key(k);
+    r.press(kEnter);
+    CHECK(std::strcmp(r.menu.config().wifi_password, "abcdefgh") == 0);
+    // Esc on the list goes back to the WiFi page.
+    r.press(kUp, 2);
+    r.press(kEnter);
+    r.menu.wifi_scan_done(found, nullptr);
+    r.press(kEscape);
+    CHECK(r.has("Search for networks"));
+    CHECK(!r.has("Signal   Security"));
 }
