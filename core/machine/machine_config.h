@@ -13,7 +13,7 @@
 //   ram_mb = 256
 //   rom = /g3macpi/rom/Mac OS ROM
 //   boot = auto          ; auto | cdrom | disk
-//   display = 1024x768x8 ; width x height x depth (8, 16, 32)
+//   display = 1024x768x32 ; width x height x depth (8, 16, 32)
 //   jit = no             ; yes: the CPU's block cache and generated code
 //   sound = yes          ; the built-in sound (DAV bus, Burgundy), played by the host
 //   network = yes        ; the built-in Ethernet (BMAC+), on the host's network
@@ -62,7 +62,10 @@ struct MachineConfig {
     u32 ram_mb = 256;
     char rom[kPathMax] = "/g3macpi/rom/Mac OS ROM";
     Boot boot = Boot::Auto;
-    u32 width = 1024, height = 768, depth = 8;
+    // Millions of colours by default: in 256 colours, Mac OS 9.2.1 with
+    // our display driver often stops at "Starting Up" (not yet understood:
+    // the Mac goes idle waiting for something; docs/hardware/framebuffer.md).
+    u32 width = 1024, height = 768, depth = 32;
     // The CPU's decoded-block cache and AArch64 code generation
     // (docs/cpu/jit-a64.md). Off by default until measured on the Pi.
     bool jit = false;

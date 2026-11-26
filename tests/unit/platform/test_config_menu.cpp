@@ -242,8 +242,8 @@ TEST_CASE("platform/menu/rom_boot_display_and_actions")
     r.press(kLeft);
     CHECK_EQ(r.menu.config().width, 800u);
     CHECK(r.has("800 x 600"));
-    r.press(kDown);                                    // Colours
-    r.press(kRight);
+    r.press(kDown);                                    // Colours: millions by default
+    r.press(kLeft);
     CHECK_EQ(r.menu.config().depth, 16u);
     CHECK(r.has("Thousands of colours"));
     r.press(kDown);                                    // Scaling: fill by default

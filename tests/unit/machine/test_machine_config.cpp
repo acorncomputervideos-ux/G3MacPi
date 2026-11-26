@@ -97,7 +97,7 @@ TEST_CASE("machine/config/invalid_lines_are_reported_and_ignored")
     // Nothing invalid was applied.
     CHECK_EQ(c.ram_mb, 256u);
     CHECK_EQ(c.width, 1024u);
-    CHECK_EQ(c.depth, 8u);
+    CHECK_EQ(c.depth, 32u);
     CHECK(c.boot == MachineConfig::Boot::Auto);
     CHECK(c.drive[0].type == MachineConfig::DriveType::CdRom);
 }

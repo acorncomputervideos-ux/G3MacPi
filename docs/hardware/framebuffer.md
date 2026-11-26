@@ -76,3 +76,22 @@ bits by repeating their top bits, so full intensity gives 0xFF.
 - Pixels written by CPU-style bus accesses, converted in all three depths
   (8-bit through the palette, 15-bit channel expansion, 32-bit); a wider
   destination; overlapping mappings refused.
+
+## Known problem: 256 colours (open)
+
+With our display driver (as on the Pi), Mac OS 9.2.1 started from a hard
+disk in 256 colours (`display = ...x8`) stops at "Starting Up" in most
+runs (4 of 5 in g3_host); thousands and millions of colours start
+normally. Without the driver it starts (in grey). What is known:
+
+- The driver keeps answering (the same requests as in millions of
+  colours, plus SetEntries/SetGray), and its 16 ms vertical-blanking timer
+  keeps running.
+- When stuck, Mac OS sits in its idle loop (MSR[POW], HID0 nap): timer
+  (decrementer) interrupts keep coming, but no device interrupts (Cuda
+  idle, no PIC events); the Ethernet driver's half-second polling stops
+  too, as if Mac OS's own timed tasks stopped being run.
+- Changing nothing but timing (extra debug writes in the driver) made a
+  run succeed: a race.
+
+Until it is found, the default depth is 32 (millions of colours).
