@@ -253,6 +253,37 @@ TEST_CASE("platform/session/rom_file_from_the_cd")
     }
 }
 
+TEST_CASE("platform/session/rom_file_from_the_start_up_disk")
+{
+    // No usable ROM file in the settings and a Mac OS hard disk image: the
+    // Mac starts with the "Mac OS ROM" in that disk's System Folder, as a
+    // real B&W does. With a Mac OS CD in the CD drive as well, the start-up
+    // disk's file is the one used.
+    for (int with_cd = 0; with_cd < 2; ++with_cd) {
+        Rig r;
+        hfs_image::Volume vol;
+        const std::vector<u8> rom = boot_file(r.client);
+        auto it = std::search(vol.img.d.begin(), vol.img.d.end(), vol.rom.begin(), vol.rom.begin() + 64);
+        REQUIRE(it != vol.img.d.end());
+        std::copy(rom.begin(), rom.end(), it);
+        r.host.files["/hdd/Mac OS 9.img"] = vol.img.d;
+        r.cfg.drive[2].type = MachineConfig::DriveType::Disk;
+        REQUIRE(r.cfg.set_image(2, "/hdd/Mac OS 9.img"));
+        r.cfg.boot = MachineConfig::Boot::Disk;
+        if (with_cd) {
+            r.host.files["/cd/Mac OS 9.iso"] = vol.img.d;
+            r.cfg.drive[0].type = MachineConfig::DriveType::CdRom;
+            REQUIRE(r.cfg.set_image(0, "/cd/Mac OS 9.iso"));
+        }
+        r.host.files.erase(r.cfg.rom);
+        REQUIRE(r.start() == MacSession::Error::None);
+        CHECK(r.session.firmware()->client_started());
+        CHECK(std::string(r.session.rom_source()).find("System Folder of the disk") != std::string::npos);
+        r.session.run(1000000000ull);
+        CHECK(r.host.console_text.find("booting") != std::string::npos);
+    }
+}
+
 TEST_CASE("platform/session/jit_option_turns_on_the_block_cache")
 {
     for (bool on : {false, true}) {
